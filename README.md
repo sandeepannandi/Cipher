@@ -22,11 +22,12 @@ cipher status                   # Show index health
 ## Quick start
 
 ```sh
-# Prerequisites: Rust 1.85+ and a Groq API key (free at console.groq.com)
+# Prerequisites: Rust 1.85+ and an AI API key (Groq, OpenAI, Anthropic, or local endpoint)
 
 git clone https://github.com/sandeepannandi/Cipher.git
 cd Cipher
-export GROQ_API_KEY=gsk_your_key_here
+export API_KEY=your_key_here
+export API_BASE_URL=https://api.groq.com/openai/v1  # or your preferred provider
 cargo build --release
 ./target/release/cipher init
 ./target/release/cipher ask "Are there any security vulnerabilities?"
@@ -34,21 +35,21 @@ cargo build --release
 
 ## Why this project is needed
 
-Traditional security tools fall short in three ways:
+Modern AI coding assistants (Copilot, Cursor, Cody, etc.) are excellent at understanding code context and helping you write and navigate code. However, security analysis is a fundamentally different challenge:
 
-- **Static analyzers** (Semgrep, CodeQL, SonarQube) generate thousands of findings. Most are false positives. Teams spend more time triaging than fixing.
-- **AI code assistants** (Copilot, ChatGPT) have no persistent understanding of your codebase. They answer in isolation, without the full context of your project.
+- **Security requires systematic analysis.** AI assistants excel at answering questions about the code you're currently viewing, but they don't run systematic scans across your entire codebase for vulnerability patterns.
+- **Security requires specialized knowledge.** Identifying an SQL injection, an auth bypass, or a cryptographic flaw requires deep security domain expertise — not just code reasoning.
+- **Security requires persistent indexing.** Every time you ask an AI assistant a question, it rebuilds context from scratch. Cipher maintains a persistent, queryable index of your codebase that enables fast, reproducible security analysis.
+- **Traditional SAST tools** (Semgrep, CodeQL, SonarQube) generate thousands of findings. Most are false positives. Teams spend more time triaging than fixing.
 - **Security engineers** are scarce and expensive. Most teams cannot afford dedicated AppSec engineers, leaving vulnerabilities undiscovered until they reach production.
 
-Cipher exists because teams need a **practical, autonomous security engineer** that:
+Cipher fills this gap — it is a **specialized security agent** designed from the ground up for codebase-wide vulnerability analysis, not general-purpose code assistance.
 
-1. Understands your entire codebase — not just individual files.
+1. Indexes your entire codebase once, then answers instantly.
 2. Answers questions with citations to actual lines of code.
-3. Lets you choose the AI model — your data, your provider, your rules.
+3. Lets you choose the AI model — your data, your provider, your rules (BYOK).
 4. Runs in your terminal — no web dashboards, no CI/CD setup required.
-5. Fits into existing workflows — just `cipher init` and start asking.
-
-It is designed for developers who want security feedback *now*, not after a lengthy scan pipeline.
+5. Built specifically for security: secret scanning, vulnerability analysis, attack path reasoning.
 
 ## How it works
 
@@ -60,7 +61,7 @@ It is designed for developers who want security feedback *now*, not after a leng
 
 4. **`cipher status`** displays index stats and API key status.
 
-**Bring your own key (BYOK) — coming in v0.2.** Cipher will be provider-agnostic, letting you use Groq, OpenAI, Anthropic, or any OpenAI-compatible endpoint (including local models via Ollama, vLLM, or llama.cpp). For now, Cipher requires a Groq API key set via `GROQ_API_KEY`.
+**Bring your own key (BYOK).** Cipher supports any OpenAI-compatible API provider — you choose the model that fits your needs: Groq for speed, OpenAI for breadth, Anthropic for depth, or a local endpoint (Ollama, vLLM, llama.cpp) for zero data egress. Set your provider's endpoint and key via environment variables.
 
 **Privacy:** Your code stays local. Only the retrieved code chunks are sent to the LLM provider when you ask a question. With a future local endpoint, your code never leaves your machine.
 
