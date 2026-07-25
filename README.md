@@ -5,13 +5,12 @@
 **AI security analysis for your codebase — from your terminal.**
 
 [![Rust](https://img.shields.io/badge/Rust-1.85+-orange?logo=rust&logoColor=white)]()
-[![Groq](https://img.shields.io/badge/Groq-API-10B981?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=&color=10B981)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
 [![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen)]()
 
 </div>
 
-Cipher indexes your codebase, then lets you ask security questions and scan for secrets — powered by Groq AI.
+Cipher indexes your codebase, then lets you ask security questions and scan for secrets — powered by the AI model of your choice.
 
 ```sh
 cipher init                    # Index your project
@@ -23,7 +22,7 @@ cipher status                   # Show index health
 ## Quick start
 
 ```sh
-# Prerequisites: Rust 1.85+ and a free Groq API key (console.groq.com)
+# Prerequisites: Rust 1.85+ and a Groq API key (free at console.groq.com)
 
 git clone https://github.com/sandeepannandi/Cipher.git
 cd Cipher
@@ -33,17 +32,37 @@ cargo build --release
 ./target/release/cipher ask "Are there any security vulnerabilities?"
 ```
 
+## Why this project is needed
+
+Traditional security tools fall short in three ways:
+
+- **Static analyzers** (Semgrep, CodeQL, SonarQube) generate thousands of findings. Most are false positives. Teams spend more time triaging than fixing.
+- **AI code assistants** (Copilot, ChatGPT) have no persistent understanding of your codebase. They answer in isolation, without the full context of your project.
+- **Security engineers** are scarce and expensive. Most teams cannot afford dedicated AppSec engineers, leaving vulnerabilities undiscovered until they reach production.
+
+Cipher exists because teams need a **practical, autonomous security engineer** that:
+
+1. Understands your entire codebase — not just individual files.
+2. Answers questions with citations to actual lines of code.
+3. Lets you choose the AI model — your data, your provider, your rules.
+4. Runs in your terminal — no web dashboards, no CI/CD setup required.
+5. Fits into existing workflows — just `cipher init` and start asking.
+
+It is designed for developers who want security feedback *now*, not after a lengthy scan pipeline.
+
 ## How it works
 
 1. **`cipher init`** walks your project (respecting `.gitignore`), reads supported source files, splits them into chunks, and builds a TF-IDF index stored in `.cipher/`. No external database required.
 
-2. **`cipher ask "..."`** tokenizes your question, finds the most relevant code chunks via TF-IDF scoring, and sends them to Groq's LLM (`llama-3.3-70b-versatile` by default) with a security-focused prompt. Answers reference specific files and line numbers.
+2. **`cipher ask "..."`** tokenizes your question, finds the most relevant code chunks via TF-IDF scoring, and sends them to your configured LLM provider with a security-focused prompt. Answers reference specific files and line numbers.
 
 3. **`cipher secrets`** scans for 25+ credential patterns (AWS keys, GitHub tokens, Stripe keys, JWT tokens, DB connection strings, private keys, etc.) with severity classification. Supports `--format json` and `--fail-on-secret` for CI/CD.
 
 4. **`cipher status`** displays index stats and API key status.
 
-**Privacy:** Your code stays local. Only retrieved code chunks are sent to Groq when you ask a question.
+**Bring your own key (BYOK) — coming in v0.2.** Cipher will be provider-agnostic, letting you use Groq, OpenAI, Anthropic, or any OpenAI-compatible endpoint (including local models via Ollama, vLLM, or llama.cpp). For now, Cipher requires a Groq API key set via `GROQ_API_KEY`.
+
+**Privacy:** Your code stays local. Only the retrieved code chunks are sent to the LLM provider when you ask a question. With a future local endpoint, your code never leaves your machine.
 
 ## Supported languages
 
