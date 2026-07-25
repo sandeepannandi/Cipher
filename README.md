@@ -34,14 +34,14 @@
     Your AI Security Engineer — an autonomous agent that reviews, attacks, explains, and fixes security vulnerabilities in your codebase.
     <br />
     <br />
-    <a href="#-usage"><strong>Explore the docs »</strong></a>
+    <a href="#usage"><strong>Explore the docs »</strong></a>
     <br />
     <br />
-    <a href="#-getting-started">Quick Start</a>
+    <a href="#getting-started">Quick Start</a>
     ·
-    <a href="#-roadmap">Roadmap</a>
+    <a href="#roadmap">Roadmap</a>
     ·
-    <a href="#-contributing">Contributing</a>
+    <a href="#contributing">Contributing</a>
   </p>
 </div>
 
@@ -52,22 +52,22 @@
   <summary>Table of Contents</summary>
   <ol>
     <li>
-      <a href="#-about-the-project">About The Project</a>
+      <a href="#about-the-project">About The Project</a>
       <ul>
         <li><a href="#how-it-works">How It Works</a></li>
         <li><a href="#built-with">Built With</a></li>
       </ul>
     </li>
     <li>
-      <a href="#-getting-started">Getting Started</a>
+      <a href="#getting-started">Getting Started</a>
       <ul>
         <li><a href="#prerequisites">Prerequisites</a></li>
         <li><a href="#installation">Installation</a></li>
       </ul>
     </li>
-    <li><a href="#-usage">Usage</a></li>
+    <li><a href="#usage">Usage</a></li>
     <li>
-      <a href="#-commands">Commands</a>
+      <a href="#commands">Commands</a>
       <ul>
         <li><a href="#cipher-init"><code>cipher init</code></a></li>
         <li><a href="#cipher-ask"><code>cipher ask</code></a></li>
@@ -75,17 +75,17 @@
         <li><a href="#cipher-status"><code>cipher status</code></a></li>
       </ul>
     </li>
-    <li><a href="#-roadmap">Roadmap</a></li>
-    <li><a href="#-contributing">Contributing</a></li>
-    <li><a href="#-license">License</a></li>
-    <li><a href="#-contact">Contact</a></li>
-    <li><a href="#-acknowledgments">Acknowledgments</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#license">License</a></li>
+    <li><a href="#contact">Contact</a></li>
+    <li><a href="#acknowledgments">Acknowledgments</a></li>
   </ol>
 </details>
 
 ---
 
-## 🚀 About The Project
+## About The Project
 
 <p align="center">
   <!-- Replace with a CLI demo screenshot/recording -->
@@ -176,7 +176,7 @@ Cipher bridges the gap: an **autonomous AI security engineer** that:
 
 ---
 
-## 🚦 Getting Started
+## Getting Started
 
 Get your own AI security engineer up and running in minutes.
 
@@ -223,7 +223,7 @@ Get your own AI security engineer up and running in minutes.
 
 ---
 
-## ⚡ Usage
+## Usage
 
 Once installed, Cipher works in four simple steps:
 
@@ -262,10 +262,10 @@ Detects 25+ types of hardcoded credentials:
 
 | Severity | Examples |
 |----------|---------|
-| 🔴 **CRITICAL** | AWS secret keys, GitHub tokens, Stripe live keys, Google service accounts |
-| 🟡 **HIGH** | AWS access keys, Google API keys, database connection strings, private keys |
-| 🔵 **MEDIUM** | JWT tokens, passwords in code, generic secrets |
-| ⚪ **LOW** | Stripe test keys, npm tokens |
+| **CRITICAL** | AWS secret keys, GitHub tokens, Stripe live keys, Google service accounts |
+| **HIGH** | AWS access keys, Google API keys, database connection strings, private keys |
+| **MEDIUM** | JWT tokens, passwords in code, generic secrets |
+| **LOW** | Stripe test keys, npm tokens |
 
 ```sh
 cipher secrets --format json           # Machine-readable output for CI/CD
@@ -284,7 +284,7 @@ Displays index health, file counts, language distribution, and API key configura
 
 ---
 
-## 📖 Commands
+## Commands
 
 ### `cipher init`
 
@@ -358,14 +358,14 @@ Options:
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 ### v0.1 — Current
-- ✅ CLI with `init`, `ask`, `secrets`, `status` commands
-- ✅ Git-aware file indexing with TF-IDF search
-- ✅ Groq-powered AI security analysis (RAG)
-- ✅ Secret detection (25+ patterns)
-- ✅ Privacy-first local architecture
+- - CLI with `init`, `ask`, `secrets`, `status` commands
+- - Git-aware file indexing with TF-IDF search
+- - Groq-powered AI security analysis (RAG)
+- - Secret detection (25+ patterns)
+- - Privacy-first local architecture
 
 ### v0.2 — Coming Soon
 - [ ] `cipher scan` — Hybrid vulnerability detection (Semgrep rules + AI reasoning)
@@ -390,13 +390,13 @@ See the [open issues](https://github.com/sandeepannandi/cipher/issues) for a ful
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
 
 If you have a suggestion that would make Cipher better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
 
-Don't forget to give the project a star ⭐ — it helps others discover Cipher!
+Don't forget to give the project a star — it helps others discover Cipher!
 
 1. **Fork** the Project
 2. **Create** your Feature Branch (`git checkout -b feature/AmazingFeature`)
@@ -408,15 +408,15 @@ For more details, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Top Contributors
 
-<a href="https://github.com/your-org/cipher/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=your-org/cipher" alt="contributors" />
+<a href="https://github.com/sandeepannandi/cipher/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=sandeepannandi/cipher" alt="contributors" />
 </a>
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## 📄 License
+## License
 
 Distributed under the **MIT License**. See [LICENSE](LICENSE) for more information.
 
@@ -424,7 +424,7 @@ Distributed under the **MIT License**. See [LICENSE](LICENSE) for more informati
 
 ---
 
-## 📬 Contact
+## Contact
 
 Maintainer: [@your_handle](https://twitter.com/your_handle) — email@example.com
 
@@ -434,7 +434,7 @@ Project Link: [https://github.com/sandeepannandi/cipher](https://github.com/sand
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [Best-README-Template](https://github.com/othneildrew/Best-README-Template) — README structure inspiration
 - [Groq](https://groq.com) — Ultra-fast AI inference API
