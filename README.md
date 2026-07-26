@@ -10,70 +10,88 @@
 
 </div>
 
-Cipher indexes your codebase, then lets you ask security questions and scan for secrets — powered by the AI model of your choice.
+Cipher indexes your codebase, scans for vulnerabilities and secrets, discovers attack paths, and generates AI-powered fixes — all from your terminal.
 
-```sh
-cipher init                    # Index your project
-cipher ask "Find auth flaws"   # Ask security questions (uses AI)
-cipher secrets                  # Scan for leaked credentials
-cipher status                   # Show index health
-```
+---
 
 ## Quick start
 
 ```sh
-# Prerequisites: Rust 1.85+ and an AI API key (Groq, OpenAI, Anthropic, or local endpoint)
-
 git clone https://github.com/sandeepannandi/Cipher.git
 cd Cipher
-export API_KEY=your_key_here
-export API_BASE_URL=https://api.groq.com/openai/v1  # or your preferred provider
+export GROQ_API_KEY=gsk_your_key_here
 cargo build --release
 ./target/release/cipher init
 ./target/release/cipher ask "Are there any security vulnerabilities?"
 ```
 
-## Why this project is needed
+**Prerequisites:** Rust 1.85+ and a Groq API key (set via `GROQ_API_KEY` env or `.env` file).
 
-Modern AI coding assistants (Copilot, Cursor, Cody, etc.) are excellent at understanding code context and helping you write and navigate code. However, security analysis is a fundamentally different challenge:
+---
 
-- **Security requires systematic analysis.** AI assistants excel at answering questions about the code you're currently viewing, but they don't run systematic scans across your entire codebase for vulnerability patterns.
-- **Security requires specialized knowledge.** Identifying an SQL injection, an auth bypass, or a cryptographic flaw requires deep security domain expertise — not just code reasoning.
-- **Security requires persistent indexing.** Every time you ask an AI assistant a question, it rebuilds context from scratch. Cipher maintains a persistent, queryable index of your codebase that enables fast, reproducible security analysis.
-- **Traditional SAST tools** (Semgrep, CodeQL, SonarQube) generate thousands of findings. Most are false positives. Teams spend more time triaging than fixing.
-- **Security engineers** are scarce and expensive. Most teams cannot afford dedicated AppSec engineers, leaving vulnerabilities undiscovered until they reach production.
+## Commands
 
-Cipher fills this gap — it is a **specialized security agent** designed from the ground up for codebase-wide vulnerability analysis, not general-purpose code assistance.
+| Command | Description |
+|---|---|
+| `cipher init` | Index your codebase for analysis |
+| `cipher ask "..."` | Ask security questions about your code |
+| `cipher review` | Scan for OWASP Top 10 vulnerabilities (20+ patterns) |
+| `cipher review --ai` | Same + AI-powered deep analysis |
+| `cipher deps` | Check dependencies against known vulnerabilities |
+| `cipher deps --online` | Same + OSV.dev API for comprehensive CVE coverage |
+| `cipher secrets` | Scan for leaked credentials (25+ patterns) |
+| `cipher secrets --json` | JSON output for CI/CD |
+| `cipher status` | Show index health |
+| `cipher report` | Generate security report (terminal / markdown / json) |
+| `cipher report --type executive` | Non-technical summary for managers |
+| `cipher attack` | Discover attack chains connecting findings into scenarios |
+| `cipher attack --no-ai` | Skip AI enrichment for faster results |
+| `cipher attack --json` | Machine-readable output |
+| `cipher fix --list` | List fixable findings |
+| `cipher fix --id <UUID>` | Generate and apply an AI-powered fix |
+| `cipher fix --risk critical --yes` | Auto-fix all critical issues |
 
-1. Indexes your entire codebase once, then answers instantly.
-2. Answers questions with citations to actual lines of code.
-3. Lets you choose the AI model — your data, your provider, your rules (BYOK).
-4. Runs in your terminal — no web dashboards, no CI/CD setup required.
-5. Built specifically for security: secret scanning, vulnerability analysis, attack path reasoning.
+---
 
 ## How it works
 
-1. **`cipher init`** walks your project (respecting `.gitignore`), reads supported source files, splits them into chunks, and builds a TF-IDF index stored in `.cipher/`. No external database required.
+**`init`** walks your project (respecting `.gitignore`), reads source files, splits them into chunks, and builds a TF-IDF index stored in `.cipher/`. No external database required.
 
-2. **`cipher ask "..."`** tokenizes your question, finds the most relevant code chunks via TF-IDF scoring, and sends them to your configured LLM provider with a security-focused prompt. Answers reference specific files and line numbers.
+**`ask`** tokenizes your question, finds the most relevant code chunks via TF-IDF scoring, and sends them to your configured LLM with a security-focused prompt. Answers reference specific files and line numbers.
 
-3. **`cipher secrets`** scans for 25+ credential patterns (AWS keys, GitHub tokens, Stripe keys, JWT tokens, DB connection strings, private keys, etc.) with severity classification. Supports `--format json` and `--fail-on-secret` for CI/CD.
+**`review`** scans every file against 20+ OWASP Top 10 vulnerability patterns (SQL injection, XSS, weak crypto, hardcoded creds, CORS, etc.). Optionally runs AI-powered deep analysis via Groq using the indexed codebase.
 
-4. **`cipher status`** displays index stats and API key status.
+**`deps`** parses `Cargo.toml`, `package.json`, and `requirements.txt`, then checks against an embedded advisory database (30+ CVEs). The `--online` flag queries the OSV.dev API for comprehensive coverage.
 
-**Bring your own key (BYOK).** Cipher supports any OpenAI-compatible API provider — you choose the model that fits your needs: Groq for speed, OpenAI for breadth, Anthropic for depth, or a local endpoint (Ollama, vLLM, llama.cpp) for zero data egress. Set your provider's endpoint and key via environment variables.
+**`secrets`** matches 25+ credential patterns (AWS keys, GitHub tokens, Stripe, JWT, private keys, DB connection strings, etc.) with severity classification. Supports `--format json` and `--fail-on-secret` for CI/CD.
 
-**Privacy:** Your code stays local. Only the retrieved code chunks are sent to the LLM provider when you ask a question. With a future local endpoint, your code never leaves your machine.
+**`report`** aggregates findings from review, deps, and secrets into a single report with three formats: terminal (color-coded), markdown (shareable), and JSON (CI-friendly). Includes a 0–100 security score.
+
+**`attack`** connects isolated findings into realistic attack chains using pattern-based rules. Eight chain types: privilege escalation, data exfiltration, credential theft, RCE, supply chain, crypto breach, auth bypass, and information disclosure. Optional AI enrichment generates human-readable attack scenarios.
+
+**`fix`** sends vulnerable code with surrounding context to the AI, which returns a secure replacement. Shows a colored diff with `-` (red) and `+` (green) lines, explains the change, and asks for confirmation before writing to disk. A ±4 line-count check prevents file corruption.
+
+---
 
 ## Supported languages
 
-30+ languages: Rust, JavaScript, TypeScript, Python, Go, Ruby, Java, Kotlin, Swift, C/C++, C#, PHP, Shell, YAML, JSON, TOML, SQL, HTML, CSS, Dart, and more.
+30+ languages: Rust, JavaScript, TypeScript, Python, Go, Ruby, Java, Kotlin, Swift, C/C++, C#, PHP, Shell, YAML, JSON, TOML, SQL, and more.
+
+---
+
+## Privacy
+
+Your code stays local. Only retrieved code chunks are sent to the LLM when you use `ask`, `review --ai`, `attack`, or `fix`. Set `API_BASE_URL` to a local endpoint (Ollama, vLLM, llama.cpp) for zero data egress.
+
+---
 
 ## Roadmap
 
-- **v0.2** — Hybrid scanning (Semgrep + AI), dependency vulnerability checks, report generation
-- **v0.3** — Attack path analysis, auto-fix generation
+- **v0.2** — Hybrid scanning, dependency checks, report generation ✅
+- **v0.3** — Attack path analysis, auto-fix generation ✅
 - **v1.0** — IDE extensions, GitHub PR reviews, team dashboard
+
+---
 
 ## License
 
