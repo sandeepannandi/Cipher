@@ -30,19 +30,24 @@ struct Message {
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    #[allow(dead_code)]
     usage: Option<Usage>,
 }
 
 #[derive(Debug, Deserialize)]
 struct Choice {
     message: Message,
+    #[allow(dead_code)]
     finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct Usage {
+    #[allow(dead_code)]
     prompt_tokens: u32,
+    #[allow(dead_code)]
     completion_tokens: u32,
+    #[allow(dead_code)]
     total_tokens: u32,
 }
 

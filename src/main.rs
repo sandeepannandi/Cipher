@@ -3,9 +3,12 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use std::path::PathBuf;
 
+mod deps;
+mod finding;
 mod groq;
 mod indexer;
 mod rag;
+mod review;
 mod secrets;
 
 const NAME: &str = "cipher";
@@ -83,6 +86,39 @@ enum Commands {
 
     /// Show index status and project info
     Status,
+
+    /// Run a comprehensive security review on the codebase
+    ///
+    /// Analyzes code for OWASP Top 10 vulnerabilities, hardcoded secrets,
+    /// injection flaws, cryptographic weaknesses, and more.
+    ///
+    /// Examples:
+    ///   cipher review
+    ///   cipher review --ai          # includes AI-powered deep analysis
+    ///   cipher review --ai --model llama-3.3-70b-versatile
+    Review {
+        /// Include AI-powered deep analysis (requires API key)
+        #[arg(long = "ai")]
+        use_ai: bool,
+
+        /// Model to use for AI analysis
+        #[arg(short = 'm', long = "model")]
+        model: Option<String>,
+    },
+
+    /// Scan dependencies for known vulnerabilities
+    ///
+    /// Parses dependency manifests (Cargo.toml, package.json, requirements.txt)
+    /// and checks against known vulnerability databases.
+    ///
+    /// Examples:
+    ///   cipher deps
+    ///   cipher deps --online           # queries OSV.dev API
+    Deps {
+        /// Enable online vulnerability database checks (requires internet)
+        #[arg(long = "online")]
+        online: bool,
+    },
 }
 
 fn clap_styles() -> clap::builder::Styles {
@@ -136,6 +172,14 @@ async fn main() -> Result<()> {
         Commands::Status => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             indexer::run_status(&project_path).await?;
+        }
+        Commands::Review { use_ai, model } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            review::run_review(&project_path, use_ai, model.as_deref()).await?;
+        }
+        Commands::Deps { online } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            deps::run_deps(&project_path, online).await?;
         }
     }
 

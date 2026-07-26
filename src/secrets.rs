@@ -1,38 +1,9 @@
+use crate::finding::{Confidence, Finding, FindingType, RemediationEffort, Severity};
 use anyhow::{Context, Result};
 use colored::*;
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
-use serde::Serialize;
 use std::path::Path;
-
-/// A detected secret
-#[derive(Debug, Clone, Serialize)]
-pub struct SecretFinding {
-    pub file_path: String,
-    pub line_number: usize,
-    pub line_content: String,
-    pub secret_type: String,
-    pub severity: Severity,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-pub enum Severity {
-    Critical,
-    High,
-    Medium,
-    Low,
-}
-
-impl std::fmt::Display for Severity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Severity::Critical => write!(f, "CRITICAL"),
-            Severity::High => write!(f, "HIGH"),
-            Severity::Medium => write!(f, "MEDIUM"),
-            Severity::Low => write!(f, "LOW"),
-        }
-    }
-}
 
 /// A single detection pattern
 struct SecretPattern {
@@ -151,7 +122,7 @@ fn build_patterns() -> Vec<SecretPattern> {
 }
 
 /// Scan a file for secrets
-fn scan_file(path: &Path, patterns: &[SecretPattern]) -> Vec<SecretFinding> {
+fn scan_file(path: &Path, patterns: &[SecretPattern]) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let content = match std::fs::read_to_string(path) {
@@ -175,14 +146,42 @@ fn scan_file(path: &Path, patterns: &[SecretPattern]) -> Vec<SecretFinding> {
 
         for pattern in patterns {
             if pattern.pattern.is_match(line) {
-                findings.push(SecretFinding {
-                    file_path: path.to_string_lossy().to_string(),
-                    line_number,
-                    line_content: line.to_string(),
-                    secret_type: pattern.name.to_string(),
-                    severity: pattern.severity,
-                });
-                // Don't break - could match multiple patterns on same line
+                let exploitability = match pattern.severity {
+                    Severity::Critical => 0.9,
+                    Severity::High => 0.7,
+                    Severity::Medium => 0.5,
+                    Severity::Low => 0.3,
+                    Severity::Info => 0.1,
+                };
+                let effort = match pattern.severity {
+                    Severity::Critical => RemediationEffort::Hours,
+                    Severity::High => RemediationEffort::Hours,
+                    Severity::Medium => RemediationEffort::Minutes,
+                    Severity::Low => RemediationEffort::Minutes,
+                    Severity::Info => RemediationEffort::Minutes,
+                };
+                findings.push(
+                    Finding::new(
+                        FindingType::Secret,
+                        pattern.name,
+                        format!(
+                            "{} credential detected in {}",
+                            pattern.name,
+                            path.display()
+                        ),
+                        pattern.severity,
+                        Confidence::High,
+                        "secret-scanner",
+                    )
+                    .at(path.to_string_lossy().to_string(), line_number)
+                    .with_code(line.to_string())
+                    .with_remediation(format!(
+                        "Remove the {} from the code. Use environment variables or a secret manager instead.",
+                        pattern.name
+                    ))
+                    .with_exploitability(exploitability)
+                    .with_effort(effort),
+                );
             }
         }
     }
@@ -230,7 +229,7 @@ pub async fn run_secrets(
         .hidden(false)
         .build();
 
-    let mut all_findings: Vec<SecretFinding> = Vec::new();
+    let mut all_findings: Vec<Finding> = Vec::new();
     let mut files_scanned = 0u64;
 
     let pb = ProgressBar::new_spinner();
@@ -263,10 +262,10 @@ pub async fn run_secrets(
     pb.finish_and_clear();
 
     // Group by severity for display
-    let critical_count = all_findings.iter().filter(|f| matches!(f.severity, Severity::Critical)).count();
-    let high_count = all_findings.iter().filter(|f| matches!(f.severity, Severity::High)).count();
-    let medium_count = all_findings.iter().filter(|f| matches!(f.severity, Severity::Medium)).count();
-    let low_count = all_findings.iter().filter(|f| matches!(f.severity, Severity::Low)).count();
+    let critical_count = all_findings.iter().filter(|f| f.severity == Severity::Critical).count();
+    let high_count = all_findings.iter().filter(|f| f.severity == Severity::High).count();
+    let medium_count = all_findings.iter().filter(|f| f.severity == Severity::Medium).count();
+    let low_count = all_findings.iter().filter(|f| f.severity == Severity::Low).count();
 
     println!();
     println!(
@@ -294,12 +293,14 @@ pub async fn run_secrets(
 
     // Group findings by file
     use std::collections::BTreeMap;
-    let mut by_file: BTreeMap<String, Vec<&SecretFinding>> = BTreeMap::new();
+    let mut by_file: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
     for finding in &all_findings {
-        by_file
-            .entry(finding.file_path.clone())
-            .or_default()
-            .push(finding);
+        if let Some(ref fp) = finding.file_path {
+            by_file
+                .entry(fp.clone())
+                .or_default()
+                .push(finding);
+        }
     }
 
     // Output findings
@@ -310,12 +311,14 @@ pub async fn run_secrets(
         );
     } else if format == "compact" {
         for finding in &all_findings {
+            let fp = finding.file_path.as_deref().unwrap_or("<unknown>");
+            let ln = finding.line_number.map(|l| l.to_string()).unwrap_or_default();
             println!(
                 "{} {}:{} {}",
-                severity_badge(&finding.severity),
-                finding.file_path,
-                finding.line_number,
-                finding.secret_type.dimmed()
+                finding.severity.badge(),
+                fp,
+                ln,
+                finding.title.dimmed()
             );
         }
     } else {
@@ -324,21 +327,27 @@ pub async fn run_secrets(
         for (file_path, findings) in &by_file {
             println!("  {} {}", "📁".cyan(), file_path.bold());
             for finding in findings {
-                let badge = severity_badge(&finding.severity);
+                let badge = finding.severity.badge();
+                let line_str = finding
+                    .line_number
+                    .map(|l| format!("Line {}", l))
+                    .unwrap_or_default();
                 println!(
                     "    {} {}  {}",
                     badge,
-                    format!("Line {}", finding.line_number).yellow(),
-                    finding.secret_type.bold()
+                    line_str.yellow(),
+                    finding.title.bold()
                 );
-                let shown_line = finding.line_content.trim();
-                if shown_line.len() > 100 {
-                    println!(
-                        "      {}",
-                        format!("{}...", &shown_line[..100]).dimmed()
-                    );
-                } else {
-                    println!("      {}", shown_line.dimmed());
+                if let Some(ref snippet) = finding.code_snippet {
+                    let shown = snippet.trim();
+                    if shown.len() > 100 {
+                        println!(
+                            "      {}",
+                            format!("{}...", &shown[..100]).dimmed()
+                        );
+                    } else {
+                        println!("      {}", shown.dimmed());
+                    }
                 }
             }
             println!();
@@ -362,14 +371,7 @@ pub async fn run_secrets(
     Ok(())
 }
 
-fn severity_badge(severity: &Severity) -> colored::ColoredString {
-    match severity {
-        Severity::Critical => "●".red().bold(),
-        Severity::High => "●".yellow().bold(),
-        Severity::Medium => "●".cyan(),
-        Severity::Low => "○".dimmed(),
-    }
-}
+
 
 /// Rough check if a file is binary by looking at the first few bytes
 fn is_binary(path: &Path) -> bool {

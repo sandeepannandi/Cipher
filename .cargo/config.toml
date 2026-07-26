@@ -3,10 +3,6 @@
 # This project targets x86_64-pc-windows-gnu (MinGW) on Windows.
 # On other platforms, the host target is used automatically.
 
-[target.x86_64-pc-windows-gnu]
-linker = "gcc"
-ar = "ar"
-
 # Optimizations for development builds
 [profile.dev]
 opt-level = 1
