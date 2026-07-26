@@ -21,11 +21,13 @@
   "main": "dist/index.js",
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "postinstall.js"
   ],
   "scripts": {
     "build": "node build.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "postinstall": "node postinstall.js"
   },
   "dependencies": {
     "ink": "^5.1.0",
