@@ -5,11 +5,11 @@ const BINARY_TIMEOUT_MS = 300_000; // 5 minutes
 
 /**
  * Run a command against the Rust cipher binary.
- * @param {string[]} args - Command-line arguments
- * @param {{ silent?: boolean }} options - Options
- * @returns {Promise<{ ok: boolean, stdout: string, stderr: string, json?: any, error?: string }>}
+ * Passes arguments through exactly as provided — no flags added.
+ * @param {string[]} args - Command-line arguments (passed as-is to the binary)
+ * @returns {Promise<{ ok: boolean, stdout: string, stderr: string, error?: string }>}
  */
-function runCommand(args, options = {}) {
+function runCommand(args) {
   return new Promise((resolve) => {
     const binaryPath = findBinaryPath();
     if (!binaryPath) {
@@ -17,30 +17,23 @@ function runCommand(args, options = {}) {
         ok: false,
         stdout: '',
         stderr: '',
-        error: 'Cipher binary not found. Install it first.',
+        error: 'Cipher Rust binary not found. Build it: cargo build --release',
       });
       return;
     }
 
-    // Ensure --json flag for machine-readable output unless it's an interactive command
-    const cmdArgs = [...args];
-    if (!cmdArgs.includes('--json') && !cmdArgs.includes('--format')) {
-      cmdArgs.push('--json');
-    }
-
     const child = execFile(
       binaryPath,
-      cmdArgs,
+      args,
       {
         cwd: process.cwd(),
-        maxBuffer: 50 * 1024 * 1024, // 50MB
+        maxBuffer: 50 * 1024 * 1024,
         timeout: BINARY_TIMEOUT_MS,
         encoding: 'utf-8',
         windowsHide: true,
       },
       (error, stdout, stderr) => {
         if (error) {
-          // Timeout
           if (error.killed) {
             resolve({
               ok: false,
@@ -50,7 +43,6 @@ function runCommand(args, options = {}) {
             });
             return;
           }
-          // Non-zero exit
           resolve({
             ok: false,
             stdout: stdout || '',
@@ -60,21 +52,11 @@ function runCommand(args, options = {}) {
           return;
         }
 
-        const result = {
+        resolve({
           ok: true,
           stdout: stdout || '',
           stderr: stderr || '',
-        };
-
-        // Try to parse JSON from stdout
-        try {
-          const parsed = JSON.parse(stdout);
-          result.json = parsed;
-        } catch {
-          // Not JSON — that's fine, leave as plain text
-        }
-
-        resolve(result);
+        });
       }
     );
 
