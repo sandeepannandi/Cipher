@@ -138,8 +138,9 @@ Cipher/
 │   │   │   ├── InputBox.jsx
 │   │   │   ├── Message.jsx
 │   │   │   ├── StatusBar.jsx
-│   │   │   └── CommandHelp.jsx
-│   │   └── commands/runner.js  # Rust binary bridge
+│   │   │   ├── CommandHelp.jsx
+│   │   ├── commands/runner.js  # Rust binary bridge
+│   │   └── utils/binary.js     # Binary path discovery
 │   └── postinstall.js  # Binary download on npm install
 ├── .github/workflows/release.yml  # Builds binaries for all platforms
 └── Cargo.toml
