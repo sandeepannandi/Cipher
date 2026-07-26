@@ -10,11 +10,13 @@
 
 </div>
 
-Cipher indexes your codebase, scans for vulnerabilities and secrets, discovers attack paths, and generates AI-powered fixes — all from your terminal.
+Cipher indexes your codebase, scans for vulnerabilities and secrets, discovers attack paths, and generates AI-powered fixes — all from your terminal. Includes both a CLI and an interactive TUI.
 
 ---
 
 ## Quick start
+
+### CLI mode
 
 ```sh
 git clone https://github.com/sandeepannandi/Cipher.git
@@ -27,29 +29,64 @@ cargo build --release
 
 **Prerequisites:** Rust 1.85+ and a Groq API key (set via `GROQ_API_KEY` env or `.env` file).
 
+### TUI mode (interactive chat)
+
+```sh
+cd Cipher/tui
+npm install && npm run build
+node bin/cipher.js
+```
+
+Or install globally:
+
+```sh
+npm install -g @cipher/security
+cipher
+```
+
+Inside the TUI, type `/help` to see all commands, or just ask a question naturally.
+
 ---
 
-## Commands
+## CLI Commands
 
 | Command | Description |
 |---|---|
-| `cipher init` | Index your codebase for analysis |
+| `cipher init` | Index your codebase |
 | `cipher ask "..."` | Ask security questions about your code |
-| `cipher review` | Scan for OWASP Top 10 vulnerabilities (20+ patterns) |
+| `cipher review` | Scan for OWASP Top 10 vulnerabilities |
 | `cipher review --ai` | Same + AI-powered deep analysis |
-| `cipher deps` | Check dependencies against known vulnerabilities |
-| `cipher deps --online` | Same + OSV.dev API for comprehensive CVE coverage |
+| `cipher deps` | Check dependencies for known vulnerabilities |
+| `cipher deps --online` | Same + OSV.dev API for full CVE coverage |
 | `cipher secrets` | Scan for leaked credentials (25+ patterns) |
-| `cipher secrets --json` | JSON output for CI/CD |
-| `cipher status` | Show index health |
-| `cipher report` | Generate security report (terminal / markdown / json) |
-| `cipher report --type executive` | Non-technical summary for managers |
-| `cipher attack` | Discover attack chains connecting findings into scenarios |
-| `cipher attack --no-ai` | Skip AI enrichment for faster results |
-| `cipher attack --json` | Machine-readable output |
+| `cipher status` | Show index health and API key status |
+| `cipher report` | Generate report (terminal / markdown / json) |
+| `cipher attack` | Discover attack chains from findings |
 | `cipher fix --list` | List fixable findings |
 | `cipher fix --id <UUID>` | Generate and apply an AI-powered fix |
-| `cipher fix --risk critical --yes` | Auto-fix all critical issues |
+
+---
+
+## TUI Commands (inside the interactive chat)
+
+| Command | Description |
+|---|---|
+| `/help` | Show help screen |
+| `/init` | Index your codebase |
+| `/init --force` | Re-index |
+| `/review` | Run security review |
+| `/review --ai` | Review with AI deep analysis |
+| `/deps` | Check dependency vulnerabilities |
+| `/deps --online` | Check with OSV.dev API |
+| `/secrets` | Scan for secrets |
+| `/ask <question>` | Ask a security question |
+| `/report` | Generate security report |
+| `/fix --list` | List fixable findings |
+| `/attack` | Analyze attack paths |
+| `/status` | Show index and API key status |
+| `/clear` | Clear chat messages |
+| `/exit` | Exit the TUI |
+| `? plain text` | Ask naturally (no / needed) |
 
 ---
 
@@ -57,19 +94,21 @@ cargo build --release
 
 **`init`** walks your project (respecting `.gitignore`), reads source files, splits them into chunks, and builds a TF-IDF index stored in `.cipher/`. No external database required.
 
-**`ask`** tokenizes your question, finds the most relevant code chunks via TF-IDF scoring, and sends them to your configured LLM with a security-focused prompt. Answers reference specific files and line numbers.
+**`ask`** tokenizes your question, finds relevant code chunks via TF-IDF scoring, and sends them to your LLM with a security prompt. Answers reference specific files and lines.
 
-**`review`** scans every file against 20+ OWASP Top 10 vulnerability patterns (SQL injection, XSS, weak crypto, hardcoded creds, CORS, etc.). Optionally runs AI-powered deep analysis via Groq using the indexed codebase.
+**`review`** scans every file against 20+ OWASP Top 10 vulnerability patterns (SQL injection, XSS, weak crypto, hardcoded creds, CORS, etc.). Optionally runs AI-powered deep analysis.
 
-**`deps`** parses `Cargo.toml`, `package.json`, and `requirements.txt`, then checks against an embedded advisory database (30+ CVEs). The `--online` flag queries the OSV.dev API for comprehensive coverage.
+**`deps`** parses `Cargo.toml`, `package.json`, and `requirements.txt`, checking against an embedded advisory database. The `--online` flag queries OSV.dev API.
 
-**`secrets`** matches 25+ credential patterns (AWS keys, GitHub tokens, Stripe, JWT, private keys, DB connection strings, etc.) with severity classification. Supports `--format json` and `--fail-on-secret` for CI/CD.
+**`secrets`** matches 25+ credential patterns (AWS keys, GitHub tokens, Stripe, JWT, private keys, DB strings) with severity classification.
 
-**`report`** aggregates findings from review, deps, and secrets into a single report with three formats: terminal (color-coded), markdown (shareable), and JSON (CI-friendly). Includes a 0–100 security score.
+**`report`** aggregates findings from review, deps, and secrets into a single report with three formats: terminal, markdown, and JSON. Includes a 0–100 security score.
 
-**`attack`** connects isolated findings into realistic attack chains using pattern-based rules. Eight chain types: privilege escalation, data exfiltration, credential theft, RCE, supply chain, crypto breach, auth bypass, and information disclosure. Optional AI enrichment generates human-readable attack scenarios.
+**`attack`** connects isolated findings into realistic attack chains. Eight chain types: privilege escalation, data exfiltration, credential theft, RCE, and more.
 
-**`fix`** sends vulnerable code with surrounding context to the AI, which returns a secure replacement. Shows a colored diff with `-` (red) and `+` (green) lines, explains the change, and asks for confirmation before writing to disk. A ±4 line-count check prevents file corruption.
+**`fix`** sends vulnerable code with surrounding context to the AI, which returns a secure replacement. Shows a colored diff before applying.
+
+**TUI** wraps all CLI commands in an interactive chat interface. Type `/` commands or ask questions in plain English. Built with Ink (React for CLIs).
 
 ---
 
@@ -82,6 +121,29 @@ cargo build --release
 ## Privacy
 
 Your code stays local. Only retrieved code chunks are sent to the LLM when you use `ask`, `review --ai`, `attack`, or `fix`. Set `API_BASE_URL` to a local endpoint (Ollama, vLLM, llama.cpp) for zero data egress.
+
+---
+
+## Project structure
+
+```
+Cipher/
+├── src/              # Rust CLI source
+├── tui/              # Node.js TUI (Ink/React)
+│   ├── bin/cipher.js # Entry point
+│   ├── src/          # TUI source
+│   │   ├── index.jsx       # Main app
+│   │   ├── components/     # UI components
+│   │   │   ├── ChatArea.jsx
+│   │   │   ├── InputBox.jsx
+│   │   │   ├── Message.jsx
+│   │   │   ├── StatusBar.jsx
+│   │   │   └── CommandHelp.jsx
+│   │   └── commands/runner.js  # Rust binary bridge
+│   └── postinstall.js  # Binary download on npm install
+├── .github/workflows/release.yml  # Builds binaries for all platforms
+└── Cargo.toml
+```
 
 ---
 
