@@ -5,6 +5,7 @@ use anyhow::Result;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// A discovered dependency with version info
@@ -495,11 +496,72 @@ fn check_embedded_advisories(dep: &Dependency) -> Vec<Finding> {
     findings
 }
 
+/// Collect dependency findings without displaying them (for report generation)
+pub(crate) async fn collect_deps_findings(
+    project_path: &Path,
+    use_online: bool,
+) -> Result<FindingReport> {
+    let canonical_path = std::fs::canonicalize(project_path)?;
+
+    let manifests = find_manifests(&canonical_path);
+    let mut all_deps: Vec<Dependency> = Vec::new();
+
+    for manifest in &manifests {
+        if let Ok(deps) = parse_manifest(manifest) {
+            all_deps.extend(deps);
+        }
+    }
+
+    // Deduplicate by name
+    all_deps.sort_by(|a, b| a.name.cmp(&b.name));
+    all_deps.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
+
+    let mut report = FindingReport::new("dependency-scanner", canonical_path.to_string_lossy());
+
+    for dep in &all_deps {
+        // Embedded advisories (always)
+        report.extend(check_embedded_advisories(dep));
+
+        // OSV.dev API (optional)
+        if use_online {
+            if let Ok(osv_results) = query_osv(&dep.ecosystem, &dep.name, &dep.version).await {
+                for (cve_id, summary, details, severity) in osv_results {
+                    let description = details.as_deref().unwrap_or(&summary).to_string();
+                    let finding = Finding::new(
+                        FindingType::Dependency,
+                        format!("CVE: {} — {}", cve_id, dep.name),
+                        format!("{} {}: {}", dep.name, dep.version, description),
+                        severity,
+                        Confidence::High,
+                        "dependency-scanner",
+                    )
+                    .at(dep.manifest_file.to_string_lossy().to_string(), 0)
+                    .with_cve(&cve_id)
+                    .with_remediation(format!(
+                        "Upgrade {} to a patched version. See {} for details.",
+                        dep.name, cve_id
+                    ))
+                    .with_exploitability(match severity {
+                        Severity::Critical => 0.8,
+                        Severity::High => 0.6,
+                        _ => 0.3,
+                    })
+                    .with_effort(RemediationEffort::Hours);
+                    report.add(finding);
+                }
+            }
+        }
+    }
+
+    report.sort_by_risk();
+    Ok(report)
+}
+
 /// Run the `cipher deps` command
 pub async fn run_deps(
     project_path: &Path,
     use_online: bool,
-) -> Result<()> {
+) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
     println!(
@@ -508,15 +570,12 @@ pub async fn run_deps(
         format!("Analyzing dependencies in {}...", canonical_path.display()).bold()
     );
 
-    // Find manifest files
     let manifests = find_manifests(&canonical_path);
 
     if manifests.is_empty() {
         println!("  {} No dependency manifests found.", "📭".yellow());
-        println!(
-            "  Supported: Cargo.toml, package.json, requirements.txt, and others."
-        );
-        return Ok(());
+        println!("  Supported: Cargo.toml, package.json, requirements.txt, and others.");
+        return Ok(FindingReport::new("dependency-scanner", canonical_path.to_string_lossy()));
     }
 
     println!(
@@ -527,7 +586,6 @@ pub async fn run_deps(
 
     // Parse all dependencies
     let mut all_deps: Vec<Dependency> = Vec::new();
-
     for manifest in &manifests {
         match parse_manifest(manifest) {
             Ok(deps) => {
@@ -540,23 +598,17 @@ pub async fn run_deps(
                 all_deps.extend(deps);
             }
             Err(e) => {
-                eprintln!(
-                    "  {} Failed to parse {}: {}",
-                    "⚠".yellow(),
-                    manifest.display(),
-                    e
-                );
+                eprintln!("  {} Failed to parse {}: {}", "⚠".yellow(), manifest.display(), e);
             }
         }
     }
 
-    // Deduplicate by name
     all_deps.sort_by(|a, b| a.name.cmp(&b.name));
     all_deps.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
 
     if all_deps.is_empty() {
         println!("\n  {} No dependencies found in manifests.", "📭".yellow());
-        return Ok(());
+        return Ok(FindingReport::new("dependency-scanner", canonical_path.to_string_lossy()));
     }
 
     println!(
@@ -565,7 +617,7 @@ pub async fn run_deps(
         all_deps.len().to_string().bold()
     );
 
-    // Check for vulnerabilities
+    // Collect findings
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
         ProgressStyle::default_spinner()
@@ -574,78 +626,19 @@ pub async fn run_deps(
     );
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    let mut report = FindingReport::new("dependency-scanner", canonical_path.to_string_lossy());
-
-    for dep in &all_deps {
-        spinner.set_message(format!("checking {} {}", dep.name.cyan(), dep.version.dimmed()));
-
-        // 1. Check embedded advisories (always)
-        let embedded_findings = check_embedded_advisories(dep);
-        report.extend(embedded_findings);
-
-        // 2. Optionally query OSV.dev API
-        if use_online {
-            match query_osv(&dep.ecosystem, &dep.name, &dep.version).await {
-                Ok(osv_results) => {
-                    for (cve_id, summary, details, severity) in osv_results {
-                        let description = details
-                            .as_deref()
-                            .unwrap_or(&summary)
-                            .to_string();
-
-                        let finding = Finding::new(
-                            FindingType::Dependency,
-                            format!("CVE: {} — {}", cve_id, dep.name),
-                            format!("{} {}: {}", dep.name, dep.version, description),
-                            severity,
-                            Confidence::High,
-                            "dependency-scanner",
-                        )
-                        .at(
-                            dep.manifest_file.to_string_lossy().to_string(),
-                            0,
-                        )
-                        .with_cve(&cve_id)
-                        .with_remediation(format!(
-                            "Upgrade {} to a patched version. See {} for details.",
-                            dep.name, cve_id
-                        ))
-                        .with_exploitability(match severity {
-                            Severity::Critical => 0.8,
-                            Severity::High => 0.6,
-                            _ => 0.3,
-                        })
-                        .with_effort(RemediationEffort::Hours);
-
-                        report.add(finding);
-                    }
-                }
-                Err(_) => {
-                    // OSV API unavailable — that's fine, we have embedded checks
-                }
-            }
-        }
-    }
+    let report = collect_deps_findings(&canonical_path, use_online).await?;
 
     spinner.finish_and_clear();
 
     // Display results
     println!();
-    println!(
-        "{} {}",
-        "📋".bright_blue(),
-        "Dependency Analysis Results".bold()
-    );
+    println!("{} {}", "📋".bright_blue(), "Dependency Analysis Results".bold());
     println!("  {}", "─".repeat(50).dimmed());
-
     report.print_summary();
 
     if report.is_empty() {
         println!();
-        println!(
-            "{} No known vulnerabilities found in dependencies.",
-            "✅".green().bold()
-        );
+        println!("{} No known vulnerabilities found in dependencies.", "✅".green().bold());
         if !use_online {
             println!(
                 "  {} Run {} for online vulnerability database checks (requires internet).",
@@ -653,10 +646,9 @@ pub async fn run_deps(
                 "cipher deps --online".yellow()
             );
         }
-        return Ok(());
+        return Ok(report);
     }
 
-    report.sort_by_risk();
     report.print_detailed();
 
     // Print dependency list
@@ -668,44 +660,21 @@ pub async fn run_deps(
         let vuln_count = report
             .findings
             .iter()
-            .filter(|f| {
-                f.file_path
-                    .as_deref()
-                    .map(|fp| fp.contains(&dep.name))
-                    .unwrap_or(false)
-            })
+            .filter(|f| f.file_path.as_deref().map(|fp| fp.contains(&dep.name)).unwrap_or(false))
             .count();
-
         let status = if vuln_count > 0 {
             format!("{} ({})", "⚠".yellow(), format!("{} vulnerabilities", vuln_count).red().bold())
         } else {
             "✓".green().to_string()
         };
-
-        println!(
-            "  {} {} {}  {}",
-            dep.ecosystem.bold().dimmed(),
-            dep.name.cyan(),
-            dep.version.dimmed(),
-            status
-        );
+        println!("  {} {} {}  {}", dep.ecosystem.bold().dimmed(), dep.name.cyan(), dep.version.dimmed(), status);
     }
 
-    // Recommendations
-    let critical_high = report
-        .findings
-        .iter()
-        .filter(|f| f.severity == Severity::Critical || f.severity == Severity::High)
-        .count();
-
+    let critical_high = report.findings.iter().filter(|f| f.severity == Severity::Critical || f.severity == Severity::High).count();
     if critical_high > 0 {
         println!();
-        println!(
-            "{} Found {} critical/high severity dependency issues. Update affected packages immediately.",
-            "⚠".yellow().bold(),
-            critical_high.to_string().bold()
-        );
+        println!("{} Found {} critical/high severity dependency issues. Update affected packages immediately.", "⚠".yellow().bold(), critical_high.to_string().bold());
     }
 
-    Ok(())
+    Ok(report)
 }

@@ -1,4 +1,4 @@
-use crate::finding::{Confidence, Finding, FindingType, RemediationEffort, Severity};
+use crate::finding::{Confidence, Finding, FindingReport, FindingType, RemediationEffort, Severity};
 use anyhow::{Context, Result};
 use colored::*;
 use ignore::WalkBuilder;
@@ -205,7 +205,32 @@ fn should_exclude(path: &Path) -> bool {
     false
 }
 
-/// Run the `sec secrets` command
+/// Collect secret findings without displaying them (for report generation)
+pub(crate) fn collect_secrets_findings(scan_path: &Path) -> Result<FindingReport> {
+    let canonical_path = std::fs::canonicalize(scan_path)
+        .with_context(|| format!("Cannot access path: {}", scan_path.display()))?;
+
+    let patterns = build_patterns();
+    let walker = WalkBuilder::new(&canonical_path)
+        .git_ignore(true)
+        .git_global(true)
+        .hidden(false)
+        .build();
+
+    let mut report = FindingReport::new("secret-scanner", canonical_path.to_string_lossy());
+    for result in walker {
+        if let Ok(entry) = result {
+            let path = entry.path();
+            if path.is_file() && !should_exclude(path) && !is_binary(path) {
+                report.extend(scan_file(path, &patterns));
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+/// Run the `cipher secrets` command
 pub async fn run_secrets(
     scan_path: &Path,
     format: &str,
@@ -220,18 +245,6 @@ pub async fn run_secrets(
         format!("Scanning for secrets in {}...", canonical_path.display()).bold()
     );
 
-    let patterns = build_patterns();
-
-    // Collect files to scan
-    let walker = WalkBuilder::new(&canonical_path)
-        .git_ignore(true)
-        .git_global(true)
-        .hidden(false)
-        .build();
-
-    let mut all_findings: Vec<Finding> = Vec::new();
-    let mut files_scanned = 0u64;
-
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
@@ -239,39 +252,22 @@ pub async fn run_secrets(
             .unwrap(),
     );
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    pb.set_message("scanning...");
 
-    for result in walker {
-        match result {
-            Ok(entry) => {
-                let path = entry.path();
-                if path.is_file() && !should_exclude(path) {
-                    files_scanned += 1;
-                    // Check if it's a binary file first
-                    if is_binary(path) {
-                        continue;
-                    }
-                    let findings = scan_file(path, &patterns);
-                    all_findings.extend(findings);
-                    pb.set_message(format!("scanned {} files", files_scanned));
-                }
-            }
-            Err(_) => {}
-        }
-    }
+    let report = collect_secrets_findings(&canonical_path)?;
 
     pb.finish_and_clear();
 
     // Group by severity for display
-    let critical_count = all_findings.iter().filter(|f| f.severity == Severity::Critical).count();
-    let high_count = all_findings.iter().filter(|f| f.severity == Severity::High).count();
-    let medium_count = all_findings.iter().filter(|f| f.severity == Severity::Medium).count();
-    let low_count = all_findings.iter().filter(|f| f.severity == Severity::Low).count();
+    let critical_count = report.findings.iter().filter(|f| f.severity == Severity::Critical).count();
+    let high_count = report.findings.iter().filter(|f| f.severity == Severity::High).count();
+    let medium_count = report.findings.iter().filter(|f| f.severity == Severity::Medium).count();
+    let low_count = report.findings.iter().filter(|f| f.severity == Severity::Low).count();
 
     println!();
     println!(
-        "{} Scanned {} files",
-        "📊".bright_blue(),
-        files_scanned.to_string().bold()
+        "{} Scanned project directory",
+        "📊".bright_blue()
     );
     println!(
         "  {} {} CRITICAL  {} {} HIGH  {} {} MEDIUM  {} {} LOW",
@@ -285,7 +281,7 @@ pub async fn run_secrets(
         low_count.to_string().dimmed(),
     );
 
-    if all_findings.is_empty() {
+    if report.is_empty() {
         println!();
         println!("{} No secrets found! Your codebase looks clean.", "✅".green().bold());
         return Ok(());
@@ -294,32 +290,20 @@ pub async fn run_secrets(
     // Group findings by file
     use std::collections::BTreeMap;
     let mut by_file: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
-    for finding in &all_findings {
+    for finding in &report.findings {
         if let Some(ref fp) = finding.file_path {
-            by_file
-                .entry(fp.clone())
-                .or_default()
-                .push(finding);
+            by_file.entry(fp.clone()).or_default().push(finding);
         }
     }
 
     // Output findings
     if format == "json" {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&all_findings)?
-        );
+        println!("{}", serde_json::to_string_pretty(&report.findings)?);
     } else if format == "compact" {
-        for finding in &all_findings {
+        for finding in &report.findings {
             let fp = finding.file_path.as_deref().unwrap_or("<unknown>");
             let ln = finding.line_number.map(|l| l.to_string()).unwrap_or_default();
-            println!(
-                "{} {}:{} {}",
-                finding.severity.badge(),
-                fp,
-                ln,
-                finding.title.dimmed()
-            );
+            println!("{} {}:{} {}", finding.severity.badge(), fp, ln, finding.title.dimmed());
         }
     } else {
         // "pretty" format (default)
@@ -328,23 +312,12 @@ pub async fn run_secrets(
             println!("  {} {}", "📁".cyan(), file_path.bold());
             for finding in findings {
                 let badge = finding.severity.badge();
-                let line_str = finding
-                    .line_number
-                    .map(|l| format!("Line {}", l))
-                    .unwrap_or_default();
-                println!(
-                    "    {} {}  {}",
-                    badge,
-                    line_str.yellow(),
-                    finding.title.bold()
-                );
+                let line_str = finding.line_number.map(|l| format!("Line {}", l)).unwrap_or_default();
+                println!("    {} {}  {}", badge, line_str.yellow(), finding.title.bold());
                 if let Some(ref snippet) = finding.code_snippet {
                     let shown = snippet.trim();
                     if shown.len() > 100 {
-                        println!(
-                            "      {}",
-                            format!("{}...", &shown[..100]).dimmed()
-                        );
+                        println!("      {}...", &shown[..100].dimmed());
                     } else {
                         println!("      {}", shown.dimmed());
                     }
@@ -353,7 +326,6 @@ pub async fn run_secrets(
             println!();
         }
 
-        // Summary recommendation
         if critical_count > 0 || high_count > 0 {
             println!(
                 "{} Found {} critical/high severity secrets. Review and remove them immediately.",
@@ -363,7 +335,6 @@ pub async fn run_secrets(
         }
     }
 
-    // Exit with error if requested
     if fail_on_secret && critical_count + high_count > 0 {
         std::process::exit(1);
     }

@@ -329,12 +329,60 @@ fn scan_file_for_vulns(
     findings
 }
 
+/// Collect review findings without displaying them (for report generation)
+pub(crate) async fn collect_review_findings(
+    project_path: &Path,
+    use_ai: bool,
+    model: Option<&str>,
+) -> Result<FindingReport> {
+    let canonical_path = std::fs::canonicalize(project_path)?;
+
+    let patterns = build_vuln_patterns();
+    let mut report = FindingReport::new("security-review", canonical_path.to_string_lossy());
+
+    // Walk source files
+    let walker = WalkBuilder::new(&canonical_path)
+        .git_ignore(true)
+        .git_global(true)
+        .hidden(false)
+        .build();
+
+    for result in walker {
+        match result {
+            Ok(entry) => {
+                let path = entry.path();
+                if path.is_file() && !is_binary(path) {
+                    let ext = file_extension(path);
+                    if !ext.is_empty() && is_supported_extension(&ext) {
+                        let findings = scan_file_for_vulns(path, &patterns);
+                        report.extend(findings);
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    // AI-powered deep analysis
+    if use_ai {
+        match run_ai_review(&canonical_path, model).await {
+            Ok(ai_findings) => {
+                report.extend(ai_findings);
+            }
+            Err(_) => {}
+        }
+    }
+
+    report.sort_by_risk();
+    Ok(report)
+}
+
 /// Run the `cipher review` command
 pub async fn run_review(
     project_path: &Path,
     use_ai: bool,
     model: Option<&str>,
-) -> Result<()> {
+) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
     println!(
@@ -343,7 +391,7 @@ pub async fn run_review(
         format!("Running security review on {}...", canonical_path.display()).bold()
     );
 
-    // ── Phase 1: Pattern-based scanning ──
+    // Phase 1: Pattern-based scanning
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
         ProgressStyle::default_spinner()
@@ -352,44 +400,11 @@ pub async fn run_review(
     );
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    let patterns = build_vuln_patterns();
-    let mut report = FindingReport::new("security-review", canonical_path.to_string_lossy());
+    let mut report = collect_review_findings(&canonical_path, false, None).await?;
 
-    // Collect source files
-    let walker = WalkBuilder::new(&canonical_path)
-        .git_ignore(true)
-        .git_global(true)
-        .hidden(false)
-        .build();
+    spinner.finish_with_message(format!("{} files scanned — {} issues found", "✓".green(), report.len()));
 
-    let mut files_scanned = 0u64;
-    for result in walker {
-        match result {
-            Ok(entry) => {
-                let path = entry.path();
-                if path.is_file() {
-                    // Check if it's a binary file
-                    if is_binary(path) {
-                        continue;
-                    }
-                    let ext = file_extension(path);
-                    // Only scan supported file types
-                    if !ext.is_empty() && is_supported_extension(&ext) {
-                        let findings = scan_file_for_vulns(path, &patterns);
-                        report.extend(findings);
-                        files_scanned += 1;
-                        spinner.set_message(format!("scanned {} files", files_scanned));
-                    }
-                }
-            }
-            Err(_) => {}
-        }
-    }
-
-    spinner.finish_with_message(format!("{} files scanned", files_scanned));
-    report.sort_by_risk();
-
-    // ── Phase 2: AI-powered deep analysis ──
+    // Phase 2: AI-powered deep analysis (only if requested — no re-scanning of patterns)
     if use_ai {
         println!(
             "  {} Running AI-powered deep analysis... (this may take a moment)",
@@ -397,7 +412,17 @@ pub async fn run_review(
         );
         match run_ai_review(&canonical_path, model).await {
             Ok(ai_findings) => {
-                report.extend(ai_findings);
+                // Deduplicate by (title, file_path) to avoid dropping real findings
+                let existing_keys: std::collections::HashSet<(String, Option<String>)> =
+                    report.findings.iter()
+                        .map(|f| (f.title.clone(), f.file_path.clone()))
+                        .collect();
+                for finding in ai_findings {
+                    let key = (finding.title.clone(), finding.file_path.clone());
+                    if !existing_keys.contains(&key) {
+                        report.add(finding);
+                    }
+                }
                 report.sort_by_risk();
             }
             Err(e) => {
@@ -410,7 +435,7 @@ pub async fn run_review(
         }
     }
 
-    // ── Display results ──
+    // Display results
     println!();
     println!(
         "{} {}",
@@ -421,7 +446,7 @@ pub async fn run_review(
     println!(
         "  {} Pattern-based scanner found {} potential issues",
         "🔎".cyan(),
-        report.findings.len().to_string().bold()
+        report.len().to_string().bold()
     );
 
     report.print_summary();
@@ -431,12 +456,12 @@ pub async fn run_review(
         println!("{} No vulnerabilities detected by pattern analysis.", "✅".green().bold());
         println!("  Note: Pattern-based scanners can miss business logic and context-dependent issues.");
         println!("  Run {} for deeper analysis.", "cipher ask \"Review this project for vulnerabilities\"".yellow());
-        return Ok(());
+        return Ok(report);
     }
 
     report.print_detailed();
 
-    // ── Recommendations ──
+    // Recommendations
     println!();
     println!("{} {}", "🎯".bold(), "Top Recommendations".bold());
     println!("  {}", "─".repeat(40).dimmed());
@@ -469,7 +494,7 @@ pub async fn run_review(
         "cipher ask \"Tell me more about [finding]\"".yellow()
     );
 
-    Ok(())
+    Ok(report)
 }
 
 /// Check if a file extension is supported for scanning

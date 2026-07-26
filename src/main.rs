@@ -3,11 +3,14 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use std::path::PathBuf;
 
+mod attack;
 mod deps;
 mod finding;
+mod fix;
 mod groq;
 mod indexer;
 mod rag;
+mod report;
 mod review;
 mod secrets;
 
@@ -119,6 +122,99 @@ enum Commands {
         #[arg(long = "online")]
         online: bool,
     },
+
+    /// Generate a comprehensive security report
+    ///
+    /// Aggregates findings from security review, dependency scanning,
+    /// and secret detection into a single report.
+    ///
+    /// Examples:
+    ///   cipher report
+    ///   cipher report --format json
+    ///   cipher report --format markdown --output report.md
+    ///   cipher report --type executive     # non-technical summary
+    ///   cipher report --type ci            # CI-friendly output
+    Report {
+        /// Report type: developer (default), executive, or ci
+        #[arg(long = "type", default_value = "developer")]
+        report_type: String,
+
+        /// Output format: terminal (default), markdown, or json
+        #[arg(long = "format", default_value = "terminal")]
+        format: String,
+
+        /// Write output to a file instead of stdout
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
+    },
+
+    /// Analyze attack paths by connecting findings into realistic attack chains
+    ///
+    /// Instead of isolated vulnerability reports, discovers how weaknesses
+    /// can combine into practical attack scenarios.
+    ///
+    /// Examples:
+    ///   cipher attack
+    ///   cipher attack --chain privilege                  # filter by chain type
+    ///   cipher attack --no-ai                             # skip AI enrichment
+    ///   cipher attack --json                              # JSON output for CI
+    ///   cipher attack --depth 5                           # max chain depth
+    Attack {
+        /// Filter by chain type (privilege-escalation, data-exfiltration, etc.)
+        #[arg(long = "chain")]
+        chain: Option<String>,
+
+        /// Maximum steps in an attack chain (default: 3)
+        #[arg(long = "depth", default_value = "3")]
+        depth: usize,
+
+        /// Output as JSON
+        #[arg(long = "json")]
+        json: bool,
+
+        /// Skip AI-powered enrichment for faster results
+        #[arg(long = "no-ai")]
+        no_ai: bool,
+    },
+
+    /// Auto-fix security vulnerabilities using AI
+    ///
+    /// Scans the codebase for findings, then uses AI to generate
+    /// secure patches. Shows a diff before applying.
+    ///
+    /// Examples:
+    ///   cipher fix --list                               # list fixable findings
+    ///   cipher fix --id abc12345                        # fix a specific finding
+    ///   cipher fix --risk critical                      # fix all critical findings
+    ///   cipher fix --risk critical --yes                # auto-apply without prompt
+    ///   cipher fix --file src/auth.rs                   # fix findings in a file
+    ///   cipher fix --all                                # fix all findings (interactive)
+    ///   cipher fix --all --yes                          # auto-fix everything
+    Fix {
+        /// Fix a specific finding by ID (or UUID prefix)
+        #[arg(long = "id")]
+        finding_id: Option<String>,
+
+        /// Fix findings with this risk level or higher (critical | high | medium | low)
+        #[arg(long = "risk")]
+        risk_level: Option<String>,
+
+        /// Fix findings in a specific file (path contains match)
+        #[arg(long = "file")]
+        target_file: Option<String>,
+
+        /// Fix all fixable findings
+        #[arg(long = "all")]
+        fix_all: bool,
+
+        /// List fixable findings without fixing
+        #[arg(long = "list")]
+        list_only: bool,
+
+        /// Auto-apply all fixes without prompting
+        #[arg(short = 'y', long = "yes")]
+        auto_apply: bool,
+    },
 }
 
 fn clap_styles() -> clap::builder::Styles {
@@ -180,6 +276,56 @@ async fn main() -> Result<()> {
         Commands::Deps { online } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             deps::run_deps(&project_path, online).await?;
+        }
+        Commands::Report {
+            report_type,
+            format,
+            output,
+        } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            report::run_report(
+                &project_path,
+                &report_type,
+                &format,
+                output.as_deref(),
+            )
+            .await?;
+        }
+        Commands::Attack {
+            chain,
+            depth,
+            json,
+            no_ai,
+        } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            attack::run_attack(
+                &project_path,
+                chain.as_deref(),
+                depth,
+                json,
+                !no_ai,
+            )
+            .await?;
+        }
+        Commands::Fix {
+            finding_id,
+            risk_level,
+            target_file,
+            fix_all,
+            list_only,
+            auto_apply,
+        } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            fix::run_fix(
+                &project_path,
+                finding_id.as_deref(),
+                risk_level.as_deref(),
+                target_file.as_deref(),
+                fix_all,
+                list_only,
+                auto_apply,
+            )
+            .await?;
         }
     }
 

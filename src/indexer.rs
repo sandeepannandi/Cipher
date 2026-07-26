@@ -195,7 +195,7 @@ fn is_stopword(term: &str) -> bool {
             | "all" | "any" | "both" | "each" | "few" | "more" | "most" | "other"
             | "some" | "into" | "over" | "under" | "up" | "out" | "off" | "down"
             | "here" | "there" | "when" | "where" | "why" | "how" | "what" | "who"
-            | "whom" | "while" | "during" | "before" | "after" | "between"
+            | "whom" | "while" | "during" | "before" | "between"
             | "through" | "using" | "use" | "get" | "set" | "put" | "let" | "make"
             | "run" | "new" | "return" | "void" | "null" | "true" | "false" | "none"
             | "self" | "super" | "base" | "class" | "struct" | "enum" | "trait"
