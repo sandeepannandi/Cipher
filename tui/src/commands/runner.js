@@ -17,7 +17,7 @@ function runCommand(args) {
         ok: false,
         stdout: '',
         stderr: '',
-        error: 'Cipher Rust binary not found. Build it: cargo build --release',
+        error: 'CipherAI Rust binary not found. Build it: cargo build --release',
       });
       return;
     }

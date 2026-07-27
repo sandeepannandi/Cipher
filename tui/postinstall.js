@@ -14,17 +14,18 @@ const os = require('os');
 
 const REPO = 'sandeepannandi/Cipher';
 const VERSION = 'v0.1.0';
+const BINARY_NAME = 'cipher-ai';
 
 function getPlatform() {
   const platform = os.platform();
   const arch = os.arch();
 
   const map = {
-    'win32-x64':  'cipher-x86_64-pc-windows-msvc.exe',
-    'linux-x64':  'cipher-x86_64-unknown-linux-gnu',
-    'linux-arm64':'cipher-aarch64-unknown-linux-gnu',
-    'darwin-x64': 'cipher-x86_64-apple-darwin',
-    'darwin-arm64':'cipher-aarch64-apple-darwin',
+    'win32-x64':  BINARY_NAME + '-x86_64-pc-windows-msvc.exe',
+    'linux-x64':  BINARY_NAME + '-x86_64-unknown-linux-gnu',
+    'linux-arm64': BINARY_NAME + '-aarch64-unknown-linux-gnu',
+    'darwin-x64': BINARY_NAME + '-x86_64-apple-darwin',
+    'darwin-arm64': BINARY_NAME + '-aarch64-apple-darwin',
   };
 
   const key = platform + '-' + arch;
@@ -69,25 +70,25 @@ async function main() {
     return;
   }
 
-  const installDir = path.join(os.homedir(), '.cipher', 'bin');
-  const destPath = path.join(installDir, os.platform() === 'win32' ? 'cipher.exe' : 'cipher');
+  const installDir = path.join(os.homedir(), '.cipher-ai', 'bin');
+  const destPath = path.join(installDir, os.platform() === 'win32' ? BINARY_NAME + '.exe' : BINARY_NAME);
 
   // Skip if already installed
   if (fs.existsSync(destPath)) {
-    console.log('✓ Cipher binary already installed at ' + destPath);
+    console.log('✓ CipherAI binary already installed at ' + destPath);
     return;
   }
 
   const url = 'https://github.com/' + REPO + '/releases/download/' + VERSION + '/' + binaryName;
 
-  console.log('⬇ Downloading Cipher binary for ' + os.platform() + '-' + os.arch() + '...');
+  console.log('⬇ Downloading CipherAI binary for ' + os.platform() + '-' + os.arch() + '...');
   console.log('  ' + url);
 
   try {
     fs.mkdirSync(installDir, { recursive: true });
     await download(url, destPath);
     console.log('✓ Installed to ' + destPath);
-    console.log('  Run "cipher --help" to verify.');
+    console.log('  Run "cipher-ai --help" to verify.');
   } catch (err) {
     console.warn('⚠ Failed to download binary: ' + err.message);
     console.warn('  Build it manually: cargo build --release');

@@ -1,42 +1,106 @@
 const React = require('react');
 const { Box, Text, useInput } = require('ink');
 
-function InputBox({ value, onChange, onSubmit, isRunning }) {
+const MODELS = ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'];
+
+const COMMANDS = [
+  { cmd: 'init',         desc: 'Index your codebase for analysis' },
+  { cmd: 'init --force', desc: 'Force re-index' },
+  { cmd: 'review',       desc: 'Scan for OWASP Top 10 vulnerabilities' },
+  { cmd: 'review --ai',  desc: 'Review with AI-powered deep analysis' },
+  { cmd: 'deps',         desc: 'Check dependency vulnerabilities' },
+  { cmd: 'deps --online',desc: 'Check deps with OSV.dev API' },
+  { cmd: 'secrets',      desc: 'Scan for leaked credentials' },
+  { cmd: 'ask',          desc: 'Ask a security question (uses AI)' },
+  { cmd: 'report',       desc: 'Generate security report' },
+  { cmd: 'fix --list',   desc: 'List fixable findings' },
+  { cmd: 'attack',       desc: 'Discover attack chains' },
+  { cmd: 'model',        desc: 'Show or switch AI model' },
+  { cmd: 'status',       desc: 'Show index and API key status' },
+  { cmd: 'clear',        desc: 'Clear messages' },
+  { cmd: 'exit',         desc: 'Exit the TUI' },
+];
+
+function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt }) {
+  const [selectedIdx, setSelectedIdx] = React.useState(0);
+
+  const showDropdown = value.trim().startsWith('/') && value.trim().length > 0;
+  const filterText = value.trim().slice(1).toLowerCase();
+  const filtered = showDropdown ? COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(filterText)) : [];
+
   useInput((input, key) => {
     if (isRunning) return;
-
     if (key.return) {
+      if (showDropdown && filtered.length > 0 && filtered[selectedIdx]) {
+        const selected = filtered[selectedIdx];
+        if (selected.cmd === 'model') {
+          onChange('');
+          onSubmit('/model');
+          return;
+        }
+        onChange('');
+        onSubmit('/' + selected.cmd);
+        return;
+      }
       onSubmit(value);
       return;
     }
-
-    if (key.backspace || key.delete) {
-      onChange(value.slice(0, -1));
-      return;
+    if (showDropdown && filtered.length > 0) {
+      if (key.upArrow) { setSelectedIdx((p) => Math.max(0, p - 1)); return; }
+      if (key.downArrow) { setSelectedIdx((p) => Math.min(filtered.length - 1, p + 1)); return; }
     }
-
-    // Ignore control characters and function keys
-    if (input.length === 1 || (input.length > 1 && !key.ctrl)) {
-      onChange(value + input);
-    }
+    if (key.escape) { onChange(''); return; }
+    if (key.backspace || key.delete) { onChange(value.slice(0, -1)); setSelectedIdx(0); return; }
+    if (input.length >= 1 && !key.ctrl) { onChange(value + input); setSelectedIdx(0); }
   });
 
-  // Detect if this looks like a question
-  const isLikelyQuestion = value.trim().length > 0 && !value.trim().startsWith('/');
+  React.useEffect(() => { setSelectedIdx(0); }, [value]);
 
-  return React.createElement(Box, {
-    borderStyle: 'round',
-    borderColor: isRunning ? 'yellow' : 'cyan',
-    marginTop: 1,
-    marginLeft: 1,
-    marginRight: 1,
-    paddingLeft: 1,
-  },
-    React.createElement(Text, { bold: true, color: 'cyan' }, '> '),
-    React.createElement(Text, { color: isRunning ? 'yellow' : 'white' },
-      value || (isRunning ? '' : 'Type /help or ask a question...')
-    ),
-    !isRunning && React.createElement(Text, { color: 'gray' }, ' ')
+  const isEmpty = value.trim().length === 0;
+  const startsWithSlash = value.trim().startsWith('/');
+  const cmdWord = startsWithSlash ? value.trim().slice(1).split(/\s+/)[0] : '';
+  const isExactMatch = startsWithSlash && COMMANDS.some((c) => c.cmd === cmdWord);
+  const isPartialMatch = startsWithSlash && !isExactMatch && COMMANDS.some((c) => c.cmd.startsWith(cmdWord));
+
+  const isModelCommand = startsWithSlash && cmdWord === 'model';
+  const modelFilter = isModelCommand ? value.trim().slice(7).toLowerCase() : '';
+  const modelSuggestions = isModelCommand && value.trim().length > 7
+    ? MODELS.filter((m) => m.toLowerCase().startsWith(modelFilter))
+    : [];
+
+  return React.createElement(Box, { flexDirection: 'column' },
+
+    showDropdown && filtered.length > 0 && React.createElement(Box, {
+      flexDirection: 'column', borderStyle: 'single', borderColor: 'yellow',
+      marginLeft: 1, marginRight: 1, marginBottom: 0,
+    },
+      ...filtered.map((cmd, i) =>
+        React.createElement(Box, { key: cmd.cmd, flexDirection: 'row' },
+          React.createElement(Text, {
+            color: i === selectedIdx ? 'yellow' : 'white',
+            bold: i === selectedIdx,
+          }, '  ' + cmd.cmd.padEnd(18) + cmd.desc))
+      ),
+      React.createElement(Box, { marginTop: 0 },
+        React.createElement(Text, { color: 'green', dim: true }, '  up/down navigate  Enter select'))),
+
+    isModelCommand && modelSuggestions.length > 0 && React.createElement(Box, {
+      flexDirection: 'column', borderStyle: 'single', borderColor: 'yellow',
+      marginLeft: 1, marginRight: 1, marginBottom: 0,
+    },
+      ...modelSuggestions.map((m, i) =>
+        React.createElement(Box, { key: m, flexDirection: 'row' },
+          React.createElement(Text, { color: 'yellow' }, '  ' + m)))),
+
+    React.createElement(Box, { flexDirection: 'row', paddingLeft: 1, paddingRight: 1, marginTop: showDropdown && filtered.length > 0 ? 0 : 0 },
+      React.createElement(Text, { color: 'green' }, showAskPrompt ? '? ' : '> '),
+      isEmpty && !showAskPrompt && React.createElement(Text, { color: 'white', dim: true }, ' Type /help or ask a question...'),
+      isEmpty && showAskPrompt && React.createElement(Text, { color: 'yellow' }, ' Type your question...'),
+      !isEmpty && (startsWithSlash
+        ? React.createElement(Box, { flexDirection: 'row' },
+            React.createElement(Text, { color: 'yellow' }, '/'),
+            React.createElement(Text, { color: (isExactMatch || isPartialMatch) ? 'yellow' : 'white' }, value.trim().slice(1)))
+        : React.createElement(Text, { color: 'white' }, value.trim()))),
   );
 }
 

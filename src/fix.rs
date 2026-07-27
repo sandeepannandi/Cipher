@@ -21,7 +21,7 @@ pub struct FixPlan {
     pub end_line: usize,
 }
 
-/// Run the `cipher fix` command
+/// Run the `cipher-ai fix` command
 pub async fn run_fix(
     project_path: &Path,
     finding_id: Option<&str>,
@@ -36,7 +36,7 @@ pub async fn run_fix(
     println!(
         "{} {}\n",
         "🛠".bright_blue().bold(),
-        "Cipher Auto-Fix".bold()
+        "CipherAI Auto-Fix".bold()
     );
 
     // Step 1: Scan for all findings
@@ -48,8 +48,8 @@ pub async fn run_fix(
         println!("  {} No fixable findings found.", "📭".yellow());
         println!(
             "  Run {} or {} first to generate findings.",
-            "cipher review".yellow(),
-            "cipher deps".yellow()
+            "cipher-ai review".yellow(),
+            "cipher-ai deps".yellow()
         );
         return Ok(());
     }
@@ -411,7 +411,7 @@ fn print_fixable_findings(findings: &[&Finding], _project_path: &Path) {
     println!(
         "  {} Use {} to fix a specific finding",
         "💡".bold(),
-        "cipher fix --id <ID>".cyan()
+        "cipher-ai fix --id <ID>".cyan()
     );
 }
 

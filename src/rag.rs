@@ -9,7 +9,7 @@ const DEFAULT_TOP_N: usize = 10;
 const MAX_CONTEXT_CHARS: usize = 25_000;
 
 /// Security-focused system prompt for the AI
-const SECURITY_SYSTEM_PROMPT: &str = r#"You are Cipher, an expert application security engineer AI assistant.
+const SECURITY_SYSTEM_PROMPT: &str = r#"You are CipherAI, an expert application security engineer AI assistant.
 
 Your role is to analyze code and answer security-related questions with precision and clarity.
 
@@ -28,7 +28,7 @@ Follow these guidelines:
 
 Remember: You are looking at real code from the user's project. Ground every answer in the provided code context."#;
 
-/// Run the `cipher ask` command
+/// Run the `cipher-ai ask` command
 pub async fn run_ask(
     project_path: &Path,
     query: &str,
@@ -55,7 +55,7 @@ pub async fn run_ask(
             println!(
                 "{} Project not indexed. Run {} first.",
                 "📭".bright_blue(),
-                "cipher init".yellow().bold()
+                "cipher-ai init".yellow().bold()
             );
             return Ok(());
         }

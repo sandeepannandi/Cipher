@@ -377,7 +377,7 @@ pub(crate) async fn collect_review_findings(
     Ok(report)
 }
 
-/// Run the `cipher review` command
+/// Run the `cipher-ai review` command
 pub async fn run_review(
     project_path: &Path,
     use_ai: bool,
@@ -455,7 +455,7 @@ pub async fn run_review(
         println!();
         println!("{} No vulnerabilities detected by pattern analysis.", "✅".green().bold());
         println!("  Note: Pattern-based scanners can miss business logic and context-dependent issues.");
-        println!("  Run {} for deeper analysis.", "cipher ask \"Review this project for vulnerabilities\"".yellow());
+        println!("  Run {} for deeper analysis.", "cipher-ai ask \"Review this project for vulnerabilities\"".yellow());
         return Ok(report);
     }
 
@@ -491,7 +491,7 @@ pub async fn run_review(
     println!();
     println!(
         "  💡 Run {} for interactive security Q&A about specific findings.",
-        "cipher ask \"Tell me more about [finding]\"".yellow()
+        "cipher-ai ask \"Tell me more about [finding]\"".yellow()
     );
 
     Ok(report)

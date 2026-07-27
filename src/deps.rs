@@ -557,7 +557,7 @@ pub(crate) async fn collect_deps_findings(
     Ok(report)
 }
 
-/// Run the `cipher deps` command
+/// Run the `cipher-ai deps` command
 pub async fn run_deps(
     project_path: &Path,
     use_online: bool,
@@ -643,7 +643,7 @@ pub async fn run_deps(
             println!(
                 "  {} Run {} for online vulnerability database checks (requires internet).",
                 "🌐".cyan(),
-                "cipher deps --online".yellow()
+                "cipher-ai deps --online".yellow()
             );
         }
         return Ok(report);

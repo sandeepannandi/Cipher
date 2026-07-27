@@ -253,9 +253,9 @@ fn compute_idf(chunks: &[CodeChunk]) -> HashMap<String, f64> {
         .collect()
 }
 
-/// Get the .cipher data directory path
+/// Get the .cipher-ai data directory path
 fn data_dir(project_path: &Path) -> PathBuf {
-    project_path.join(".cipher")
+    project_path.join(".cipher-ai")
 }
 
 /// Initialize the index for a project
@@ -272,7 +272,7 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
             "✓".green().bold(),
             sec_dir.display()
         );
-        println!("  Run {} to re-index", "cipher init --force".yellow());
+        println!("  Run {} to re-index", "cipher-ai init --force".yellow());
         return Ok(());
     }
 
@@ -448,7 +448,7 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
 
     if !index_path.exists() {
         println!("{} Project not indexed yet.", "📭".bright_blue());
-        println!("  Run {} to index this codebase", "cipher init".yellow().bold());
+        println!("  Run {} to index this codebase", "cipher-ai init".yellow().bold());
         return Ok(());
     }
 

@@ -67,7 +67,7 @@ impl GroqClient {
         Ok(Self { client, api_key })
     }
 
-    /// Read API key from .cipher/config.json
+    /// Read API key from .cipher-ai/config.json
     fn read_key_from_config() -> Result<String> {
         let config_path = std::env::current_dir()?.join(".cipher").join("config.json");
         if config_path.exists() {

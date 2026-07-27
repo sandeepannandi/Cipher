@@ -84,7 +84,7 @@ pub struct AttackChain {
     pub steps: usize,
 }
 
-/// Run the `cipher attack` command
+/// Run the `cipher-ai attack` command
 pub async fn run_attack(
     project_path: &Path,
     chain_filter: Option<&str>,
@@ -97,7 +97,7 @@ pub async fn run_attack(
     println!(
         "{} {}\n",
         "🕸".bright_blue().bold(),
-        "Cipher Attack Path Analysis".bold()
+        "CipherAI Attack Path Analysis".bold()
     );
 
     // Step 1: Collect all findings
@@ -202,7 +202,7 @@ pub async fn run_attack(
     println!();
     println!(
         "  💡 Run {} to fix the most critical issues and break these chains.",
-        "cipher fix --risk critical".yellow()
+        "cipher-ai fix --risk critical".yellow()
     );
 
     Ok(())
@@ -442,7 +442,7 @@ async fn enrich_chains_ai(
             .collect();
         let findings_text = findings_summary.join("\n");
 
-        let system_prompt = "You are Cipher, an expert application security engineer. Your job is to analyze how multiple security weaknesses can be combined into realistic attack scenarios.\n\nGiven a set of findings that form an attack chain, generate:\n1. A realistic attack scenario description (2-3 sentences)\n2. The entry point (what an attacker would exploit first)\n3. The impact (what the attacker could achieve)\n\nReturn JSON only: {\"scenario\": \"...\", \"entry_point\": \"...\", \"impact\": \"...\"}";
+        let system_prompt = "You are CipherAI, an expert application security engineer. Your job is to analyze how multiple security weaknesses can be combined into realistic attack scenarios.\n\nGiven a set of findings that form an attack chain, generate:\n1. A realistic attack scenario description (2-3 sentences)\n2. The entry point (what an attacker would exploit first)\n3. The impact (what the attacker could achieve)\n\nReturn JSON only: {\"scenario\": \"...\", \"entry_point\": \"...\", \"impact\": \"...\"}";
 
         let user_prompt = format!(
             r#"Attack chain type: {chain_name}

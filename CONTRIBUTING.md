@@ -1,6 +1,6 @@
-# Contributing to Cipher
+# Contributing to CipherAI
 
-Thank you for your interest in contributing to Cipher! We welcome all contributions — bug reports, feature requests, documentation improvements, and code changes.
+Thank you for your interest in contributing to CipherAI! We welcome all contributions — bug reports, feature requests, documentation improvements, and code changes.
 
 ## Getting Started
 
@@ -44,7 +44,7 @@ cargo fmt --check
 ## Reporting Issues
 
 - Use the GitHub issue tracker.
-- Include the output of `cipher status` and your Rust version.
+- Include the output of `cipher-ai status` and your Rust version.
 - Provide steps to reproduce the issue.
 
 ## License

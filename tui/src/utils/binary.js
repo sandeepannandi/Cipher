@@ -3,7 +3,7 @@ const path = require('path');
 const os = require('os');
 
 function findBinaryPath() {
-  const binaryName = os.platform() === 'win32' ? 'cipher.exe' : 'cipher';
+  const binaryName = os.platform() === 'win32' ? 'cipher-ai.exe' : 'cipher-ai';
 
   // Priority 1: In the same directory as this npm package (local development)
   const pkgDir = path.join(__dirname, '..', '..');

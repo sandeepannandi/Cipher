@@ -50,13 +50,13 @@ jobs:
 
       - name: Package
         run: |
-          cp target/${{ matrix.target }}/release/cipher${{ matrix.ext }} cipher-${{ matrix.target }}${{ matrix.ext }}
+          cp target/${{ matrix.target }}/release/cipher-ai${{ matrix.ext }} cipher-ai-${{ matrix.target }}${{ matrix.ext }}
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: cipher-${{ matrix.target }}
-          path: cipher-${{ matrix.target }}${{ matrix.ext }}
+          name: cipher-ai-${{ matrix.target }}
+          path: cipher-ai-${{ matrix.target }}${{ matrix.ext }}
 
   publish:
     name: Publish Release
@@ -75,5 +75,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            cipher-*/
+            cipher-ai-*/
           generate_release_notes: true

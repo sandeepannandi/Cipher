@@ -1,5 +1,5 @@
 [package]
-name = "cipher"
+name = "cipher-ai"
 version = "0.1.0"
 edition = "2021"
 description = "Cipher — AI-powered security analysis for your codebase. Index, search, and ask security questions using Groq AI."

@@ -1,6 +1,6 @@
 <div align="center">
 
-# Cipher
+# CipherAI
 
 **AI security analysis for your codebase — from your terminal.**
 
@@ -10,7 +10,7 @@
 
 </div>
 
-Cipher indexes your codebase, scans for vulnerabilities and secrets, discovers attack paths, and generates AI-powered fixes — all from your terminal. Includes both a CLI and an interactive TUI.
+CipherAI indexes your codebase, scans for vulnerabilities and secrets, discovers attack paths, and generates AI-powered fixes — all from your terminal. Includes both a CLI and an interactive TUI with an OpenCode-style interface.
 
 ---
 
@@ -23,8 +23,8 @@ git clone https://github.com/sandeepannandi/Cipher.git
 cd Cipher
 export GROQ_API_KEY=gsk_your_key_here
 cargo build --release
-./target/release/cipher init
-./target/release/cipher ask "Are there any security vulnerabilities?"
+./target/release/cipher-ai init
+./target/release/cipher-ai ask "Are there any security vulnerabilities?"
 ```
 
 **Prerequisites:** Rust 1.85+ and a Groq API key (set via `GROQ_API_KEY` env or `.env` file).
@@ -34,17 +34,17 @@ cargo build --release
 ```sh
 cd Cipher/tui
 npm install && npm run build
-node bin/cipher.js
+node bin/cipher-ai.js
 ```
 
 Or install globally:
 
 ```sh
-npm install -g @cipher/security
-cipher
+npm install -g cipher-ai
+cipher-ai
 ```
 
-Inside the TUI, type `/help` to see all commands, or just ask a question naturally.
+Inside the TUI, type `/help` to see all commands, or press `Ctrl+K` for the command palette.
 
 ---
 
@@ -52,18 +52,18 @@ Inside the TUI, type `/help` to see all commands, or just ask a question natural
 
 | Command | Description |
 |---|---|
-| `cipher init` | Index your codebase |
-| `cipher ask "..."` | Ask security questions about your code |
-| `cipher review` | Scan for OWASP Top 10 vulnerabilities |
-| `cipher review --ai` | Same + AI-powered deep analysis |
-| `cipher deps` | Check dependencies for known vulnerabilities |
-| `cipher deps --online` | Same + OSV.dev API for full CVE coverage |
-| `cipher secrets` | Scan for leaked credentials (25+ patterns) |
-| `cipher status` | Show index health and API key status |
-| `cipher report` | Generate report (terminal / markdown / json) |
-| `cipher attack` | Discover attack chains from findings |
-| `cipher fix --list` | List fixable findings |
-| `cipher fix --id <UUID>` | Generate and apply an AI-powered fix |
+| `cipher-ai init` | Index your codebase |
+| `cipher-ai ask "..."` | Ask security questions about your code |
+| `cipher-ai review` | Scan for OWASP Top 10 vulnerabilities |
+| `cipher-ai review --ai` | Same + AI-powered deep analysis |
+| `cipher-ai deps` | Check dependencies for known vulnerabilities |
+| `cipher-ai deps --online` | Same + OSV.dev API for full CVE coverage |
+| `cipher-ai secrets` | Scan for leaked credentials (25+ patterns) |
+| `cipher-ai status` | Show index health and API key status |
+| `cipher-ai report` | Generate report (terminal / markdown / json) |
+| `cipher-ai attack` | Discover attack chains from findings |
+| `cipher-ai fix --list` | List fixable findings |
+| `cipher-ai fix --id <UUID>` | Generate and apply an AI-powered fix |
 
 ---
 
@@ -71,7 +71,7 @@ Inside the TUI, type `/help` to see all commands, or just ask a question natural
 
 | Command | Description |
 |---|---|
-| `/help` | Show help screen |
+| `/help` | Show help screen (or press `Ctrl+K`) |
 | `/init` | Index your codebase |
 | `/init --force` | Re-index |
 | `/review` | Run security review |
@@ -92,7 +92,7 @@ Inside the TUI, type `/help` to see all commands, or just ask a question natural
 
 ## How it works
 
-**`init`** walks your project (respecting `.gitignore`), reads source files, splits them into chunks, and builds a TF-IDF index stored in `.cipher/`. No external database required.
+**`init`** walks your project (respecting `.gitignore`), reads source files, splits them into chunks, and builds a TF-IDF index stored in `.cipher-ai/`. No external database required.
 
 **`ask`** tokenizes your question, finds relevant code chunks via TF-IDF scoring, and sends them to your LLM with a security prompt. Answers reference specific files and lines.
 
@@ -108,7 +108,7 @@ Inside the TUI, type `/help` to see all commands, or just ask a question natural
 
 **`fix`** sends vulnerable code with surrounding context to the AI, which returns a secure replacement. Shows a colored diff before applying.
 
-**TUI** wraps all CLI commands in an interactive chat interface. Type `/` commands or ask questions in plain English. Built with Ink (React for CLIs).
+**TUI** wraps all CLI commands in an interactive chat interface with an OpenCode-style design. Features include: command palette (`Ctrl+K`), keyboard-driven navigation, visual message formatting, and real-time status indicators. Built with Ink (React for CLIs).
 
 ---
 
@@ -130,7 +130,7 @@ Your code stays local. Only retrieved code chunks are sent to the LLM when you u
 Cipher/
 ├── src/              # Rust CLI source
 ├── tui/              # Node.js TUI (Ink/React)
-│   ├── bin/cipher.js # Entry point
+│   ├── bin/cipher-ai.js # Entry point
 │   ├── src/          # TUI source
 │   │   ├── index.jsx       # Main app
 │   │   ├── components/     # UI components
@@ -139,6 +139,7 @@ Cipher/
 │   │   │   ├── Message.jsx
 │   │   │   ├── StatusBar.jsx
 │   │   │   ├── CommandHelp.jsx
+│   │   │   └── CommandPalette.jsx  # Ctrl+K palette
 │   │   ├── commands/runner.js  # Rust binary bridge
 │   │   └── utils/binary.js     # Binary path discovery
 │   └── postinstall.js  # Binary download on npm install

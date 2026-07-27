@@ -14,10 +14,10 @@ mod report;
 mod review;
 mod secrets;
 
-const NAME: &str = "cipher";
+const NAME: &str = "cipher-ai";
 const VERSION: &str = "0.1.0";
 
-/// Cipher — AI-powered security analysis for your codebase.
+/// CipherAI — AI-powered security analysis for your codebase.
 ///
 /// Index your project, ask security questions, and scan for secrets
 /// using Groq AI models — all from your terminal.
@@ -58,8 +58,8 @@ enum Commands {
     /// Uses AI to answer security questions with code-level context.
     ///
     /// Examples:
-    ///   cipher ask "Can users become admin?"
-    ///   cipher ask "Find authentication bypass vulnerabilities"
+    ///   cipher-ai ask "Can users become admin?"
+    ///   cipher-ai ask "Find authentication bypass vulnerabilities"
     Ask {
         /// Your security question
         query: Vec<String>,
@@ -96,9 +96,9 @@ enum Commands {
     /// injection flaws, cryptographic weaknesses, and more.
     ///
     /// Examples:
-    ///   cipher review
-    ///   cipher review --ai          # includes AI-powered deep analysis
-    ///   cipher review --ai --model llama-3.3-70b-versatile
+    ///   cipher-ai review
+    ///   cipher-ai review --ai          # includes AI-powered deep analysis
+    ///   cipher-ai review --ai --model llama-3.3-70b-versatile
     Review {
         /// Include AI-powered deep analysis (requires API key)
         #[arg(long = "ai")]
@@ -115,8 +115,8 @@ enum Commands {
     /// and checks against known vulnerability databases.
     ///
     /// Examples:
-    ///   cipher deps
-    ///   cipher deps --online           # queries OSV.dev API
+    ///   cipher-ai deps
+    ///   cipher-ai deps --online           # queries OSV.dev API
     Deps {
         /// Enable online vulnerability database checks (requires internet)
         #[arg(long = "online")]
@@ -129,11 +129,11 @@ enum Commands {
     /// and secret detection into a single report.
     ///
     /// Examples:
-    ///   cipher report
-    ///   cipher report --format json
-    ///   cipher report --format markdown --output report.md
-    ///   cipher report --type executive     # non-technical summary
-    ///   cipher report --type ci            # CI-friendly output
+    ///   cipher-ai report
+    ///   cipher-ai report --format json
+    ///   cipher-ai report --format markdown --output report.md
+    ///   cipher-ai report --type executive     # non-technical summary
+    ///   cipher-ai report --type ci            # CI-friendly output
     Report {
         /// Report type: developer (default), executive, or ci
         #[arg(long = "type", default_value = "developer")]
@@ -154,11 +154,11 @@ enum Commands {
     /// can combine into practical attack scenarios.
     ///
     /// Examples:
-    ///   cipher attack
-    ///   cipher attack --chain privilege                  # filter by chain type
-    ///   cipher attack --no-ai                             # skip AI enrichment
-    ///   cipher attack --json                              # JSON output for CI
-    ///   cipher attack --depth 5                           # max chain depth
+    ///   cipher-ai attack
+    ///   cipher-ai attack --chain privilege                  # filter by chain type
+    ///   cipher-ai attack --no-ai                             # skip AI enrichment
+    ///   cipher-ai attack --json                              # JSON output for CI
+    ///   cipher-ai attack --depth 5                           # max chain depth
     Attack {
         /// Filter by chain type (privilege-escalation, data-exfiltration, etc.)
         #[arg(long = "chain")]

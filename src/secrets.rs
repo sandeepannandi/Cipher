@@ -230,7 +230,7 @@ pub(crate) fn collect_secrets_findings(scan_path: &Path) -> Result<FindingReport
     Ok(report)
 }
 
-/// Run the `cipher secrets` command
+/// Run the `cipher-ai secrets` command
 pub async fn run_secrets(
     scan_path: &Path,
     format: &str,
