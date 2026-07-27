@@ -132,7 +132,7 @@ const EMBEDDED_ADVISORIES: &[(&str, &str, &str, &str, Severity)] = &[
     ("Go", "golang.org/x/crypto", "<0.1.0", "CVE-2022-27191: SSH key exchange panic", Severity::Medium),
 ];
 
-// ── Manifest Parsers ──
+// -- Manifest Parsers --
 
 /// Parse dependencies from Cargo.toml
 fn parse_cargo_toml(path: &Path) -> Result<Vec<Dependency>> {
@@ -566,21 +566,21 @@ pub async fn run_deps(
 
     println!(
         "{} {}",
-        "📦".bright_blue(),
+        "[PKG]".bright_blue(),
         format!("Analyzing dependencies in {}...", canonical_path.display()).bold()
     );
 
     let manifests = find_manifests(&canonical_path);
 
     if manifests.is_empty() {
-        println!("  {} No dependency manifests found.", "📭".yellow());
+        println!("  {} No dependency manifests found.", "[-]".yellow());
         println!("  Supported: Cargo.toml, package.json, requirements.txt, and others.");
         return Ok(FindingReport::new("dependency-scanner", canonical_path.to_string_lossy()));
     }
 
     println!(
         "  {} Found {} manifest file(s)",
-        "📄".cyan(),
+        "[FILE]".cyan(),
         manifests.len().to_string().bold()
     );
 
@@ -591,14 +591,14 @@ pub async fn run_deps(
             Ok(deps) => {
                 println!(
                     "  {} Parsed {} from {}",
-                    "✓".green(),
+                    "[OK]".green(),
                     format!("{} dependencies", deps.len()).bold(),
                     manifest.file_name().unwrap().to_string_lossy().yellow()
                 );
                 all_deps.extend(deps);
             }
             Err(e) => {
-                eprintln!("  {} Failed to parse {}: {}", "⚠".yellow(), manifest.display(), e);
+                eprintln!("  {} Failed to parse {}: {}", "[!]".yellow(), manifest.display(), e);
             }
         }
     }
@@ -607,13 +607,13 @@ pub async fn run_deps(
     all_deps.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
 
     if all_deps.is_empty() {
-        println!("\n  {} No dependencies found in manifests.", "📭".yellow());
+        println!("\n  {} No dependencies found in manifests.", "[-]".yellow());
         return Ok(FindingReport::new("dependency-scanner", canonical_path.to_string_lossy()));
     }
 
     println!(
         "  {} Found {} unique dependencies",
-        "🔍".cyan(),
+        "[*]".cyan(),
         all_deps.len().to_string().bold()
     );
 
@@ -632,17 +632,17 @@ pub async fn run_deps(
 
     // Display results
     println!();
-    println!("{} {}", "📋".bright_blue(), "Dependency Analysis Results".bold());
-    println!("  {}", "─".repeat(50).dimmed());
+    println!("{} {}", "[LIST]".bright_blue(), "Dependency Analysis Results".bold());
+    println!("  {}", "-".repeat(50).dimmed());
     report.print_summary();
 
     if report.is_empty() {
         println!();
-        println!("{} No known vulnerabilities found in dependencies.", "✅".green().bold());
+        println!("{} No known vulnerabilities found in dependencies.", "[OK]".green().bold());
         if !use_online {
             println!(
                 "  {} Run {} for online vulnerability database checks (requires internet).",
-                "🌐".cyan(),
+                "[WEB]".cyan(),
                 "cipher-ai deps --online".yellow()
             );
         }
@@ -653,8 +653,8 @@ pub async fn run_deps(
 
     // Print dependency list
     println!();
-    println!("{} {}", "📋".bold(), "All Dependencies".bold());
-    println!("  {}", "─".repeat(40).dimmed());
+    println!("{} {}", "[LIST]".bold(), "All Dependencies".bold());
+    println!("  {}", "-".repeat(40).dimmed());
 
     for dep in &all_deps {
         let vuln_count = report
@@ -663,9 +663,9 @@ pub async fn run_deps(
             .filter(|f| f.file_path.as_deref().map(|fp| fp.contains(&dep.name)).unwrap_or(false))
             .count();
         let status = if vuln_count > 0 {
-            format!("{} ({})", "⚠".yellow(), format!("{} vulnerabilities", vuln_count).red().bold())
+            format!("{} ({})", "[!]".yellow(), format!("{} vulnerabilities", vuln_count).red().bold())
         } else {
-            "✓".green().to_string()
+            "[OK]".green().to_string()
         };
         println!("  {} {} {}  {}", dep.ecosystem.bold().dimmed(), dep.name.cyan(), dep.version.dimmed(), status);
     }
@@ -673,7 +673,7 @@ pub async fn run_deps(
     let critical_high = report.findings.iter().filter(|f| f.severity == Severity::Critical || f.severity == Severity::High).count();
     if critical_high > 0 {
         println!();
-        println!("{} Found {} critical/high severity dependency issues. Update affected packages immediately.", "⚠".yellow().bold(), critical_high.to_string().bold());
+        println!("{} Found {} critical/high severity dependency issues. Update affected packages immediately.", "[!]".yellow().bold(), critical_high.to_string().bold());
     }
 
     Ok(report)

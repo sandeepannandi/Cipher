@@ -5,16 +5,23 @@ const os = require('os');
 function findBinaryPath() {
   const binaryName = os.platform() === 'win32' ? 'cipher-ai.exe' : 'cipher-ai';
 
-  // Priority 1: In the same directory as this npm package (local development)
-  const pkgDir = path.join(__dirname, '..', '..');
-  const localBin = path.join(pkgDir, '..', 'target', 'debug', binaryName);
-  if (fs.existsSync(localBin)) {
-    return path.resolve(localBin);
-  }
+  const searchPaths = [
+    // From dist/ (bundled): ../../target/release/
+    path.resolve(__dirname, '..', '..', 'target', 'release', binaryName),
+    // From dist/ (bundled): ../../target/debug/
+    path.resolve(__dirname, '..', '..', 'target', 'debug', binaryName),
+    // From dist/ (bundled): ../../target/x86_64-pc-windows-gnullvm/release/
+    path.resolve(__dirname, '..', '..', 'target', 'x86_64-pc-windows-gnullvm', 'release', binaryName),
+    // From src/utils/ (unbundled): ../../../target/release/
+    path.resolve(__dirname, '..', '..', '..', 'target', 'release', binaryName),
+    // From src/utils/ (unbundled): ../../../target/debug/
+    path.resolve(__dirname, '..', '..', '..', 'target', 'debug', binaryName),
+    // From src/utils/ (unbundled): ../../../target/x86_64-pc-windows-gnullvm/release/
+    path.resolve(__dirname, '..', '..', '..', 'target', 'x86_64-pc-windows-gnullvm', 'release', binaryName),
+  ];
 
-  const releaseBin = path.join(pkgDir, '..', 'target', 'release', binaryName);
-  if (fs.existsSync(releaseBin)) {
-    return path.resolve(releaseBin);
+  for (const p of searchPaths) {
+    if (fs.existsSync(p)) return path.resolve(p);
   }
 
   // Priority 2: Installed globally via npm (in ~/.cipher/bin/)

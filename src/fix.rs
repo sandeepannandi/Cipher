@@ -35,17 +35,17 @@ pub async fn run_fix(
 
     println!(
         "{} {}\n",
-        "🛠".bright_blue().bold(),
+        "[FIX]".bright_blue().bold(),
         "CipherAI Auto-Fix".bold()
     );
 
     // Step 1: Scan for all findings
-    println!("  {} Scanning for fixable findings...\n", "🔍".cyan());
+    println!("  {} Scanning for fixable findings...\n", "[*]".cyan());
 
     let findings = collect_fixable_findings(&canonical_path).await?;
 
     if findings.is_empty() {
-        println!("  {} No fixable findings found.", "📭".yellow());
+        println!("  {} No fixable findings found.", "[-]".yellow());
         println!(
             "  Run {} or {} first to generate findings.",
             "cipher-ai review".yellow(),
@@ -59,34 +59,34 @@ pub async fn run_fix(
     let filtered = filter_findings(&findings, finding_id, risk_level, target_file, fix_all);
 
     if filtered.is_empty() {
-        println!("  {} No findings match your filter criteria.", "🔍".yellow());
+        println!("  {} No findings match your filter criteria.", "[*]".yellow());
         if !list_only {
             println!();
             println!("  Available filters:");
             println!(
                 "    {} {}  Fix a specific finding",
                 "  --id <UUID>".cyan(),
-                "─".dimmed()
+                "-".dimmed()
             );
             println!(
                 "    {} {}  Fix findings in a file",
                 "  --file <PATH>".cyan(),
-                "─".dimmed()
+                "-".dimmed()
             );
             println!(
                 "    {} {}  Fix findings by risk level",
                 "  --risk <LEVEL>".cyan(),
-                "─".dimmed()
+                "-".dimmed()
             );
             println!(
                 "    {} {}     Fix all findings",
                 "  --all".cyan(),
-                "─".dimmed()
+                "-".dimmed()
             );
             println!(
                 "    {} {}  List findings without fixing",
                 "  --list".cyan(),
-                "─".dimmed()
+                "-".dimmed()
             );
             println!();
             println!("  Finding IDs for the current scan:");
@@ -100,7 +100,7 @@ pub async fn run_fix(
 
     // Step 3: If --list, just show findings and exit
     if list_only {
-        println!("  {} Fixable findings:", "📋".bold());
+        println!("  {} Fixable findings:", "[LIST]".bold());
         print_fixable_findings(
             &filtered.iter().map(|f| f as &Finding).collect::<Vec<&Finding>>(),
             &canonical_path,
@@ -121,7 +121,7 @@ pub async fn run_fix(
         .collect();
 
     if fixable.is_empty() {
-        println!("  {} No fixable findings (all lack file paths).", "📭".yellow());
+        println!("  {} No fixable findings (all lack file paths).", "[-]".yellow());
         return Ok(());
     }
 
@@ -132,7 +132,7 @@ pub async fn run_fix(
 
     println!(
         "  {} {} fixes to generate — using AI to create patches\n",
-        "🤖".cyan(),
+        "[AI]".cyan(),
         fixable.len().to_string().bold()
     );
 
@@ -150,7 +150,7 @@ pub async fn run_fix(
 
         println!(
             "\n  {} {}/{}  {}  {}{}",
-            "─".repeat(50).dimmed(),
+            "-".repeat(50).dimmed(),
             (i + 1).to_string().bold(),
             fixable.len().to_string().bold(),
             finding.severity.badge(),
@@ -171,7 +171,7 @@ pub async fn run_fix(
                 println!();
 
                 // Show explanation
-                println!("  {} {}", "📝".bold(), "What changed:".bold());
+                println!("  {} {}", "[NOTE]".bold(), "What changed:".bold());
                 for line in fix_plan.explanation.trim().lines() {
                     println!("    {}", line);
                 }
@@ -180,19 +180,19 @@ pub async fn run_fix(
                 // Apply or skip
                 if auto_apply {
                     if let Err(e) = apply_fix(&fix_plan) {
-                        eprintln!("  {} Failed to apply fix: {}", "❌".red(), e);
+                        eprintln!("  {} Failed to apply fix: {}", "[ERR]".red(), e);
                         fail_count += 1;
                     } else {
                         println!(
                             "  {} Applied fix to {}{}",
-                            "✅".green().bold(),
+                            "[OK]".green().bold(),
                             file_path.yellow(),
                             line_info
                         );
                         success_count += 1;
                     }
                 } else {
-                    print!("  {} Apply this fix? [Y/n] ", "💡".bold());
+                    print!("  {} Apply this fix? [Y/n] ", "[IDEA]".bold());
                     std::io::stdout().flush()?;
 
                     let mut input = String::new();
@@ -201,12 +201,12 @@ pub async fn run_fix(
 
                     if input.is_empty() || input == "y" || input == "yes" {
                         if let Err(e) = apply_fix(&fix_plan) {
-                            eprintln!("  {} Failed to apply fix: {}", "❌".red(), e);
+                            eprintln!("  {} Failed to apply fix: {}", "[ERR]".red(), e);
                             fail_count += 1;
                         } else {
                             println!(
                                 "  {} Applied fix to {}{}",
-                                "✅".green().bold(),
+                                "[OK]".green().bold(),
                                 file_path.yellow(),
                                 line_info
                             );
@@ -219,7 +219,7 @@ pub async fn run_fix(
                 }
             }
             Err(e) => {
-                eprintln!("  {} Fix generation failed: {}", "❌".red(), e);
+                eprintln!("  {} Fix generation failed: {}", "[ERR]".red(), e);
                 fail_count += 1;
             }
         }
@@ -227,15 +227,15 @@ pub async fn run_fix(
 
     // Step 7: Summary
     println!();
-    println!("  {}", "─".repeat(50).dimmed());
-    println!("  {} Fix session complete", "✅".green().bold());
+    println!("  {}", "-".repeat(50).dimmed());
+    println!("  {} Fix session complete", "[OK]".green().bold());
     println!(
         "    {} {} applied  {} {} skipped  {} {} failed",
-        "✅".green(),
+        "[OK]".green(),
         success_count.to_string().bold().green(),
         "⏭".yellow(),
         skip_count.to_string().bold().yellow(),
-        "❌".red(),
+        "[ERR]".red(),
         fail_count.to_string().bold().red(),
     );
 
@@ -350,7 +350,7 @@ fn filter_findings(
 /// `&[&Finding]` or slices built from owned collections.
 fn print_fixable_findings(findings: &[&Finding], _project_path: &Path) {
     if findings.is_empty() {
-        println!("  {} No fixable findings.", "📭".yellow());
+        println!("  {} No fixable findings.", "[-]".yellow());
         return;
     }
 
@@ -363,7 +363,7 @@ fn print_fixable_findings(findings: &[&Finding], _project_path: &Path) {
         "Risk".bold().dimmed(),
         "Severity".bold().dimmed(),
     );
-    println!("  {}", "─".repeat(95).dimmed());
+    println!("  {}", "-".repeat(95).dimmed());
 
     for finding in findings {
         let id_short = if finding.id.len() > 8 {
@@ -410,7 +410,7 @@ fn print_fixable_findings(findings: &[&Finding], _project_path: &Path) {
     println!();
     println!(
         "  {} Use {} to fix a specific finding",
-        "💡".bold(),
+        "[IDEA]".bold(),
         "cipher-ai fix --id <ID>".cyan()
     );
 }
@@ -623,7 +623,7 @@ fn parse_fix_response(response: &str) -> Result<(String, String)> {
 
 /// Display a colored diff between original and fixed code
 fn display_diff(fix: &FixPlan) {
-    println!("    {} {}", "─".repeat(40).dimmed(), "Diff".dimmed());
+    println!("    {} {}", "-".repeat(40).dimmed(), "Diff".dimmed());
     println!(
         "    {} {}",
         "File:".bold().dimmed(),
@@ -658,7 +658,7 @@ fn display_diff(fix: &FixPlan) {
     if !has_changes {
         println!(
             "    {} No changes detected (code already matches fix).",
-            "ℹ".blue()
+            "(i)".blue()
         );
     }
 }

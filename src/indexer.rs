@@ -269,7 +269,7 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
     if index_path.exists() && !force {
         println!(
             "{} Project already indexed at {}",
-            "✓".green().bold(),
+            "[OK]".green().bold(),
             sec_dir.display()
         );
         println!("  Run {} to re-index", "cipher-ai init --force".yellow());
@@ -278,7 +278,7 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
 
     println!(
         "{} {}",
-        "🔍".bright_blue(),
+        "[*]".bright_blue(),
         format!("Indexing {}...", canonical_path.display()).bold()
     );
 
@@ -299,20 +299,20 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
                 }
             }
             Err(e) => {
-                eprintln!("  {} {}", "⚠".yellow(), e);
+                eprintln!("  {} {}", "[!]".yellow(), e);
             }
         }
     }
 
     if files.is_empty() {
-        println!("  {} No supported source files found.", "⚠".yellow());
+        println!("  {} No supported source files found.", "[!]".yellow());
         println!("  Supported: {}", SUPPORTED_EXTENSIONS.join(", "));
         return Ok(());
     }
 
     println!(
         "  {} Found {} supported files",
-        "📁".cyan(),
+        "[FOLDER]".cyan(),
         files.len().to_string().bold()
     );
 
@@ -364,7 +364,7 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
             Err(e) => {
                 eprintln!(
                     "\n  {} Could not read {}: {}",
-                    "⚠".yellow(),
+                    "[!]".yellow(),
                     relative.display(),
                     e
                 );
@@ -377,12 +377,12 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
     pb.finish_with_message(format!("{} files processed", files.len()));
     println!(
         "  {} Created {} code chunks",
-        "🧩".cyan(),
+        "[CHUNK]".cyan(),
         all_chunks.len().to_string().bold()
     );
 
     // Compute TF-IDF indices
-    println!("  {} Building search index...", "📊".cyan());
+    println!("  {} Building search index...", "[STATS]".cyan());
 
     let term_freqs: Vec<TermFreq> = all_chunks
         .iter()
@@ -425,14 +425,14 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
     println!();
     println!(
         "{} Indexing complete! {}",
-        "✅".green(),
+        "[OK]".green(),
         format!("{} chunks indexed", index.summary.total_chunks)
             .green()
             .bold()
     );
     println!(
         "  {} Run {} to ask questions about your codebase",
-        "💬".cyan(),
+        "[ASK]".cyan(),
         "sec ask \"your question\"".yellow()
     );
 
@@ -447,7 +447,7 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
     let index_path = data_dir(&canonical_path).join("index.json");
 
     if !index_path.exists() {
-        println!("{} Project not indexed yet.", "📭".bright_blue());
+        println!("{} Project not indexed yet.", "[-]".bright_blue());
         println!("  Run {} to index this codebase", "cipher-ai init".yellow().bold());
         return Ok(());
     }
@@ -455,8 +455,8 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
     let content = std::fs::read_to_string(&index_path)?;
     let index: CodeIndex = serde_json::from_str(&content)?;
 
-    println!("{} {}", "📊".bright_blue(), "Index Status".bold());
-    println!("  {}", "─".repeat(40).dimmed());
+    println!("{} {}", "[STATS]".bright_blue(), "Index Status".bold());
+    println!("  {}", "-".repeat(40).dimmed());
     println!(
         "  {} {}",
         "Project:".bold(),
@@ -495,10 +495,10 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
 
     // Check if GROQ_API_KEY is set
     match std::env::var("GROQ_API_KEY") {
-        Ok(_) => println!("  {} Groq API key: {}", "🔑".bold(), "configured ✓".green()),
+        Ok(_) => println!("  {} Groq API key: {}", "[KEY]".bold(), "configured [OK]".green()),
         Err(_) => println!(
             "  {} Groq API key: {} (set GROQ_API_KEY env var)",
-            "🔑".bold(),
+            "[KEY]".bold(),
             "not set".red()
         ),
     }

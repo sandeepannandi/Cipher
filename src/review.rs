@@ -47,7 +47,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         };
     }
 
-    // ── Injection ──
+    // -- Injection --
 
     add_vuln!(
         "SQL Injection — String Concatenation",
@@ -94,7 +94,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Never pass user input directly to template engines. Use context-aware escaping and sandboxed templates."
     );
 
-    // ── Cryptography ──
+    // -- Cryptography --
 
     add_vuln!(
         "Weak Hash Algorithm — MD5",
@@ -141,7 +141,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Move the key to environment variables or a secret manager. Never hardcode keys in source."
     );
 
-    // ── Authentication & Authorization ──
+    // -- Authentication & Authorization --
 
     add_vuln!(
         "Hardcoded Credentials",
@@ -170,7 +170,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Set Secure, HttpOnly, and SameSite=Lax/Strict flags on all cookies."
     );
 
-    // ── Security Misconfiguration ──
+    // -- Security Misconfiguration --
 
     add_vuln!(
         "Debug Mode Enabled",
@@ -190,7 +190,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Replace wildcard CORS origin with specific allowed origins. Never use '*' in production."
     );
 
-    // ── General Security ──
+    // -- General Security --
 
     add_vuln!(
         "Insecure Direct Object Reference (IDOR)",
@@ -387,7 +387,7 @@ pub async fn run_review(
 
     println!(
         "{} {}",
-        "🔍".bright_blue(),
+        "[*]".bright_blue(),
         format!("Running security review on {}...", canonical_path.display()).bold()
     );
 
@@ -402,13 +402,13 @@ pub async fn run_review(
 
     let mut report = collect_review_findings(&canonical_path, false, None).await?;
 
-    spinner.finish_with_message(format!("{} files scanned — {} issues found", "✓".green(), report.len()));
+    spinner.finish_with_message(format!("{} files scanned — {} issues found", "[OK]".green(), report.len()));
 
     // Phase 2: AI-powered deep analysis (only if requested — no re-scanning of patterns)
     if use_ai {
         println!(
             "  {} Running AI-powered deep analysis... (this may take a moment)",
-            "🤖".bright_green()
+            "[AI]".bright_green()
         );
         match run_ai_review(&canonical_path, model).await {
             Ok(ai_findings) => {
@@ -428,7 +428,7 @@ pub async fn run_review(
             Err(e) => {
                 eprintln!(
                     "\n  {} AI analysis failed: {} (continuing with pattern-based results)",
-                    "⚠".yellow(),
+                    "[!]".yellow(),
                     e
                 );
             }
@@ -439,13 +439,13 @@ pub async fn run_review(
     println!();
     println!(
         "{} {}",
-        "📋".bright_blue(),
+        "[LIST]".bright_blue(),
         "Security Review Results".bold()
     );
-    println!("  {}", "─".repeat(50).dimmed());
+    println!("  {}", "-".repeat(50).dimmed());
     println!(
         "  {} Pattern-based scanner found {} potential issues",
-        "🔎".cyan(),
+        "[*]".cyan(),
         report.len().to_string().bold()
     );
 
@@ -453,7 +453,7 @@ pub async fn run_review(
 
     if report.is_empty() {
         println!();
-        println!("{} No vulnerabilities detected by pattern analysis.", "✅".green().bold());
+        println!("{} No vulnerabilities detected by pattern analysis.", "[OK]".green().bold());
         println!("  Note: Pattern-based scanners can miss business logic and context-dependent issues.");
         println!("  Run {} for deeper analysis.", "cipher-ai ask \"Review this project for vulnerabilities\"".yellow());
         return Ok(report);
@@ -463,8 +463,8 @@ pub async fn run_review(
 
     // Recommendations
     println!();
-    println!("{} {}", "🎯".bold(), "Top Recommendations".bold());
-    println!("  {}", "─".repeat(40).dimmed());
+    println!("{} {}", "[TARGET]".bold(), "Top Recommendations".bold());
+    println!("  {}", "-".repeat(40).dimmed());
 
     let critical_high: Vec<_> = report
         .findings
@@ -473,7 +473,7 @@ pub async fn run_review(
         .collect();
 
     if !critical_high.is_empty() {
-        println!("  🔴 Fix {} critical/high severity issues first:", critical_high.len());
+        println!("  [RED] Fix {} critical/high severity issues first:", critical_high.len());
         for f in critical_high.iter().take(5) {
             let fp = f.file_path.as_deref().unwrap_or("<unknown>");
             println!(
@@ -490,7 +490,7 @@ pub async fn run_review(
 
     println!();
     println!(
-        "  💡 Run {} for interactive security Q&A about specific findings.",
+        "  [IDEA] Run {} for interactive security Q&A about specific findings.",
         "cipher-ai ask \"Tell me more about [finding]\"".yellow()
     );
 
@@ -626,7 +626,7 @@ If no vulnerabilities found, return {{"findings": []}}."#
             if findings.is_empty() {
                 eprintln!(
                     "  {} AI analysis completed but returned no parseable findings.\n    The model may not have identified issues, or the response format was unexpected.",
-                    "ℹ".blue()
+                    "(i)".blue()
                 );
             }
             Ok(findings)
@@ -634,7 +634,7 @@ If no vulnerabilities found, return {{"findings": []}}."#
         Err(e) => {
             eprintln!(
                 "  {} Could not parse AI response: {}. Continuing with pattern-based results.",
-                "⚠".yellow(),
+                "[!]".yellow(),
                 e
             );
             Ok(Vec::new())

@@ -241,7 +241,7 @@ pub async fn run_secrets(
 
     println!(
         "{} {}",
-        "🔎".bright_blue(),
+        "[*]".bright_blue(),
         format!("Scanning for secrets in {}...", canonical_path.display()).bold()
     );
 
@@ -267,23 +267,23 @@ pub async fn run_secrets(
     println!();
     println!(
         "{} Scanned project directory",
-        "📊".bright_blue()
+        "[STATS]".bright_blue()
     );
     println!(
         "  {} {} CRITICAL  {} {} HIGH  {} {} MEDIUM  {} {} LOW",
-        "●".red().bold(),
+        "*".red().bold(),
         critical_count.to_string().red().bold(),
-        "●".yellow().bold(),
+        "*".yellow().bold(),
         high_count.to_string().yellow().bold(),
-        "●".cyan(),
+        "*".cyan(),
         medium_count.to_string().cyan(),
-        "●".dimmed(),
+        "*".dimmed(),
         low_count.to_string().dimmed(),
     );
 
     if report.is_empty() {
         println!();
-        println!("{} No secrets found! Your codebase looks clean.", "✅".green().bold());
+        println!("{} No secrets found! Your codebase looks clean.", "[OK]".green().bold());
         return Ok(());
     }
 
@@ -309,7 +309,7 @@ pub async fn run_secrets(
         // "pretty" format (default)
         println!();
         for (file_path, findings) in &by_file {
-            println!("  {} {}", "📁".cyan(), file_path.bold());
+            println!("  {} {}", "[FOLDER]".cyan(), file_path.bold());
             for finding in findings {
                 let badge = finding.severity.badge();
                 let line_str = finding.line_number.map(|l| format!("Line {}", l)).unwrap_or_default();
@@ -329,7 +329,7 @@ pub async fn run_secrets(
         if critical_count > 0 || high_count > 0 {
             println!(
                 "{} Found {} critical/high severity secrets. Review and remove them immediately.",
-                "⚠".yellow().bold(),
+                "[!]".yellow().bold(),
                 (critical_count + high_count).to_string().bold()
             );
         }

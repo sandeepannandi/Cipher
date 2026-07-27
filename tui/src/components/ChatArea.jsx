@@ -15,31 +15,26 @@ function ChatArea({ messages, isRunning, model }) {
   });
 
   const visible = messages.filter((m) => m.id !== 'welcome' || m.text);
-  const showWelcome = messages.length === 1 && messages[0].id === 'welcome' && !messages[0].text;
   const start = Math.max(0, visible.length - 10 - scrollOffset);
   const end = Math.min(visible.length, start + 10);
   const display = visible.slice(start, end);
   const hasMore = visible.length > 10 && scrollOffset > 0;
 
-  if (showWelcome) {
-    return React.createElement(Box, {
-      flexDirection: 'column', flexGrow: 1,
-      alignItems: 'center', justifyContent: 'center',
-    },
-      React.createElement(Box, { marginBottom: 1 },
-        React.createElement(Text, { bold: true, color: 'yellow', wrap: 'wrap' }, [
-          '  ___ ___ ___ ___ ___ ___ ___  ',
-          ' / __| _ \\_ _| _ \\ __| _ \\ ___|',
-          '| (__|  _/| ||  _/ _||   / -_)',
-          ' \\___|_| |___|_| |___|_|_\\___|',
-        ].join('\n'))),
-      React.createElement(Text, { bold: true, color: 'yellow' }, ' AI Security Engineer'),
-      React.createElement(Text, { color: 'green', dim: true }, '/help for commands  Ctrl+K for palette'),
-      React.createElement(Text, { color: 'green', dim: true }, 'model: ' + model),
-    );
-  }
-
   return React.createElement(Box, { flexDirection: 'column', flexGrow: 1, paddingLeft: 1, paddingRight: 1, paddingTop: 1 },
+
+    React.createElement(Box, { flexDirection: 'column', marginBottom: 1 },
+      React.createElement(Box, {},
+        React.createElement(Text, { bold: true, color: 'yellow' }, [
+          '  ____ ___ ____  _   _ _____ ____  ',
+          ' / ___|_ _|  _ \\| | | | ____|  _ \\ ',
+          '| |    | || |_) | |_| |  _| | |_) |',
+          '| |___ | ||  __/|  _  | |___|  _ < ',
+          ' \\____|___|_|   |_| |_|_____|_| \\_\\',
+        ].join('\n'))),
+      React.createElement(Box, { marginTop: 1 },
+        React.createElement(Text, { bold: true, color: 'yellow' }, 'AI Security Engineer')),
+      React.createElement(Text, { color: 'green', dim: true }, '/help for commands  Ctrl+K for palette  model: ' + model)),
+
     hasMore && React.createElement(Box, { marginBottom: 1 },
       React.createElement(Text, { color: 'green', dim: true }, 'up arrow for older messages')),
     ...display.map((msg) => React.createElement(Message, { key: msg.id, message: msg })),

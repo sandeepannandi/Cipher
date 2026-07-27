@@ -18,11 +18,11 @@ impl Severity {
     /// Return a colored badge string for display
     pub fn badge(&self) -> colored::ColoredString {
         match self {
-            Severity::Critical => "●".red().bold(),
-            Severity::High => "●".yellow().bold(),
-            Severity::Medium => "●".cyan(),
-            Severity::Low => "○".dimmed(),
-            Severity::Info => "ℹ".blue(),
+            Severity::Critical => "*".red().bold(),
+            Severity::High => "*".yellow().bold(),
+            Severity::Medium => "*".cyan(),
+            Severity::Low => "o".dimmed(),
+            Severity::Info => "(i)".blue(),
         }
     }
 
@@ -150,15 +150,15 @@ pub enum FindingType {
 impl FindingType {
     pub fn icon(&self) -> &'static str {
         match self {
-            FindingType::Secret => "🔑",
-            FindingType::Vulnerability => "🐛",
-            FindingType::Misconfiguration => "⚙",
-            FindingType::Dependency => "📦",
-            FindingType::BusinessLogic => "🧠",
-            FindingType::Authentication => "🔐",
-            FindingType::Authorization => "🛡",
-            FindingType::Injection => "💉",
-            FindingType::Cryptography => "🔒",
+            FindingType::Secret => "[KEY]",
+            FindingType::Vulnerability => "[BUG]",
+            FindingType::Misconfiguration => "[CFG]",
+            FindingType::Dependency => "[PKG]",
+            FindingType::BusinessLogic => "[LOGIC]",
+            FindingType::Authentication => "[AUTH]",
+            FindingType::Authorization => "[SHIELD]",
+            FindingType::Injection => "[INJECT]",
+            FindingType::Cryptography => "[LOCK]",
         }
     }
 }
@@ -428,19 +428,19 @@ impl FindingReport {
         println!();
         println!(
             "{} {}",
-            "📊".bright_blue(),
+            "[STATS]".bright_blue(),
             "Findings Summary".bold()
         );
-        println!("  {}", "─".repeat(40).dimmed());
+        println!("  {}", "-".repeat(40).dimmed());
         println!(
             "  {} {}  {} {}  {} {}  {} {}  ({} total)",
-            "●".red().bold(),
+            "*".red().bold(),
             critical.to_string().red().bold(),
-            "●".yellow().bold(),
+            "*".yellow().bold(),
             high.to_string().yellow().bold(),
-            "●".cyan(),
+            "*".cyan(),
             medium.to_string().cyan(),
-            "○".dimmed(),
+            "o".dimmed(),
             low.to_string().dimmed(),
             self.len().to_string().bold()
         );
@@ -450,7 +450,7 @@ impl FindingReport {
                 self.findings.iter().map(|f| f.risk_score()).sum::<f64>() / self.len() as f64;
             println!(
                 "  {} Average risk score: {:.1}/10",
-                "🎯".bold(),
+                "[TARGET]".bold(),
                 avg_risk
             );
         }
@@ -478,16 +478,16 @@ impl FindingReport {
             }
             if let Some(ref code) = finding.code_snippet {
                 for line in code.lines().take(5) {
-                    println!("    │ {}", line.dimmed());
+                    println!("    | {}", line.dimmed());
                 }
                 if code.lines().count() > 5 {
-                    println!("    │ {} more lines...", (code.lines().count() - 5).to_string().dimmed());
+                    println!("    | {} more lines...", (code.lines().count() - 5).to_string().dimmed());
                 }
             }
             println!("    {}", finding.description.trim());
             println!(
                 "    {} Confidence: {} | Exploitability: {:.0}% | Effort: {}",
-                "→".bold(),
+                "->".bold(),
                 finding.confidence.label(),
                 finding.exploitability * 100.0,
                 finding.remediation_effort.label()

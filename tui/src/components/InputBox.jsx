@@ -68,7 +68,7 @@ function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt }) {
     ? MODELS.filter((m) => m.toLowerCase().startsWith(modelFilter))
     : [];
 
-  return React.createElement(Box, { flexDirection: 'column' },
+  return React.createElement(Box, { flexDirection: 'column', marginTop: 1 },
 
     showDropdown && filtered.length > 0 && React.createElement(Box, {
       flexDirection: 'column', borderStyle: 'single', borderColor: 'yellow',

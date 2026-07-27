@@ -105,18 +105,18 @@ pub async fn run_report(
     let canonical_path = std::fs::canonicalize(project_path)?;
     println!(
         "{} {}",
-        "📊".bright_blue(),
+        "[STATS]".bright_blue(),
         format!("Generating security report for {}...", canonical_path.display()).bold()
     );
 
     // Phase 1: Collect findings from all sources
-    println!("  {} Running security review...", "🔍".cyan());
+    println!("  {} Running security review...", "[*]".cyan());
     let review_report = review::collect_review_findings(&canonical_path, false, None).await?;
 
-    println!("  {} Scanning dependencies...", "📦".cyan());
+    println!("  {} Scanning dependencies...", "[PKG]".cyan());
     let deps_report = deps::collect_deps_findings(&canonical_path, false).await?;
 
-    println!("  {} Scanning for secrets...", "🔎".cyan());
+    println!("  {} Scanning for secrets...", "[*]".cyan());
     let secrets_report = secrets::collect_secrets_findings(&canonical_path)?;
 
     // Phase 2: Build aggregated report
@@ -150,7 +150,7 @@ fn write_or_print(content: &str, output_file: Option<&str>) -> Result<()> {
         std::fs::write(path, content)?;
         println!(
             "  {} Report written to {}",
-            "📄".green(),
+            "[FILE]".green(),
             path.yellow().bold()
         );
     } else {
@@ -209,11 +209,11 @@ fn generate_markdown(report: &AggregatedReport, report_type: &str) -> String {
 fn generate_executive_md(report: &AggregatedReport) -> String {
     let score = report.security_score();
     let score_badge = if score >= 80.0 {
-        "🟢"
+        "[GREEN]"
     } else if score >= 50.0 {
-        "🟡"
+        "[YELLOW]"
     } else {
-        "🔴"
+        "[RED]"
     };
 
     let mut md = String::new();
@@ -244,7 +244,7 @@ fn generate_executive_md(report: &AggregatedReport) -> String {
     md.push_str("| Severity | Count |\n");
     md.push_str("|----------|------:|\n");
     md.push_str(&format!(
-        "| 🔴 Critical | {} |\n",
+        "| [RED] Critical | {} |\n",
         report.count_by_severity(Severity::Critical)
     ));
     md.push_str(&format!(
@@ -252,11 +252,11 @@ fn generate_executive_md(report: &AggregatedReport) -> String {
         report.count_by_severity(Severity::High)
     ));
     md.push_str(&format!(
-        "| 🟡 Medium | {} |\n",
+        "| [YELLOW] Medium | {} |\n",
         report.count_by_severity(Severity::Medium)
     ));
     md.push_str(&format!(
-        "| 🔵 Low | {} |\n",
+        "| [BLUE] Low | {} |\n",
         report.count_by_severity(Severity::Low)
     ));
     md.push_str(&format!(
@@ -291,19 +291,19 @@ fn generate_executive_md(report: &AggregatedReport) -> String {
     let critical_high = report.count_by_severity(Severity::Critical) + report.count_by_severity(Severity::High);
     if critical_high > 0 {
         md.push_str(&format!(
-            "- 🔴 **{} critical/high severity issues** should be fixed immediately.\n",
+            "- [RED] **{} critical/high severity issues** should be fixed immediately.\n",
             critical_high
         ));
     }
     if report.count_by_type(FindingType::Secret) > 0 {
         md.push_str(&format!(
-            "- 🔑 **{} secrets/credentials exposed** — rotate them and use a secret manager.\n",
+            "- [KEY] **{} secrets/credentials exposed** — rotate them and use a secret manager.\n",
             report.count_by_type(FindingType::Secret)
         ));
     }
     if report.count_by_type(FindingType::Dependency) > 0 {
         md.push_str(&format!(
-            "- 📦 **{} vulnerable dependencies** — update affected packages.\n",
+            "- [PKG] **{} vulnerable dependencies** — update affected packages.\n",
             report.count_by_type(FindingType::Dependency)
         ));
     }
@@ -326,16 +326,16 @@ fn generate_developer_md(report: &AggregatedReport) -> String {
 
     md.push_str("## Summary\n\n");
     md.push_str("| Severity | Count |\n|----------|------:|\n");
-    md.push_str(&format!("| 🔴 Critical | {} |\n", report.count_by_severity(Severity::Critical)));
+    md.push_str(&format!("| [RED] Critical | {} |\n", report.count_by_severity(Severity::Critical)));
     md.push_str(&format!("| 🟠 High | {} |\n", report.count_by_severity(Severity::High)));
-    md.push_str(&format!("| 🟡 Medium | {} |\n", report.count_by_severity(Severity::Medium)));
-    md.push_str(&format!("| 🔵 Low | {} |\n", report.count_by_severity(Severity::Low)));
+    md.push_str(&format!("| [YELLOW] Medium | {} |\n", report.count_by_severity(Severity::Medium)));
+    md.push_str(&format!("| [BLUE] Low | {} |\n", report.count_by_severity(Severity::Low)));
     md.push_str(&format!("| **Total** | **{}** |\n\n", report.total_findings()));
     md.push_str(&format!("**Security Score:** {:.0}/100  \n\n", report.security_score()));
 
     let total = report.total_findings();
     if total == 0 {
-        md.push_str("✅ **No security issues found!** Your project looks clean.\n\n");
+        md.push_str("[OK] **No security issues found!** Your project looks clean.\n\n");
         return md;
     }
 
@@ -392,11 +392,11 @@ fn generate_ci_md(report: &AggregatedReport) -> String {
 
     let score = report.security_score();
     let status = if score >= 80.0 {
-        "✅ PASS"
+        "[OK] PASS"
     } else if score >= 50.0 {
-        "⚠ WARNING"
+        "[!] WARNING"
     } else {
-        "❌ FAIL"
+        "[ERR] FAIL"
     };
 
     md.push_str(&format!("**Status:** {}  \n", status));
@@ -417,11 +417,11 @@ fn generate_ci_md(report: &AggregatedReport) -> String {
         for (i, finding) in top.iter().take(10).enumerate() {
             let fp = finding.file_path.as_deref().unwrap_or("<unknown>");
             let sev_icon = match finding.severity {
-                Severity::Critical => "🔴",
+                Severity::Critical => "[RED]",
                 Severity::High => "🟠",
-                Severity::Medium => "🟡",
-                Severity::Low => "🔵",
-                Severity::Info => "⚪",
+                Severity::Medium => "[YELLOW]",
+                Severity::Low => "[BLUE]",
+                Severity::Info => "[WHITE]",
             };
             md.push_str(&format!(
                 "| {} | {} | {} | `{}` | {:.0}/10 |\n",
@@ -443,14 +443,14 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     let score = report.security_score();
 
     println!();
-    println!("{}", "┌─────────────────────────────────────────────┐".bright_blue());
+    println!("{}", "+----------------------------------------------┐".bright_blue());
     println!(
         "{} {} {}",
-        "│".bright_blue(),
+        "|".bright_blue(),
         "CipherAI Security Report".bold().white(),
-        "│".bright_blue()
+        "|".bright_blue()
     );
-    println!("{}", "└─────────────────────────────────────────────┘".bright_blue());
+    println!("{}", "+----------------------------------------------┘".bright_blue());
     println!();
 
     let score_color = if score >= 80.0 { "green" } else if score >= 50.0 { "yellow" } else { "red" };
@@ -468,46 +468,46 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
 
     // Summary table
     println!("  {} {}  {} {}  {} {}  {} {}  ({} total)",
-        "●".red().bold(),
+        "*".red().bold(),
         report.count_by_severity(Severity::Critical).to_string().red().bold(),
-        "●".yellow().bold(),
+        "*".yellow().bold(),
         report.count_by_severity(Severity::High).to_string().yellow().bold(),
-        "●".cyan(),
+        "*".cyan(),
         report.count_by_severity(Severity::Medium).to_string().cyan(),
-        "○".dimmed(),
+        "o".dimmed(),
         report.count_by_severity(Severity::Low).to_string().dimmed(),
         total.to_string().bold()
     );
     println!();
 
     // Per-source breakdown
-    println!("  {} {}\n", "📂".bold(), "Breakdown by Source".bold());
+    println!("  {} {}\n", "[FOLDER]".bold(), "Breakdown by Source".bold());
     println!(
         "    {} Security Review:  {}",
-        "🔍".cyan(),
+        "[*]".cyan(),
         report.review.len().to_string().bold()
     );
     println!(
         "    {} Dependencies:     {}",
-        "📦".cyan(),
+        "[PKG]".cyan(),
         report.deps.len().to_string().bold()
     );
     println!(
         "    {} Secrets:          {}",
-        "🔑".cyan(),
+        "[KEY]".cyan(),
         report.secrets.len().to_string().bold()
     );
     println!();
 
     if total == 0 {
-        println!("  {} No security issues found!", "✅".green().bold());
+        println!("  {} No security issues found!", "[OK]".green().bold());
         println!("  Your project looks clean.");
         println!();
         return;
     }
 
     // Top findings
-    println!("  {} {} (all findings sorted by risk)\n", "🎯".bold(), "Top Findings".bold());
+    println!("  {} {} (all findings sorted by risk)\n", "[TARGET]".bold(), "Top Findings".bold());
     let all = report.all_sorted();
     let max_show = all.len().min(10);
     for finding in all.iter().take(max_show) {
@@ -528,7 +528,7 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     println!();
 
     // Output suggestion
-    println!("  {} {}", "💡".bold(), "For a detailed report:".bold());
+    println!("  {} {}", "[IDEA]".bold(), "For a detailed report:".bold());
     println!("cipher-ai report --format markdown --output report.md");
     println!("cipher-ai report --format json --output report.json");
     println!("cipher-ai report --type executive  (for managers)");

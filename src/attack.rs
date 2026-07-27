@@ -22,14 +22,14 @@ pub enum AttackChainType {
 impl AttackChainType {
     pub fn icon(&self) -> &'static str {
         match self {
-            AttackChainType::PrivilegeEscalation => "⬆",
-            AttackChainType::DataExfiltration => "📤",
-            AttackChainType::CredentialTheft => "👤",
-            AttackChainType::RemoteCodeExecution => "💥",
-            AttackChainType::SupplyChainAttack => "🔗",
-            AttackChainType::CryptographicBreach => "🔓",
-            AttackChainType::AuthenticationBypass => "🚪",
-            AttackChainType::InformationDisclosure => "📢",
+            AttackChainType::PrivilegeEscalation => "[UP]",
+            AttackChainType::DataExfiltration => "[OUT]",
+            AttackChainType::CredentialTheft => "[USER]",
+            AttackChainType::RemoteCodeExecution => "[!]",
+            AttackChainType::SupplyChainAttack => "[CHAIN]",
+            AttackChainType::CryptographicBreach => "[*]",
+            AttackChainType::AuthenticationBypass => "[DOOR]",
+            AttackChainType::InformationDisclosure => "[ALERT]",
         }
     }
 
@@ -96,26 +96,26 @@ pub async fn run_attack(
 
     println!(
         "{} {}\n",
-        "🕸".bright_blue().bold(),
+        "[*]".bright_blue().bold(),
         "CipherAI Attack Path Analysis".bold()
     );
 
     // Step 1: Collect all findings
-    println!("  {} Gathering findings from all scanners...", "🔍".cyan());
+    println!("  {} Gathering findings from all scanners...", "[*]".cyan());
     let all_findings = collect_all_findings(&canonical_path).await?;
 
     if all_findings.is_empty() {
-        println!("  {} No findings to analyze.", "📭".yellow());
+        println!("  {} No findings to analyze.", "[-]".yellow());
         return Ok(());
     }
     println!(
         "  {} Collected {} findings\n",
-        "✓".green(),
+        "[OK]".green(),
         all_findings.len().to_string().bold()
     );
 
     // Step 2: Discover attack chains using pattern matching
-    println!("  {} Analyzing attack paths...", "🕸".cyan());
+    println!("  {} Analyzing attack paths...", "[*]".cyan());
     let mut chains = discover_chains(&all_findings);
 
     // Step 3: Filter by chain type if requested
@@ -137,7 +137,7 @@ pub async fn run_attack(
     if chains.is_empty() {
         println!(
             "  {} No attack chains discovered. Your findings are isolated (not chained).",
-            "✅".green()
+            "[OK]".green()
         );
         println!("  This is good — it means weaknesses don't compound.");
         return Ok(());
@@ -145,11 +145,11 @@ pub async fn run_attack(
 
     // Step 4: AI enrichment (optional)
     if use_ai {
-        println!("  {} Enriching chains with AI analysis...", "🤖".cyan());
+        println!("  {} Enriching chains with AI analysis...", "[AI]".cyan());
         if let Err(e) = enrich_chains_ai(&mut chains, &canonical_path).await {
             eprintln!(
                 "  {} AI enrichment failed: {} (continuing with pattern-based results)",
-                "⚠".yellow(),
+                "[!]".yellow(),
                 e
             );
         }
@@ -164,10 +164,10 @@ pub async fn run_attack(
 
     // Summary
     println!();
-    println!("  {}", "─".repeat(50).dimmed());
+    println!("  {}", "-".repeat(50).dimmed());
     println!(
         "  {} Discovered {} attack chain(s) from {} findings",
-        "🕸".bold(),
+        "[*]".bold(),
         chains.len().to_string().bold().red(),
         all_findings.len().to_string().bold()
     );
@@ -175,7 +175,7 @@ pub async fn run_attack(
     // Top recommendation
     if let Some(top) = chains.first() {
         println!();
-        println!("  {} Priority chain:", "🎯".bold());
+        println!("  {} Priority chain:", "[TARGET]".bold());
         println!(
             "    {} {} (risk: {:.1}/10)",
             top.chain_type.icon(),
@@ -184,16 +184,16 @@ pub async fn run_attack(
         );
         println!(
             "    {} Chain: {}",
-            "→".bold(),
+            "->".bold(),
             format!(
-                "{}  →  {}",
+                "{}  ->  {}",
                 top.entry_point.yellow(),
                 top.impact.red().bold()
             )
         );
         println!(
             "    {} {} steps — {} findings involved",
-            "📊".bold(),
+            "[STATS]".bold(),
             top.steps.to_string().cyan(),
             top.findings.len().to_string().cyan()
         );
@@ -201,7 +201,7 @@ pub async fn run_attack(
 
     println!();
     println!(
-        "  💡 Run {} to fix the most critical issues and break these chains.",
+        "  [IDEA] Run {} to fix the most critical issues and break these chains.",
         "cipher-ai fix --risk critical".yellow()
     );
 
@@ -355,7 +355,7 @@ fn discover_chains(findings: &[Finding]) -> Vec<AttackChain> {
                 chain_findings.push((*target).clone());
 
                 let name = format!(
-                    "{} → {}",
+                    "{} -> {}",
                     entry_point, impact
                 );
 
@@ -501,7 +501,7 @@ fn display_chains(chains: &[AttackChain]) {
     println!();
     println!(
         "{} {}\n",
-        "🕸".bold(),
+        "[*]".bold(),
         "Attack Paths Discovered".bold().red()
     );
 
@@ -515,7 +515,7 @@ fn display_chains(chains: &[AttackChain]) {
             "green"
         };
 
-        println!("  {}", "━".repeat(60).dimmed());
+        println!("  {}", "=".repeat(60).dimmed());
         println!(
             "  {} {} {}  {}",
             "#".bold().dimmed(),
@@ -535,31 +535,31 @@ fn display_chains(chains: &[AttackChain]) {
 
         // Attack chain diagram
         println!();
-        println!("    {} Attack Chain:", "🔄".bold());
+        println!("    {} Attack Chain:", "[SYNC]".bold());
         let step_labels = [
             ("Entry", chain.entry_point.as_str()),
             ("Impact", chain.impact.as_str()),
         ];
         for (idx, (label, value)) in step_labels.iter().enumerate() {
             if idx == 0 {
-                println!("      {} {}  🎯 {}", "┌".cyan(), label.bold(), value.yellow());
+                println!("      {} {}  [TARGET] {}", "+-".cyan(), label.bold(), value.yellow());
             } else if idx == step_labels.len() - 1 {
-                println!("      {} {}  💥 {}", "└──▶".cyan(), label.bold(), value.red().bold());
+                println!("      {} {}  [!] {}", "+->".cyan(), label.bold(), value.red().bold());
             } else {
-                println!("      {} {}  ⚡ {}", "├──▶".cyan(), label.bold(), value);
+                println!("      {} {}  ⚡ {}", "+->".cyan(), label.bold(), value);
             }
         }
 
         // Description
         println!();
-        println!("    {} Description:", "📝".bold());
+        println!("    {} Description:", "[NOTE]".bold());
         for line in chain.description.lines() {
             println!("      {}", line);
         }
 
         // Finding details
         println!();
-        println!("    {} Findings involved:", "📋".bold());
+        println!("    {} Findings involved:", "[LIST]".bold());
         for finding in &chain.findings {
             let fp = finding
                 .file_path
@@ -600,7 +600,7 @@ fn display_chains_json(chains: &[AttackChain]) {
 
     match serde_json::to_string_pretty(&output) {
         Ok(json) => println!("{}", json),
-        Err(e) => eprintln!("{} JSON serialization failed: {}", "❌".red(), e),
+        Err(e) => eprintln!("{} JSON serialization failed: {}", "[ERR]".red(), e),
     }
 }
 

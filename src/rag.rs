@@ -54,7 +54,7 @@ pub async fn run_ask(
             spinner.finish_and_clear();
             println!(
                 "{} Project not indexed. Run {} first.",
-                "📭".bright_blue(),
+                "[-]".bright_blue(),
                 "cipher-ai init".yellow().bold()
             );
             return Ok(());
@@ -69,7 +69,7 @@ pub async fn run_ask(
         spinner.finish_and_clear();
         println!(
             "{} No relevant code found for your query. Try rephrasing or use more specific terms.",
-            "🔍".yellow()
+            "[*]".yellow()
         );
         return Ok(());
     }
@@ -113,10 +113,10 @@ pub async fn run_ask(
     println!();
     println!(
         "{} {}",
-        "🔍".bright_blue(),
+        "[*]".bright_blue(),
         "Relevant Code Context".bold()
     );
-    println!("  {}", "─".repeat(40).dimmed());
+    println!("  {}", "-".repeat(40).dimmed());
 
     let mut file_set: Vec<&str> = Vec::new();
     for chunk in &chunk_files {
@@ -125,7 +125,7 @@ pub async fn run_ask(
             file_set.push(path_str);
             println!(
                 "  {}  {}:{}",
-                "📄".cyan(),
+                "[FILE]".cyan(),
                 path_str,
                 format!("{}-{}", chunk.start_line, chunk.end_line).dimmed()
             );
@@ -161,7 +161,7 @@ Focus on actionable insights and reference specific lines of code.
     let model_name = model.unwrap_or("llama-3.3-70b-versatile");
     println!(
         "{} {}",
-        "🤖".bright_green(),
+        "[AI]".bright_green(),
         format!("Thinking with {}...", model_name).bold()
     );
 
@@ -180,9 +180,9 @@ Focus on actionable insights and reference specific lines of code.
 
     // Print the response
     println!();
-    println!("{}", "─".repeat(60).green());
+    println!("{}", "-".repeat(60).green());
     println!("{}", response.trim());
-    println!("{}", "─".repeat(60).green());
+    println!("{}", "-".repeat(60).green());
     println!();
 
     Ok(())
