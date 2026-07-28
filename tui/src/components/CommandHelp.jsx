@@ -4,8 +4,11 @@ const { Box, Text, useInput } = require('ink');
 const COMMANDS = [
   { cmd: '/init',         desc: 'Index your codebase for analysis' },
   { cmd: '/init --force', desc: 'Force re-index' },
-  { cmd: '/review',       desc: 'Scan for OWASP Top 10 vulnerabilities' },
-  { cmd: '/review --ai',  desc: 'Review with AI-powered deep analysis' },
+  { cmd: '/review',                          desc: 'Scan for OWASP Top 10 vulnerabilities' },
+  { cmd: '/review --ai',                     desc: 'Review with AI-powered deep analysis' },
+  { cmd: '/review --max-findings 10',        desc: 'Limit review to top 10 findings' },
+  { cmd: '/review --min-severity high',      desc: 'Show only high+ severity findings' },
+  { cmd: '/review --min-confidence medium',  desc: 'Show only medium+ confidence findings' },
   { cmd: '/deps',         desc: 'Check dependency vulnerabilities' },
   { cmd: '/deps --online',desc: 'Check deps with OSV.dev API' },
   { cmd: '/secrets',      desc: 'Scan for leaked credentials' },

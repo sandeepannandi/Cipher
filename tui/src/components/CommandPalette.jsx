@@ -6,8 +6,11 @@ const MODELS = ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it']
 const COMMANDS = [
   { cmd: 'init',         desc: 'Index your codebase for analysis' },
   { cmd: 'init --force', desc: 'Force re-index' },
-  { cmd: 'review',       desc: 'Scan for OWASP Top 10 vulnerabilities' },
-  { cmd: 'review --ai',  desc: 'Review with AI-powered deep analysis' },
+  { cmd: 'review',                          desc: 'Scan for OWASP Top 10 vulnerabilities' },
+  { cmd: 'review --ai',                     desc: 'Review with AI-powered deep analysis' },
+  { cmd: 'review --max-findings 10',        desc: 'Review (limit to top 10 findings)' },
+  { cmd: 'review --min-severity high',      desc: 'Review (only high+ severity)' },
+  { cmd: 'review --min-confidence medium',  desc: 'Review (only medium+ confidence)' },
   { cmd: 'deps',         desc: 'Check dependency vulnerabilities' },
   { cmd: 'deps --online',desc: 'Check deps with OSV.dev API' },
   { cmd: 'secrets',      desc: 'Scan for leaked credentials' },
