@@ -53,8 +53,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "SQL Injection — String Concatenation",
         "SQL queries built with string concatenation or interpolation are vulnerable to SQL injection. Use parameterized queries or an ORM instead.",
         Severity::Critical, Confidence::High, Some(OwaspCategory::A03Injection),
-        // Matches: keyword("...${var} or keyword("...+var or format!("...{var}...)
-        r#"(?i)(?:execute|query|raw|select|insert|update|delete)\s*\(\s*['\"](?:[^'\"]*\{[^}]*\}|[^'\"]*\$|)"#,
+        // Matches: keyword("...${var}...") or keyword("...{var}...") or keyword("$var")
+        // Requires actual interpolation syntax inside the string argument
+        r#"(?i)(?:execute|query|raw|select|insert|update|delete)\s*\(\s*['\"][^'\"]*(?:\$\{|\{[A-Za-z_])"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace string concatenation with parameterized queries. Use prepared statements or an ORM's query builder."
     );
