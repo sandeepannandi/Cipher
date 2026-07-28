@@ -107,6 +107,18 @@ enum Commands {
         /// Model to use for AI analysis
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
+
+        /// Maximum number of findings to display (default: 30, use 0 for no limit)
+        #[arg(long = "max-findings", default_value = "30")]
+        max_findings: usize,
+
+        /// Minimum severity to show (critical, high, medium, low)
+        #[arg(long = "min-severity")]
+        min_severity: Option<String>,
+
+        /// Minimum confidence to show (high, medium, low)
+        #[arg(long = "min-confidence")]
+        min_confidence: Option<String>,
     },
 
     /// Scan dependencies for known vulnerabilities
@@ -269,9 +281,34 @@ async fn main() -> Result<()> {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             indexer::run_status(&project_path).await?;
         }
-        Commands::Review { use_ai, model } => {
+        Commands::Review {
+            use_ai,
+            model,
+            max_findings,
+            min_severity,
+            min_confidence,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            review::run_review(&project_path, use_ai, model.as_deref()).await?;
+            let min_sev = min_severity
+                .as_deref()
+                .and_then(review::parse_severity_filter);
+            let min_conf = min_confidence
+                .as_deref()
+                .and_then(review::parse_confidence_filter);
+            let max_f = if max_findings == 0 {
+                None
+            } else {
+                Some(max_findings)
+            };
+            review::run_review(
+                &project_path,
+                use_ai,
+                model.as_deref(),
+                max_f,
+                min_sev,
+                min_conf,
+            )
+            .await?;
         }
         Commands::Deps { online } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());

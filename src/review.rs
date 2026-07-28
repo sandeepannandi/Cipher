@@ -53,7 +53,8 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "SQL Injection — String Concatenation",
         "SQL queries built with string concatenation or interpolation are vulnerable to SQL injection. Use parameterized queries or an ORM instead.",
         Severity::Critical, Confidence::High, Some(OwaspCategory::A03Injection),
-        r#"(?i)(execute|query|raw|select|insert|update|delete)\s*\(\s*['"][^'"]*\$\{|['"][^'"]*\+\s*|\bf"|format!\(""#,
+        // Matches: keyword("...${var} or keyword("...+var or format!("...{var}...)
+        r#"(?i)(?:execute|query|raw|select|insert|update|delete)\s*\(\s*['\"](?:[^'\"]*\{[^}]*\}|[^'\"]*\$|)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace string concatenation with parameterized queries. Use prepared statements or an ORM's query builder."
     );
@@ -71,7 +72,8 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Command Injection",
         "User input is passed to a shell command, which could allow command injection attacks.",
         Severity::Critical, Confidence::High, Some(OwaspCategory::A03Injection),
-        r#"(?i)(exec|system|popen|shell_exec|backticks|`|cmd|Command|process::Command|subprocess\.\w+).*\$|\bfnrun\b|\beval\b"#,
+        // Matches shell exec calls like exec("cmd {user_input}") or eval on user-controlled strings
+        r#"(?i)(?:exec|system|popen|shell_exec|subprocess\.\w+)\s*\([^)]*\$\{|(?:process::Command|cinnamon|shlex)\b"#,
         &["rs", "py", "js", "ts", "rb", "go", "php"],
         "Avoid shell execution with user input. Use safer APIs that don't invoke a shell, and validate/sanitize all input."
     );
@@ -80,7 +82,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Path Traversal",
         "File operations using user-controlled paths can allow directory traversal attacks.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A01BrokenAccessControl),
-        r#"(?i)(read_to_string|read_file|open|File::open|fs::read|fs::write|file_get_contents|readFile|writeFile)\s*\([^)]*\$\{|\+.*(user|input|path|name|file)"#,
+        r#"(?i)(?:read_to_string|read_file|File::open|fs::read|fs::write|file_get_contents)\s*\([^)]*\$\{|(?:readFile|writeFile)\s*\([^)]*\+"#,
         &["rs", "py", "js", "ts", "go", "rb", "php"],
         "Validate and sanitize file paths. Use allowlists for permitted paths and reject '..' sequences."
     );
@@ -89,7 +91,8 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Server-Side Template Injection (SSTI)",
         "User input is passed directly to a template engine, enabling SSTI attacks.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A03Injection),
-        r#"(?i)(\.render\(|\.template\(|\.parse\(|jinja2\.Template|pug\.compile|ejs\.render|handlebars\.compile).*\$|\bf"#,
+        // Matches: .render(user_var) or jinja2.Template(user_var) etc.
+        r#"(?i)(?:\.render\(|\.template\(|\.parse\(|jinja2\.Template|pug\.compile|ejs\.render|handlebars\.compile)\s*(?:[^)]*\$|\b(?:request|params|body|query|input|user_data)\b)"#,
         &["py", "js", "ts", "rb", "php"],
         "Never pass user input directly to template engines. Use context-aware escaping and sandboxed templates."
     );
@@ -100,7 +103,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Weak Hash Algorithm — MD5",
         "MD5 is cryptographically broken and unsuitable for security purposes. Use bcrypt, argon2, or SHA-256/512.",
         Severity::High, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
-        r#"(?i)(md5|MD5)\s*\("#,
+        r#"(?i)\b(md5)\s*\("#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace MD5 with a secure hash function like SHA-256, SHA-512, or bcrypt/argon2 for passwords."
     );
@@ -109,7 +112,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Weak Hash Algorithm — SHA1",
         "SHA-1 is cryptographically weakened and should not be used for security contexts. Use SHA-256/512 or argon2.",
         Severity::Medium, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
-        r#"(?i)\b(sha1|SHA1)\s*\("#,
+        r#"(?i)\b(sha1)\s*\("#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace SHA-1 with SHA-256 or SHA-512. For password hashing, use bcrypt or argon2."
     );
@@ -127,7 +130,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Weak Encryption — ECB Mode",
         "ECB mode encryption leaks patterns in the plaintext. Use authenticated encryption like AES-GCM.",
         Severity::High, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
-        r#"(?i)(AES|DES|Blowfish).*ECB|ecb_encrypt|Cipher::encrypt.*ECB"#,
+        r#"(?i)(?:AES|DES|Blowfish)\s*/\s*ECB|ecb_encrypt"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace ECB mode with AES-GCM (authenticated encryption with IV/nonce)."
     );
@@ -136,7 +139,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Hardcoded Cryptographic Key",
         "Hardcoded encryption keys can be extracted from source code. Use a key management system.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A02CryptographicFailures),
-        r#"(?i)(encryption_key|secret_key|cipher_key|aes_key|crypto_key)\s*[=:]\s*['\"][A-Za-z0-9+/=]{16,}['\"]"#,
+        r#"(?i)(?:encryption_key|secret_key|cipher_key|aes_key|crypto_key)\s*[=:]\s*['\"][A-Za-z0-9+/=]{16,}['\"]"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Move the key to environment variables or a secret manager. Never hardcode keys in source."
     );
@@ -147,7 +150,8 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Hardcoded Credentials",
         "Hardcoded usernames, passwords, or API keys are a security risk. Use environment variables.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A07AuthFailures),
-        r#"(?i)(password|passwd|pwd|username|login|credentials)\s*[=:]\s*['\"][^'"]{4,}['"]"#,
+        // Only match actual hardcoded string literals, not variable assignments from env/functions
+        r#"(?i)(?:password|passwd|pwd|secret|api_key|apikey)\s*[=:]\s*['\"][a-zA-Z0-9!@#$%^&*()_+-=]{4,}['\"]"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Remove hardcoded credentials and use environment variables or a secret manager."
     );
@@ -156,7 +160,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "JWT Secret Hardcoded",
         "JWT signing secrets in source code allow token forgery if exposed.",
         Severity::Critical, Confidence::High, Some(OwaspCategory::A07AuthFailures),
-        r#"(?i)(jwt_secret|jwt_key|token_secret|signing_key)\s*[=:]\s*['\"][^'"]{8,}['\"]"#,
+        r#"(?i)(?:jwt_secret|jwt_key|token_secret|signing_key)\s*[=:]\s*['\"][^'\"]{8,}['\"]"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Use environment variables for JWT secrets. Rotate immediately if exposed."
     );
@@ -165,7 +169,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Insecure Cookie Configuration",
         "Cookies missing Secure, HttpOnly, or SameSite flags can be exploited via XSS or MITM.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A05SecurityMisconfiguration),
-        r#"(?i)(cookie|Cookie|set_cookie).*?(?!HttpOnly|Secure|SameSite)"#,
+        r#"(?i)(?:cookie|Cookie|set_cookie)\s*\(\s*['\"]\w+['\"]\s*,\s*['\"]\w+['\"]\s*(?!.*(?:HttpOnly|Secure|SameSite))"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Set Secure, HttpOnly, and SameSite=Lax/Strict flags on all cookies."
     );
@@ -176,7 +180,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Debug Mode Enabled",
         "Debug or development mode in production can leak sensitive information.",
         Severity::High, Confidence::High, Some(OwaspCategory::A05SecurityMisconfiguration),
-        r#"(?i)(debug\s*[=:]\s*true|DEBUG\s*=\s*True|debug=True|DEBUG=true|app\.debug)"#,
+        r#"(?i)(?:debug\s*[=:]\s*true|DEBUG\s*=\s*True|debug=True|DEBUG=true|app\.debug)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "yaml", "yml", "json", "toml"],
         "Disable debug/development mode in production. Set debug=False and configure proper logging."
     );
@@ -185,7 +189,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "CORS Misconfiguration",
         "Permissive CORS policy allows any origin to access your API. Restrict to trusted origins.",
         Severity::High, Confidence::High, Some(OwaspCategory::A05SecurityMisconfiguration),
-        r#"(?i)(Access-Control-Allow-Origin.*\*|allow_origins.*\[['\"]*\*|cors.*allow_all)"#,
+        r#"(?i)(?:Access-Control-Allow-Origin\s*:\s*\*|allow_origins.*\['\''*|cors.*allow_all)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Replace wildcard CORS origin with specific allowed origins. Never use '*' in production."
     );
@@ -196,7 +200,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Insecure Direct Object Reference (IDOR)",
         "User-controlled IDs in API endpoints without authorization checks can lead to unauthorized access.",
         Severity::High, Confidence::Low, Some(OwaspCategory::A01BrokenAccessControl),
-        r#"(?i)(find_by_id|findById|get_by_id|getById|find_by_pk|get\(request.*id|params\[.id.\])"#,
+        r#"(?i)(?:find_by_id|findById|get_by_id|getById|find_by_pk|get\(request.*id|params\[.id.\])"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Always verify that the authenticated user has permission to access the requested resource."
     );
@@ -205,8 +209,10 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Insecure Deserialization",
         "Deserializing untrusted data can lead to remote code execution.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A08IntegrityFailures),
-        r#"(?i)(pickle\.loads|marshal\.load|yaml\.load|JSON\.parse|serde_json::from_str|from_string|deserialize|unserialize)\s*\(",
-        &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
+        // Removed JSON.parse (safe in JS) and serde_json::from_str (safe in Rust).
+        // Only flag genuinely dangerous deserialization APIs.
+        r#"(?i)(?:pickle\.loads|marshal\.load|yaml\.load\b(?!.*safe)|from_string|unserialize|php://input)"#,
+        &["py", "rb", "php"],
         "Avoid deserializing untrusted data. If necessary, use safe deserialization and validate the result against a schema."
     );
 
@@ -214,7 +220,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Sensitive Data in Logging",
         "Logging potentially sensitive data (passwords, tokens, PII) can lead to data exposure.",
         Severity::Medium, Confidence::Low, Some(OwaspCategory::A09LoggingFailures),
-        r#"(?i)(log\.(info|debug|warn|error)|println!|console\.log|logger\.info).*(password|token|secret|key|credit|ssn|email)"#,
+        r#"(?i)(?:log\.(?:info|debug|warn|error)|console\.log)\s*\([^)]*(?:password|token|secret|credit|ssn)\b[^)]*\)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Sanitize logs to remove sensitive data. Use structured logging with sensitive field redaction."
     );
@@ -223,7 +229,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Mass Assignment / Autobinding",
         "Automatic binding of request parameters to model attributes can allow property tampering.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A01BrokenAccessControl),
-        r#"(?i)(update_attributes|update\(request|fillable|guard|mass_assignment|bind_model|@ModelAttribute)"#,
+        r#"(?i)(?:update_attributes|mass_assignment|fillable\s*=\s*\[\s*\*\s*\]|guard\s*=\s*\[\s*\]|@ModelAttribute)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Use allowlists (fillable/guarded) to restrict which attributes can be mass-assigned."
     );
@@ -232,7 +238,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Disabled SSL/TLS Verification",
         "Disabling SSL certificate verification defeats HTTPS protection and enables MITM attacks.",
         Severity::Critical, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
-        r#"(?i)(verify.*false|tls.*false|ssl.*false|dangerously|insecure|no_verify|tls_verify.*false|dangerous_accept)"#,
+        r#"(?i)(?:verify\s*(?:=>|=)\s*false\b|tls_verify\s*[=:]\s*false|dangerous_accept|no_verify)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Enable SSL/TLS certificate verification. Never disable it in production."
     );
@@ -250,6 +256,63 @@ fn file_extension(path: &Path) -> String {
 /// Check if a file extension matches the target list
 fn matches_extensions(ext: &str, targets: &[&str]) -> bool {
     targets.is_empty() || targets.contains(&ext)
+}
+
+/// Parse severity filter string from CLI
+pub(crate) fn parse_severity_filter(s: &str) -> Option<Severity> {
+    match s.to_uppercase().as_str() {
+        "CRITICAL" => Some(Severity::Critical),
+        "HIGH" => Some(Severity::High),
+        "MEDIUM" => Some(Severity::Medium),
+        "LOW" => Some(Severity::Low),
+        _ => None,
+    }
+}
+
+/// Parse confidence filter string from CLI
+pub(crate) fn parse_confidence_filter(s: &str) -> Option<Confidence> {
+    match s.to_uppercase().as_str() {
+        "HIGH" => Some(Confidence::High),
+        "MEDIUM" => Some(Confidence::Medium),
+        "LOW" => Some(Confidence::Low),
+        _ => None,
+    }
+}
+
+/// Check if a finding meets the minimum severity threshold
+fn meets_severity_threshold(finding: &Finding, min_severity: Option<Severity>) -> bool {
+    match min_severity {
+        Some(threshold) => finding.severity.score() >= threshold.score(),
+        None => true,
+    }
+}
+
+/// Check if a finding meets the minimum confidence threshold
+fn meets_confidence_threshold(finding: &Finding, min_confidence: Option<Confidence>) -> bool {
+    match min_confidence {
+        Some(threshold) => finding.confidence.score() >= threshold.score(),
+        None => true,
+    }
+}
+
+/// Filter findings by severity and confidence thresholds
+pub(crate) fn filter_findings(
+    findings: Vec<Finding>,
+    min_severity: Option<Severity>,
+    min_confidence: Option<Confidence>,
+    max_findings: usize,
+) -> Vec<Finding> {
+    let mut filtered: Vec<Finding> = findings
+        .into_iter()
+        .filter(|f| meets_severity_threshold(f, min_severity))
+        .filter(|f| meets_confidence_threshold(f, min_confidence))
+        .collect();
+
+    if filtered.len() > max_findings {
+        filtered.truncate(max_findings);
+    }
+
+    filtered
 }
 
 /// Scan a single file for vulnerability patterns
@@ -382,6 +445,9 @@ pub async fn run_review(
     project_path: &Path,
     use_ai: bool,
     model: Option<&str>,
+    max_findings: Option<usize>,
+    min_severity: Option<Severity>,
+    min_confidence: Option<Confidence>,
 ) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
@@ -402,9 +468,10 @@ pub async fn run_review(
 
     let mut report = collect_review_findings(&canonical_path, false, None).await?;
 
-    spinner.finish_with_message(format!("{} files scanned — {} issues found", "[OK]".green(), report.len()));
+    let total_raw = report.len();
+    spinner.finish_with_message(format!("{} files scanned — {} raw issues found", "[OK]".green(), total_raw));
 
-    // Phase 2: AI-powered deep analysis (only if requested — no re-scanning of patterns)
+    // Phase 2: AI-powered deep analysis (only if requested)
     if use_ai {
         println!(
             "  {} Running AI-powered deep analysis... (this may take a moment)",
@@ -412,7 +479,6 @@ pub async fn run_review(
         );
         match run_ai_review(&canonical_path, model).await {
             Ok(ai_findings) => {
-                // Deduplicate by (title, file_path) to avoid dropping real findings
                 let existing_keys: std::collections::HashSet<(String, Option<String>)> =
                     report.findings.iter()
                         .map(|f| (f.title.clone(), f.file_path.clone()))
@@ -435,6 +501,10 @@ pub async fn run_review(
         }
     }
 
+    // Apply filters
+    let max_show = max_findings.unwrap_or(30);
+    let filtered = filter_findings(report.findings.clone(), min_severity, min_confidence, max_show);
+
     // Display results
     println!();
     println!(
@@ -443,23 +513,61 @@ pub async fn run_review(
         "Security Review Results".bold()
     );
     println!("  {}", "-".repeat(50).dimmed());
-    println!(
-        "  {} Pattern-based scanner found {} potential issues",
-        "[*]".cyan(),
-        report.len().to_string().bold()
-    );
 
-    report.print_summary();
+    let filter_info = match (min_severity, min_confidence) {
+        (Some(s), Some(c)) => format!(" (filtered: >={} severity, >={} confidence)", s, c),
+        (Some(s), None) => format!(" (filtered: >={} severity)", s),
+        (None, Some(c)) => format!(" (filtered: >={} confidence)", c),
+        (None, None) => String::new(),
+    };
 
-    if report.is_empty() {
+    let showing_info = if filtered.len() < total_raw {
+        format!(
+            "  {} Pattern-based scanner found {} potential issues, showing top {}{}",
+            "[*]".cyan(),
+            total_raw.to_string().bold(),
+            filtered.len(),
+            filter_info
+        )
+    } else {
+        format!(
+            "  {} Pattern-based scanner found {} potential issues{}",
+            "[*]".cyan(),
+            total_raw.to_string().bold(),
+            filter_info
+        )
+    };
+    println!("{}", showing_info);
+
+    // Build a mini report for display
+    let mut display_report = FindingReport::new("security-review", canonical_path.to_string_lossy());
+    for f in filtered {
+        display_report.add(f);
+    }
+
+    display_report.print_summary();
+
+    if display_report.is_empty() {
         println!();
-        println!("{} No vulnerabilities detected by pattern analysis.", "[OK]".green().bold());
+        println!("{} No vulnerabilities detected matching your filters.", "[OK]".green().bold());
         println!("  Note: Pattern-based scanners can miss business logic and context-dependent issues.");
-        println!("  Run {} for deeper analysis.", "cipher-ai ask \"Review this project for vulnerabilities\"".yellow());
+        println!("  Run {} for deeper analysis, or run without --min-severity to see all findings.", "cipher-ai review --ai".yellow());
         return Ok(report);
     }
 
-    report.print_detailed();
+    // Print detailed findings (only top N)
+    display_report.print_detailed();
+
+    // Show count of filtered-out findings
+    if total_raw > display_report.len() {
+        let hidden = total_raw - display_report.len();
+        println!();
+        println!(
+            "  {} {} additional findings not shown (use a lower --min-severity or --min-confidence to see more, or omit --max-findings)",
+            "[…]".dimmed(),
+            hidden.to_string().dimmed()
+        );
+    }
 
     // Recommendations
     println!();
@@ -492,6 +600,10 @@ pub async fn run_review(
     println!(
         "  [IDEA] Run {} for interactive security Q&A about specific findings.",
         "cipher-ai ask \"Tell me more about [finding]\"".yellow()
+    );
+    println!(
+        "  [IDEA] Use {} to see all raw findings without filters.",
+        "cipher-ai review --max-findings 999 --min-severity low".yellow()
     );
 
     Ok(report)
