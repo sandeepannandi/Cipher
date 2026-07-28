@@ -54,8 +54,11 @@ Inside the TUI, type `/help` to see all commands, or press `Ctrl+K` for the comm
 |---|---|
 | `cipher-ai init` | Index your codebase |
 | `cipher-ai ask "..."` | Ask security questions about your code |
-| `cipher-ai review` | Scan for OWASP Top 10 vulnerabilities |
+| `cipher-ai review` | Scan for OWASP Top 10 vulnerabilities (shows top 30 findings) |
 | `cipher-ai review --ai` | Same + AI-powered deep analysis |
+| `cipher-ai review --max-findings 50` | Show up to 50 findings (0 = no limit) |
+| `cipher-ai review --min-severity high` | Only show high/critical severity findings |
+| `cipher-ai review --min-confidence medium` | Only show medium+ confidence findings |
 | `cipher-ai deps` | Check dependencies for known vulnerabilities |
 | `cipher-ai deps --online` | Same + OSV.dev API for full CVE coverage |
 | `cipher-ai secrets` | Scan for leaked credentials (25+ patterns) |

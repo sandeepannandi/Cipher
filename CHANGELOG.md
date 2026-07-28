@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.1] — 2026-07-28
+
+### Fixed
+
+- **Reduced false positives in `review` command** — Tightened regex patterns across all vulnerability categories:
+  - SSTI no longer flags every line (removed broken `.*$|\bf` suffix)
+  - Removed `JSON.parse` from insecure deserialization (safe in JavaScript)
+  - Removed `serde_json::from_str` from insecure deserialization (safe in Rust)
+  - Narrowed command injection to real shell exec patterns (removed broad `\beval\b`)
+  - Path traversal now requires actual variable interpolation
+  - Hardcoded credentials only flag actual string literals, not function calls
+  - Sensitive data in logging requires keyword inside the log function's parentheses
+  - SSL/TLS verification pattern no longer matches the word "insecure" alone
+  - Many other patterns tightened
+
+### Added
+
+- **`cipher-ai review --max-findings N`** — Limit output to top N findings (default: 30, use 0 for no limit)
+- **`cipher-ai review --min-severity <level>`** — Filter by minimum severity (critical, high, medium, low)
+- **`cipher-ai review --min-confidence <level>`** — Filter by minimum confidence (high, medium, low)
+- Output now shows count of filtered-out findings when limits are applied
+
 ## [0.1.0] — 2026-07-26
 
 ### Added
