@@ -59,3 +59,105 @@ pub fn is_binary(path: &Path) -> bool {
     };
     buf[..n].contains(&0u8)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_should_exclude_git() {
+        assert!(should_exclude(Path::new("/project/.git/config")));
+    }
+
+    #[test]
+    fn test_should_exclude_node_modules() {
+        assert!(should_exclude(Path::new("/project/node_modules/express/index.js")));
+    }
+
+    #[test]
+    fn test_should_exclude_target() {
+        assert!(should_exclude(Path::new("/project/target/debug/build")));
+    }
+
+    #[test]
+    fn test_should_exclude_vendor() {
+        assert!(should_exclude(Path::new("/project/vendor/autoload.php")));
+    }
+
+    #[test]
+    fn test_should_exclude_lock_files() {
+        assert!(should_exclude(Path::new("/project/Cargo.lock")));
+    }
+
+    #[test]
+    fn test_should_not_exclude_source() {
+        assert!(!should_exclude(Path::new("/project/src/main.rs")));
+    }
+
+    #[test]
+    fn test_should_not_exclude_config() {
+        assert!(!should_exclude(Path::new("/project/Cargo.toml")));
+    }
+
+    #[test]
+    fn test_should_exclude_minified_js() {
+        assert!(should_exclude(Path::new("/project/app.min.js")));
+    }
+
+    #[test]
+    fn test_should_exclude_pycache() {
+        assert!(should_exclude(Path::new("/project/__pycache__/main.pyc")));
+    }
+
+    #[test]
+    fn test_is_binary_empty_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_empty.bin");
+        std::fs::write(&path, "").unwrap();
+        assert!(is_binary(&path));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_is_binary_text_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_text.txt");
+        std::fs::write(&path, "Hello, world!\nThis is text.").unwrap();
+        assert!(!is_binary(&path));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_is_binary_with_null_bytes() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_binary.bin");
+        let data: Vec<u8> = vec![0x00, 0x01, 0x02, 0xFF];
+        std::fs::write(&path, &data).unwrap();
+        assert!(is_binary(&path));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_is_binary_large_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_large.bin");
+        // Create file > 10 MB
+        let data = vec![0x41u8; 11 * 1024 * 1024];
+        std::fs::write(&path, &data).unwrap();
+        assert!(is_binary(&path));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_should_exclude_cipher_ai_dir() {
+        assert!(should_exclude(Path::new("/project/.cipher-ai/index.json")));
+    }
+
+    #[test]
+    fn test_should_exclude_image_files() {
+        assert!(should_exclude(Path::new("/project/logo.svg")));
+        assert!(should_exclude(Path::new("/project/photo.png")));
+        assert!(should_exclude(Path::new("/project/photo.jpg")));
+    }
+}

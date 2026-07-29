@@ -146,7 +146,7 @@ struct SpdxExternalRef {
 
 // ── Ecosystem → PURL mapping ────────────────────────────────────────
 
-fn ecosystem_to_purl_type(eco: &str) -> &str {
+pub fn ecosystem_to_purl_type(eco: &str) -> &str {
     match eco.to_lowercase().as_str() {
         "crates.io" => "cargo",
         "npm" => "npm",

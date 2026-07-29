@@ -3,21 +3,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use colored::*;
 use std::path::PathBuf;
 
-mod attack;
-mod ci;
-mod config;
-mod deps;
-mod finding;
-mod fix;
-mod groq;
-mod indexer;
-mod rag;
-mod report;
-mod review;
-mod scan;
-mod sbom;
-mod secrets;
-mod zeroday;
+// Modules are declared in the library crate (src/lib.rs).
+use cipher_ai::{attack, ci, config, deps, fix, indexer, rag, report, review, sbom, secrets, zeroday};
 
 const NAME: &str = "cipher-ai";
 const VERSION: &str = "0.1.0";

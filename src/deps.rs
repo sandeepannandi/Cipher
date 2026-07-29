@@ -134,7 +134,7 @@ const EMBEDDED_ADVISORIES: &[(&str, &str, &str, &str, Severity)] = &[
 // -- Manifest Parsers --
 
 /// Parse dependencies from go.mod
-fn parse_go_mod(path: &Path) -> Result<Vec<Dependency>> {
+pub fn parse_go_mod(path: &Path) -> Result<Vec<Dependency>> {
     let content = std::fs::read_to_string(path)?;
     let mut deps = Vec::new();
     let mut in_require = false;
@@ -192,7 +192,7 @@ fn parse_go_mod(path: &Path) -> Result<Vec<Dependency>> {
 }
 
 /// Parse dependencies from Gemfile
-fn parse_gemfile(path: &Path) -> Result<Vec<Dependency>> {
+pub fn parse_gemfile(path: &Path) -> Result<Vec<Dependency>> {
     let content = std::fs::read_to_string(path)?;
     let mut deps = Vec::new();
 
@@ -251,7 +251,7 @@ fn parse_gemfile(path: &Path) -> Result<Vec<Dependency>> {
 }
 
 /// Parse dependencies from composer.json
-fn parse_composer_json(path: &Path) -> Result<Vec<Dependency>> {
+pub fn parse_composer_json(path: &Path) -> Result<Vec<Dependency>> {
     let content = std::fs::read_to_string(path)?;
 
     #[derive(Deserialize)]
@@ -294,7 +294,7 @@ fn parse_composer_json(path: &Path) -> Result<Vec<Dependency>> {
 }
 
 /// Parse dependencies from pubspec.yaml
-fn parse_pubspec_yaml(path: &Path) -> Result<Vec<Dependency>> {
+pub fn parse_pubspec_yaml(path: &Path) -> Result<Vec<Dependency>> {
     let content = std::fs::read_to_string(path)?;
     let mut deps = Vec::new();
 
@@ -362,7 +362,7 @@ fn parse_pubspec_yaml(path: &Path) -> Result<Vec<Dependency>> {
 }
 
 /// Parse dependencies from Cargo.toml
-fn parse_cargo_toml(path: &Path) -> Result<Vec<Dependency>> {
+pub fn parse_cargo_toml(path: &Path) -> Result<Vec<Dependency>> {
     let content = std::fs::read_to_string(path)?;
     let mut deps = Vec::new();
     let mut in_deps = false;
@@ -436,7 +436,7 @@ fn parse_cargo_toml(path: &Path) -> Result<Vec<Dependency>> {
 }
 
 /// Parse dependencies from package.json
-fn parse_package_json(path: &Path) -> Result<Vec<Dependency>> {
+pub fn parse_package_json(path: &Path) -> Result<Vec<Dependency>> {
     let content = std::fs::read_to_string(path)?;
 
     #[derive(Deserialize)]
@@ -477,7 +477,7 @@ fn parse_package_json(path: &Path) -> Result<Vec<Dependency>> {
 }
 
 /// Parse dependencies from requirements.txt
-fn parse_requirements_txt(path: &Path) -> Result<Vec<Dependency>> {
+pub fn parse_requirements_txt(path: &Path) -> Result<Vec<Dependency>> {
     let content = std::fs::read_to_string(path)?;
     let mut deps = Vec::new();
 
@@ -511,13 +511,14 @@ fn parse_requirements_txt(path: &Path) -> Result<Vec<Dependency>> {
 /// Check if a version string matches a constraint like "<1.0.0" or ">=2.0.0 <3.0.0"
 /// Currently handles `<` and `<=` constraints. Other operators return false.
 /// Returns true if the version satisfies the vulnerable constraint
-fn version_matches_constraint(version: &str, constraint: &str) -> bool {
+pub fn version_matches_constraint(version: &str, constraint: &str) -> bool {
     let version_parts: Vec<u32> = version
         .split('.')
         .filter_map(|p| p.parse::<u32>().ok())
         .collect();
 
-    if version_parts.len() < 2 {
+    // Allow versions with 1, 2, or 3 parts ("1", "1.0", "1.0.0")
+    if version_parts.is_empty() {
         return false;
     }
 
@@ -532,6 +533,19 @@ fn version_matches_constraint(version: &str, constraint: &str) -> bool {
 
     let (v_major, v_minor, v_patch) = version_tuple();
 
+    // Handle "<=x.y.z" constraints (MUST check before "<" since "<=" starts with '<')
+    if constraint.starts_with("<=") {
+        let c = constraint[2..].trim();
+        let c_parts: Vec<u32> = c.split('.').filter_map(|p| p.parse::<u32>().ok()).collect();
+        if c_parts.len() >= 3 {
+            return (v_major, v_minor, v_patch) <= (c_parts[0], c_parts[1], c_parts[2]);
+        } else if c_parts.len() == 2 {
+            return (v_major, v_minor) <= (c_parts[0], c_parts[1]);
+        } else if c_parts.len() == 1 {
+            return (v_major, v_minor, v_patch) <= (c_parts[0], 0, 0);
+        }
+    }
+
     // Handle "<x.y.z" constraints
     if constraint.starts_with('<') {
         let c = constraint[1..].trim();
@@ -540,15 +554,8 @@ fn version_matches_constraint(version: &str, constraint: &str) -> bool {
             return (v_major, v_minor, v_patch) < (c_parts[0], c_parts[1], c_parts[2]);
         } else if c_parts.len() == 2 {
             return (v_major, v_minor) < (c_parts[0], c_parts[1]);
-        }
-    }
-
-    // Handle "<=x.y.z" constraints
-    if constraint.starts_with("<=") {
-        let c = constraint[2..].trim();
-        let c_parts: Vec<u32> = c.split('.').filter_map(|p| p.parse::<u32>().ok()).collect();
-        if c_parts.len() >= 3 {
-            return (v_major, v_minor, v_patch) <= (c_parts[0], c_parts[1], c_parts[2]);
+        } else if c_parts.len() == 1 {
+            return (v_major, v_minor, v_patch) < (c_parts[0], 0, 0);
         }
     }
 

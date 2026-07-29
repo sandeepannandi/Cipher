@@ -262,7 +262,7 @@ fn matches_extensions(ext: &str, targets: &[&str]) -> bool {
 }
 
 /// Parse severity filter string from CLI
-pub(crate) fn parse_severity_filter(s: &str) -> Option<Severity> {
+pub fn parse_severity_filter(s: &str) -> Option<Severity> {
     match s.to_uppercase().as_str() {
         "CRITICAL" => Some(Severity::Critical),
         "HIGH" => Some(Severity::High),
@@ -273,7 +273,7 @@ pub(crate) fn parse_severity_filter(s: &str) -> Option<Severity> {
 }
 
 /// Parse confidence filter string from CLI
-pub(crate) fn parse_confidence_filter(s: &str) -> Option<Confidence> {
+pub fn parse_confidence_filter(s: &str) -> Option<Confidence> {
     match s.to_uppercase().as_str() {
         "HIGH" => Some(Confidence::High),
         "MEDIUM" => Some(Confidence::Medium),

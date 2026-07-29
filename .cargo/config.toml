@@ -3,8 +3,8 @@
 # (e.g., x86_64-unknown-linux-gnu on Linux/WSL, x86_64-pc-windows-msvc on Windows with MSVC)
 #
 # For Windows without MSVC, use:
-# [build]
-# target = "x86_64-pc-windows-gnu"
-#
-# [target.x86_64-pc-windows-gnu]
-# linker = "rust-lld"
+[build]
+target = "x86_64-pc-windows-gnu"
+
+[target.x86_64-pc-windows-gnu]
+linker = "rust-lld"

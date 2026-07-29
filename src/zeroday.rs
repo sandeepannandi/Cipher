@@ -1212,7 +1212,7 @@ fn parse_ai_zeroday_findings(response: &str, project_path: &Path) -> Result<Vec<
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /// Check if a line is a function signature
-fn is_function_signature(line: &str, ext: &str) -> bool {
+pub fn is_function_signature(line: &str, ext: &str) -> bool {
     let lower = line.to_lowercase();
     // Rust
     if lower.starts_with("fn ") && lower.contains('(') {
@@ -1256,7 +1256,7 @@ fn is_function_signature(line: &str, ext: &str) -> bool {
 }
 
 /// Extract function name from a signature line
-fn extract_function_name(line: &str) -> String {
+pub fn extract_function_name(line: &str) -> String {
     let lower = line.trim().to_lowercase();
 
     // Try common patterns
@@ -1279,11 +1279,12 @@ fn extract_function_name(line: &str) -> String {
 }
 
 /// Extract variable name from an assignment (e.g., "let x = foo" -> "x")
-fn extract_assigned_var(line: &str) -> Option<String> {
+pub fn extract_assigned_var(line: &str) -> Option<String> {
     let trimmed = line.trim();
 
     // Pattern: let/mut/var/const x = ...
-    for keyword in &["let ", "let mut ", "var ", "const ", "val ", "final "]
+    // Put longer patterns first so "let mut " is checked before "let "
+    for keyword in &["let mut ", "let ", "var ", "const ", "val ", "final "]
     {
         if trimmed.to_lowercase().starts_with(keyword) {
             let after = &trimmed[keyword.len()..].trim();
@@ -1369,7 +1370,7 @@ fn get_snippet_range(lines: &[String], start_line: usize, end_line: usize) -> St
 }
 
 /// Check if a line is a comment
-fn is_comment(line: &str, _ext: &str) -> bool {
+pub fn is_comment(line: &str, _ext: &str) -> bool {
     let trimmed = line.trim();
     trimmed.starts_with("//")
         || trimmed.starts_with('#')
