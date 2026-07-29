@@ -134,6 +134,234 @@ const EMBEDDED_ADVISORIES: &[(&str, &str, &str, &str, Severity)] = &[
 
 // -- Manifest Parsers --
 
+/// Parse dependencies from go.mod
+fn parse_go_mod(path: &Path) -> Result<Vec<Dependency>> {
+    let content = std::fs::read_to_string(path)?;
+    let mut deps = Vec::new();
+    let mut in_require = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("require (") {
+            in_require = true;
+            continue;
+        }
+        if in_require && trimmed == ")" {
+            in_require = false;
+            continue;
+        }
+        if in_require {
+            // Parse: module/path v1.2.3
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[0].to_string();
+                let version = parts[1].to_string();
+                if !name.is_empty() && !version.is_empty() && !name.starts_with("//") {
+                    deps.push(Dependency {
+                        name,
+                        version,
+                        ecosystem: "Go".to_string(),
+                        manifest_file: path.to_path_buf(),
+                        is_dev: false,
+                    });
+                }
+            }
+        }
+
+        // Single-line require: module/path v1.2.3
+        if trimmed.starts_with("require") && !trimmed.contains("(") {
+            let after = trimmed.trim_start_matches("require");
+            let parts: Vec<&str> = after.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[0].to_string();
+                let version = parts[1].to_string();
+                if !name.is_empty() && !version.is_empty() {
+                    deps.push(Dependency {
+                        name,
+                        version,
+                        ecosystem: "Go".to_string(),
+                        manifest_file: path.to_path_buf(),
+                        is_dev: false,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(deps)
+}
+
+/// Parse dependencies from Gemfile
+fn parse_gemfile(path: &Path) -> Result<Vec<Dependency>> {
+    let content = std::fs::read_to_string(path)?;
+    let mut deps = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Match: gem 'name', '~> x.y.z' or gem "name", ">= x.y.z"
+        if trimmed.starts_with("gem ") {
+            // Extract name between quotes
+            let after_gem = trimmed.trim_start_matches("gem ");
+            let name = after_gem
+                .split(|c| c == ',' || c == ' ' || c == '\t')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches('\'')
+                .trim_matches('"')
+                .to_string();
+
+            if name.is_empty() || name.starts_with('#') {
+                continue;
+            }
+
+            // Extract version (second quoted string after comma, if any)
+            let version = if let Some(comma_pos) = after_gem.find(',') {
+                let after_comma = after_gem[comma_pos + 1..].trim();
+                after_comma
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"')
+                    .trim_start_matches(">=")
+                    .trim_start_matches("~>")
+                    .trim_start_matches(">")
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            };
+
+            if !name.is_empty() {
+                deps.push(Dependency {
+                    name,
+                    version: if version.is_empty() { "*" } else { &version }.to_string(),
+                    ecosystem: "RubyGems".to_string(),
+                    manifest_file: path.to_path_buf(),
+                    is_dev: false,
+                });
+            }
+        }
+    }
+
+    Ok(deps)
+}
+
+/// Parse dependencies from composer.json
+fn parse_composer_json(path: &Path) -> Result<Vec<Dependency>> {
+    let content = std::fs::read_to_string(path)?;
+
+    #[derive(Deserialize)]
+    struct ComposerJson {
+        require: Option<std::collections::HashMap<String, String>>,
+        #[serde(rename = "require-dev")]
+        require_dev: Option<std::collections::HashMap<String, String>>,
+    }
+
+    let composer: ComposerJson = serde_json::from_str(&content)?;
+    let mut deps = Vec::new();
+
+    if let Some(require) = composer.require {
+        for (name, version) in require {
+            if name != "php" {
+                deps.push(Dependency {
+                    name,
+                    version: version.trim_start_matches('^').trim_start_matches('~').to_string(),
+                    ecosystem: "Packagist".to_string(),
+                    manifest_file: path.to_path_buf(),
+                    is_dev: false,
+                });
+            }
+        }
+    }
+
+    if let Some(require_dev) = composer.require_dev {
+        for (name, version) in require_dev {
+            deps.push(Dependency {
+                name,
+                version: version.trim_start_matches('^').trim_start_matches('~').to_string(),
+                ecosystem: "Packagist".to_string(),
+                manifest_file: path.to_path_buf(),
+                is_dev: true,
+            });
+        }
+    }
+
+    Ok(deps)
+}
+
+/// Parse dependencies from pubspec.yaml
+fn parse_pubspec_yaml(path: &Path) -> Result<Vec<Dependency>> {
+    let content = std::fs::read_to_string(path)?;
+    let mut deps = Vec::new();
+
+    // Use serde_yaml to parse the YAML structure
+    let yaml_value: serde_yaml::Value = serde_yaml::from_str(&content)?;
+    let map = match yaml_value.as_mapping() {
+        Some(m) => m,
+        None => return Ok(deps),
+    };
+
+    let dep_sections = [
+        ("dependencies", false),
+        ("dev_dependencies", true),
+    ];
+
+    for (section_key, is_dev) in &dep_sections {
+        if let Some(section) = map.get(&serde_yaml::Value::String(section_key.to_string())) {
+            if let Some(dep_map) = section.as_mapping() {
+                for (key, value) in dep_map {
+                    let name = match key.as_str() {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+
+                    // Skip SDK dependencies (e.g., flutter: { sdk: flutter })
+                    let version = match value {
+                        serde_yaml::Value::String(v) => v.clone(),
+                        serde_yaml::Value::Mapping(m) => {
+                            // Handle: dependency_name:
+                            //   version: ^1.2.3
+                            //   sdk: flutter
+                            if m.contains_key(&serde_yaml::Value::String("sdk".to_string())) {
+                                continue;
+                            }
+                            m.get(&serde_yaml::Value::String("version".to_string()))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("*")
+                                .to_string()
+                        }
+                        _ => continue,
+                    };
+
+                    let clean_version = version
+                        .trim_start_matches('^')
+                        .trim_start_matches('~')
+                        .trim_start_matches('>')
+                        .trim_start_matches('=')
+                        .trim_start_matches('<')
+                        .trim()
+                        .to_string();
+
+                    deps.push(Dependency {
+                        name,
+                        version: clean_version,
+                        ecosystem: "Pub".to_string(),
+                        manifest_file: path.to_path_buf(),
+                        is_dev: *is_dev,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(deps)
+}
+
 /// Parse dependencies from Cargo.toml
 fn parse_cargo_toml(path: &Path) -> Result<Vec<Dependency>> {
     let content = std::fs::read_to_string(path)?;
@@ -385,57 +613,69 @@ async fn query_osv(ecosystem: &str, name: &str, version: &str) -> Result<Vec<(St
 /// Find dependency manifests in a project directory
 fn find_manifests(project_path: &Path) -> Vec<PathBuf> {
     let mut manifests = Vec::new();
+    let manifest_names = [
+        "cargo.toml", "package.json", "requirements.txt",
+        "gemfile", "go.mod", "composer.json", "pubspec.yaml",
+        "cargo.lock", "package-lock.json", "yarn.lock",
+        "gemfile.lock", "go.sum", "pom.xml", "build.gradle",
+    ];
 
-    // Walk the project root (not recursively into dep dirs)
+    // Walk project root (not recursively into dep dirs)
     if let Ok(entries) = std::fs::read_dir(project_path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 continue;
             }
-
             let file_name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .map(|n| n.to_lowercase())
                 .unwrap_or_default();
-
-            match file_name.as_str() {
-                "cargo.toml" | "cargo.lock" | "package.json" | "package-lock.json"
-                | "yarn.lock" | "requirements.txt" | "gemfile" | "gemfile.lock"
-                | "go.mod" | "go.sum" | "composer.json" | "build.gradle"
-                | "pom.xml" | "pubspec.yaml" => {
-                    manifests.push(path);
-                }
-                _ => {}
+            if manifest_names.contains(&file_name.as_str()) {
+                manifests.push(path);
             }
         }
     }
 
-    // Also look in common subdirectories
-    for subdir in &["src", "app", "server", "client", "backend", "frontend", "api"] {
+    // Recursively search common subdirectories up to depth 3
+    let search_dirs = ["src", "app", "server", "client", "backend", "frontend", "api", "lib", "cmd", "pkg", "internal", "modules", "packages"];
+    for subdir in &search_dirs {
         let sub_path = project_path.join(subdir);
         if sub_path.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&sub_path) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        continue;
-                    }
-                    let file_name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| n.to_lowercase())
-                        .unwrap_or_default();
-                    if file_name == "cargo.toml" || file_name == "package.json" {
-                        manifests.push(path);
-                    }
-                }
-            }
+            find_manifests_recursive(&sub_path, &manifest_names, &mut manifests, 0, 3);
         }
     }
 
     manifests
+}
+
+fn find_manifests_recursive(dir: &Path, manifest_names: &[&str], manifests: &mut Vec<PathBuf>, depth: usize, max_depth: usize) {
+    if depth > max_depth {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Skip node_modules, target, .git, vendor
+                let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if matches!(dir_name, "node_modules" | "target" | ".git" | "vendor" | "build" | "dist") {
+                    continue;
+                }
+                find_manifests_recursive(&path, manifest_names, manifests, depth + 1, max_depth);
+            } else {
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.to_lowercase())
+                    .unwrap_or_default();
+                if manifest_names.contains(&file_name.as_str()) {
+                    manifests.push(path);
+                }
+            }
+        }
+    }
 }
 
 /// Parse dependencies from a manifest file based on its name
@@ -450,6 +690,10 @@ fn parse_manifest(path: &Path) -> Result<Vec<Dependency>> {
         "cargo.toml" => parse_cargo_toml(path),
         "package.json" => parse_package_json(path),
         "requirements.txt" => parse_requirements_txt(path),
+        "go.mod" => parse_go_mod(path),
+        "gemfile" => parse_gemfile(path),
+        "composer.json" => parse_composer_json(path),
+        "pubspec.yaml" => parse_pubspec_yaml(path),
         _ => Ok(Vec::new()),
     }
 }

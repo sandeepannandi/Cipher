@@ -9,6 +9,7 @@ use colored::*;
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use regex::Regex;
+use serde::Serialize;
 use std::path::Path;
 
 /// A single vulnerability detection pattern
@@ -522,18 +523,25 @@ pub async fn run_review(
     let filtered = filter_findings(report.findings.clone(), min_severity, min_confidence, max_show);
 
     // Handle format/output
-    if format == "sarif" {
-        println!(
-            "  {} SARIF output is not yet implemented. Showing terminal output instead.",
-            "[!]".yellow()
-        );
-    }
-    if let Some(out_path) = output {
-        println!(
-            "  {} Output will be written to {}",
-            "[FILE]".cyan(),
-            out_path.yellow()
-        );
+    if format == "sarif" || format == "json" {
+        let output_str = if format == "sarif" {
+            generate_sarif(&report, &canonical_path)
+        } else {
+            generate_review_json(&report)
+        };
+
+        if let Some(out_path) = output {
+            std::fs::write(out_path, &output_str)?;
+            println!(
+                "  {} {} output written to {}",
+                "[FILE]".cyan(),
+                format.to_uppercase().yellow().bold(),
+                out_path.yellow()
+            );
+        } else {
+            println!("{}", output_str);
+        }
+        return Ok(report);
     }
 
     // Display results
@@ -894,6 +902,180 @@ fn parse_ai_findings(
     }
 
     Ok(findings)
+}
+
+// ── SARIF Output Generator ──────────────────────────────────────────
+
+/// SARIF-compatible severity level mapping
+fn sarif_level(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Critical => "error",
+        Severity::High => "error",
+        Severity::Medium => "warning",
+        Severity::Low => "note",
+        Severity::Info => "note",
+    }
+}
+
+/// SARIF result-level entry
+#[derive(Serialize)]
+struct SarifResult {
+    #[serde(rename = "ruleId")]
+    rule_id: String,
+    level: String,
+    message: SarifMessage,
+    locations: Vec<SarifLocation>,
+}
+
+#[derive(Serialize)]
+struct SarifMessage {
+    text: String,
+}
+
+#[derive(Serialize)]
+struct SarifLocation {
+    #[serde(rename = "physicalLocation")]
+    physical_location: SarifPhysicalLocation,
+}
+
+#[derive(Serialize)]
+struct SarifPhysicalLocation {
+    #[serde(rename = "artifactLocation")]
+    artifact_location: SarifArtifactLocation,
+    region: Option<SarifRegion>,
+}
+
+#[derive(Serialize)]
+struct SarifArtifactLocation {
+    uri: String,
+    #[serde(rename = "uriBaseId", skip_serializing_if = "Option::is_none")]
+    uri_base_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SarifRegion {
+    #[serde(rename = "startLine")]
+    start_line: usize,
+    snippet: Option<SarifSnippet>,
+}
+
+#[derive(Serialize)]
+struct SarifSnippet {
+    text: String,
+}
+
+/// Generate a SARIF 2.1.0 JSON string from a FindingReport
+pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> String {
+    let results: Vec<SarifResult> = report
+        .findings
+        .iter()
+        .map(|f| {
+            let file_uri = f
+                .file_path
+                .as_ref()
+                .and_then(|fp| std::path::Path::new(fp).canonicalize().ok())
+                .map(|p| format!("file:///{}", p.to_string_lossy().replace("\\", "/")))
+                .unwrap_or_else(|| format!("file:///{}", project_path.to_string_lossy().replace("\\", "/")));
+
+            let snippet = f.code_snippet.as_ref().map(|s| SarifSnippet {
+                text: s.clone(),
+            });
+
+            let region = f.line_number.map(|ln| SarifRegion {
+                start_line: ln,
+                snippet,
+            });
+
+            SarifResult {
+                rule_id: f.title.clone(),
+                level: sarif_level(f.severity).to_string(),
+                message: SarifMessage {
+                    text: format!("{}\n\n**Remediation:** {}", f.description, f.remediation.as_deref().unwrap_or("Not specified")),
+                },
+                locations: vec![SarifLocation {
+                    physical_location: SarifPhysicalLocation {
+                        artifact_location: SarifArtifactLocation {
+                            uri: file_uri,
+                            uri_base_id: None,
+                        },
+                        region,
+                    },
+                }],
+            }
+        })
+        .collect();
+
+    #[derive(Serialize)]
+    struct SarifRoot {
+        #[serde(rename = "$schema")]
+        schema: String,
+        version: String,
+        runs: Vec<SarifRun>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifRun {
+        tool: SarifTool,
+        results: Vec<SarifResult>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifacts: Option<Vec<SarifArtifact>>,
+        #[serde(rename = "columnKind")]
+        column_kind: String,
+        properties: SarifProperties,
+    }
+
+    #[derive(Serialize)]
+    struct SarifTool {
+        driver: SarifDriver,
+    }
+
+    #[derive(Serialize)]
+    struct SarifDriver {
+        name: String,
+        #[serde(rename = "informationUri")]
+        information_uri: String,
+        version: String,
+    }
+
+    #[derive(Serialize)]
+    struct SarifArtifact {
+        location: SarifArtifactLocation,
+    }
+
+    #[derive(Serialize)]
+    struct SarifProperties {
+        #[serde(rename = "totalFindings")]
+        total_findings: usize,
+    }
+
+    let root = SarifRoot {
+        schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
+        version: "2.1.0".to_string(),
+        runs: vec![SarifRun {
+            tool: SarifTool {
+                driver: SarifDriver {
+                    name: "CipherAI".to_string(),
+                    information_uri: "https://github.com/sandeepannandi/Cipher".to_string(),
+                    version: "0.1.0".to_string(),
+                },
+            },
+            results,
+            artifacts: None,
+            column_kind: "utf16CodeUnits".to_string(),
+            properties: SarifProperties {
+                total_findings: report.len(),
+            },
+        }],
+    };
+
+    serde_json::to_string_pretty(&root).unwrap_or_else(|_| "{}".to_string())
+}
+
+// ── JSON Output Generator ────────────────────────────────────────────
+
+/// Generate a plain JSON string from a FindingReport (machine-readable)
+pub(crate) fn generate_review_json(report: &FindingReport) -> String {
+    serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Parse severity string
