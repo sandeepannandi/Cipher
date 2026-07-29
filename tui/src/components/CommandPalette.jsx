@@ -33,40 +33,63 @@ const COMMANDS = [
   { cmd: 'exit',         desc: 'Exit the TUI' },
 ];
 
+const MAX_VISIBLE = 10;
+
 function CommandPalette({ onSelect, onClose }) {
   const [selectedIdx, setSelectedIdx] = React.useState(0);
   const [search, setSearch] = React.useState('');
+  const [scrollOffset, setScrollOffset] = React.useState(0);
 
   const filtered = COMMANDS.filter((c) => c.cmd !== '---' && c.cmd.toLowerCase().includes(search.toLowerCase()));
+  const maxOffset = Math.max(0, filtered.length - MAX_VISIBLE);
 
   useInput((input, key) => {
     if (key.escape) { onClose(); return; }
     if (key.return && filtered[selectedIdx]) { onSelect(filtered[selectedIdx].cmd); return; }
-    if (key.upArrow) { setSelectedIdx((p) => Math.max(0, p - 1)); return; }
-    if (key.downArrow) { setSelectedIdx((p) => Math.min(filtered.length - 1, p + 1)); return; }
-    if (key.backspace || key.delete) { setSearch((p) => p.slice(0, -1)); return; }
-    if (input.length >= 1) { setSearch((p) => p + input); setSelectedIdx(0); }
+    if (key.upArrow) {
+      const newIdx = Math.max(0, selectedIdx - 1);
+      setSelectedIdx(newIdx);
+      if (newIdx < scrollOffset) setScrollOffset(newIdx);
+      return;
+    }
+    if (key.downArrow) {
+      const newIdx = Math.min(filtered.length - 1, selectedIdx + 1);
+      setSelectedIdx(newIdx);
+      if (newIdx >= scrollOffset + MAX_VISIBLE) setScrollOffset(newIdx - MAX_VISIBLE + 1);
+      return;
+    }
+    if (key.backspace || key.delete) { setSearch((p) => p.slice(0, -1)); setSelectedIdx(0); setScrollOffset(0); return; }
+    if (input.length >= 1) { setSearch((p) => p + input); setSelectedIdx(0); setScrollOffset(0); }
   });
+
+  const visible = filtered.slice(scrollOffset, scrollOffset + MAX_VISIBLE);
 
   return React.createElement(Box, {
     flexDirection: 'column', borderStyle: 'round', borderColor: 'yellow',
     padding: 1, marginLeft: 2, marginRight: 2, marginTop: 1,
+    height: MAX_VISIBLE + 5,
   },
     React.createElement(Box, { marginBottom: 1 },
       React.createElement(Text, { bold: true, color: 'yellow' }, ' Command Palette ')),
     React.createElement(Box, { borderStyle: 'single', borderColor: 'green', paddingLeft: 1, marginBottom: 1 },
       React.createElement(Text, { color: 'green' }, '> '),
       React.createElement(Text, { color: search ? 'yellow' : 'green' }, search || 'Type to filter...')),
-    ...filtered.map((cmd, i) =>
-      React.createElement(Box, {
+    scrollOffset > 0 && React.createElement(Box, {},
+      React.createElement(Text, { color: 'green', dim: true }, '  ↑ ' + scrollOffset + ' more')),
+    ...visible.map((cmd, i) => {
+      const globalIdx = scrollOffset + i;
+      return React.createElement(Box, {
         key: cmd.cmd, flexDirection: 'row',
-        backgroundColor: i === selectedIdx ? 'green' : undefined,
+        backgroundColor: globalIdx === selectedIdx ? 'green' : undefined,
       },
         React.createElement(Box, { width: 24 },
-          React.createElement(Text, { color: 'yellow', bold: i === selectedIdx }, '  ' + cmd.cmd)),
-        React.createElement(Text, { color: i === selectedIdx ? 'yellow' : 'white' }, cmd.desc))),
-    React.createElement(Box, { marginTop: 1 },
-      React.createElement(Text, { color: 'green' }, 'up/down Navigate  Enter Select  Esc Close')));
+          React.createElement(Text, { color: 'yellow', bold: globalIdx === selectedIdx }, '  ' + cmd.cmd)),
+        React.createElement(Text, { color: globalIdx === selectedIdx ? 'yellow' : 'white' }, cmd.desc));
+    }),
+    scrollOffset < maxOffset && React.createElement(Box, {},
+      React.createElement(Text, { color: 'green', dim: true }, '  ↓ ' + (filtered.length - scrollOffset - MAX_VISIBLE) + ' more')),
+    React.createElement(Box, { marginTop: 0 },
+      React.createElement(Text, { color: 'green' }, '↑↓ Navigate  Enter Select  Esc Close')));
 }
 
 module.exports.CommandPalette = CommandPalette;

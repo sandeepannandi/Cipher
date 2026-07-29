@@ -28,22 +28,40 @@ const COMMANDS = [
   { cmd: '/exit',         desc: 'Exit the TUI' },
 ];
 
+const MAX_VISIBLE = 12;
+
 function CommandHelp({ onClose }) {
-  useInput((_input, key) => { if (key.escape) onClose(); });
+  const [scrollOffset, setScrollOffset] = React.useState(0);
+  const maxOffset = Math.max(0, COMMANDS.length - MAX_VISIBLE);
+
+  useInput((_input, key) => {
+    if (key.escape) onClose();
+    if (key.upArrow) setScrollOffset((p) => Math.max(0, p - 1));
+    if (key.downArrow) setScrollOffset((p) => Math.min(maxOffset, p + 1));
+    if (key.pageUp) setScrollOffset((p) => Math.max(0, p - MAX_VISIBLE));
+    if (key.pageDown) setScrollOffset((p) => Math.min(maxOffset, p + MAX_VISIBLE));
+  });
+
+  const visible = COMMANDS.slice(scrollOffset, scrollOffset + MAX_VISIBLE);
 
   return React.createElement(Box, {
     flexDirection: 'column', borderStyle: 'round', borderColor: 'yellow',
     padding: 1, marginLeft: 2, marginRight: 2, marginTop: 1,
+    height: MAX_VISIBLE + 5,
   },
-    React.createElement(Box, { marginBottom: 1 },
+    React.createElement(Box, { marginBottom: 0 },
       React.createElement(Text, { bold: true, color: 'yellow' }, ' Commands (Esc to close) ')),
-    ...COMMANDS.map((cmd) =>
-      React.createElement(Box, { key: cmd.cmd, flexDirection: 'row', marginBottom: 0 },
+    scrollOffset > 0 && React.createElement(Box, {},
+      React.createElement(Text, { color: 'green', dim: true }, '  ↑ ' + scrollOffset + ' more' )),
+    ...visible.map((cmd) =>
+      React.createElement(Box, { key: cmd.cmd, flexDirection: 'row' },
         React.createElement(Box, { width: 24 },
           React.createElement(Text, { color: 'yellow', bold: true }, '  ' + cmd.cmd)),
         React.createElement(Text, { color: 'white' }, cmd.desc))),
-    React.createElement(Box, { marginTop: 1 },
-      React.createElement(Text, { color: 'green' }, '  Esc=close/cancel  Ctrl+K=palette  up/down=history')));
+    scrollOffset < maxOffset && React.createElement(Box, {},
+      React.createElement(Text, { color: 'green', dim: true }, '  ↓ ' + (COMMANDS.length - scrollOffset - MAX_VISIBLE) + ' more')),
+    React.createElement(Box, { marginTop: 0 },
+      React.createElement(Text, { color: 'green' }, '  ↑↓ scroll  Esc=close  Ctrl+K=palette  up/down=history')));
 }
 
 module.exports.CommandHelp = CommandHelp;

@@ -172,11 +172,14 @@ var require_InputBox = __commonJS({
       { cmd: "clear", desc: "Clear messages" },
       { cmd: "exit", desc: "Exit the TUI" }
     ];
+    var MAX_VISIBLE = 10;
     function InputBox2({ value, onChange, onSubmit, isRunning, showAskPrompt, onNavigateHistory }) {
       const [selectedIdx, setSelectedIdx] = React2.useState(0);
+      const [dropdownScroll, setDropdownScroll] = React2.useState(0);
       const showDropdown = value.trim().startsWith("/") && value.trim().length > 0;
       const filterText = value.trim().slice(1).toLowerCase();
       const filtered = showDropdown ? COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(filterText)) : [];
+      const maxDropdownScroll = Math.max(0, filtered.length - MAX_VISIBLE);
       useInput2((input, key) => {
         if (isRunning) return;
         if (key.upArrow && (!showDropdown || filtered.length === 0)) {
@@ -204,11 +207,15 @@ var require_InputBox = __commonJS({
         }
         if (showDropdown && filtered.length > 0) {
           if (key.upArrow) {
-            setSelectedIdx((p) => Math.max(0, p - 1));
+            const newIdx = Math.max(0, selectedIdx - 1);
+            setSelectedIdx(newIdx);
+            if (newIdx < dropdownScroll) setDropdownScroll(newIdx);
             return;
           }
           if (key.downArrow) {
-            setSelectedIdx((p) => Math.min(filtered.length - 1, p + 1));
+            const newIdx = Math.min(filtered.length - 1, selectedIdx + 1);
+            setSelectedIdx(newIdx);
+            if (newIdx >= dropdownScroll + MAX_VISIBLE) setDropdownScroll(newIdx - MAX_VISIBLE + 1);
             return;
           }
         }
@@ -219,16 +226,20 @@ var require_InputBox = __commonJS({
         if (key.backspace || key.delete) {
           onChange(value.slice(0, -1));
           setSelectedIdx(0);
+          setDropdownScroll(0);
           return;
         }
         if (input.length >= 1 && !key.ctrl) {
           onChange(value + input);
           setSelectedIdx(0);
+          setDropdownScroll(0);
         }
       });
       React2.useEffect(() => {
         setSelectedIdx(0);
+        setDropdownScroll(0);
       }, [value]);
+      const visible = filtered.slice(dropdownScroll, dropdownScroll + MAX_VISIBLE);
       const isEmpty = value.trim().length === 0;
       const startsWithSlash = value.trim().startsWith("/");
       const cmdWord = startsWithSlash ? value.trim().slice(1).split(/\s+/)[0] : "";
@@ -248,22 +259,29 @@ var require_InputBox = __commonJS({
             borderColor: "yellow",
             marginLeft: 1,
             marginRight: 1,
-            marginBottom: 0
+            marginBottom: 0,
+            height: MAX_VISIBLE + 2
           },
-          ...filtered.map(
-            (cmd, i) => React2.createElement(
+          dropdownScroll > 0 && React2.createElement(
+            Box2,
+            {},
+            React2.createElement(Text2, { color: "green", dim: true }, "  \u2191 " + dropdownScroll + " more")
+          ),
+          ...visible.map((cmd, i) => {
+            const globalIdx = dropdownScroll + i;
+            return React2.createElement(
               Box2,
               { key: cmd.cmd, flexDirection: "row" },
               React2.createElement(Text2, {
-                color: i === selectedIdx ? "yellow" : "white",
-                bold: i === selectedIdx
+                color: globalIdx === selectedIdx ? "yellow" : "white",
+                bold: globalIdx === selectedIdx
               }, "  " + cmd.cmd.padEnd(22) + cmd.desc)
-            )
-          ),
-          React2.createElement(
+            );
+          }),
+          dropdownScroll < maxDropdownScroll && React2.createElement(
             Box2,
-            { marginTop: 0 },
-            React2.createElement(Text2, { color: "green", dim: true }, "  up/down navigate  Enter select")
+            {},
+            React2.createElement(Text2, { color: "green", dim: true }, "  \u2193 " + (filtered.length - dropdownScroll - MAX_VISIBLE) + " more")
           )
         ),
         isModelCommand && modelSuggestions.length > 0 && React2.createElement(
@@ -274,7 +292,8 @@ var require_InputBox = __commonJS({
             borderColor: "yellow",
             marginLeft: 1,
             marginRight: 1,
-            marginBottom: 0
+            marginBottom: 0,
+            height: modelSuggestions.length + 1
           },
           ...modelSuggestions.map((m, i) => React2.createElement(
             Box2,
@@ -370,10 +389,18 @@ var require_CommandHelp = __commonJS({
       { cmd: "/clear", desc: "Clear messages" },
       { cmd: "/exit", desc: "Exit the TUI" }
     ];
+    var MAX_VISIBLE = 12;
     function CommandHelp2({ onClose }) {
+      const [scrollOffset, setScrollOffset] = React2.useState(0);
+      const maxOffset = Math.max(0, COMMANDS.length - MAX_VISIBLE);
       useInput2((_input, key) => {
         if (key.escape) onClose();
+        if (key.upArrow) setScrollOffset((p) => Math.max(0, p - 1));
+        if (key.downArrow) setScrollOffset((p) => Math.min(maxOffset, p + 1));
+        if (key.pageUp) setScrollOffset((p) => Math.max(0, p - MAX_VISIBLE));
+        if (key.pageDown) setScrollOffset((p) => Math.min(maxOffset, p + MAX_VISIBLE));
       });
+      const visible = COMMANDS.slice(scrollOffset, scrollOffset + MAX_VISIBLE);
       return React2.createElement(
         Box2,
         {
@@ -383,16 +410,22 @@ var require_CommandHelp = __commonJS({
           padding: 1,
           marginLeft: 2,
           marginRight: 2,
-          marginTop: 1
+          marginTop: 1,
+          height: MAX_VISIBLE + 5
         },
         React2.createElement(
           Box2,
-          { marginBottom: 1 },
+          { marginBottom: 0 },
           React2.createElement(Text2, { bold: true, color: "yellow" }, " Commands (Esc to close) ")
         ),
-        ...COMMANDS.map((cmd) => React2.createElement(
+        scrollOffset > 0 && React2.createElement(
           Box2,
-          { key: cmd.cmd, flexDirection: "row", marginBottom: 0 },
+          {},
+          React2.createElement(Text2, { color: "green", dim: true }, "  \u2191 " + scrollOffset + " more")
+        ),
+        ...visible.map((cmd) => React2.createElement(
+          Box2,
+          { key: cmd.cmd, flexDirection: "row" },
           React2.createElement(
             Box2,
             { width: 24 },
@@ -400,10 +433,15 @@ var require_CommandHelp = __commonJS({
           ),
           React2.createElement(Text2, { color: "white" }, cmd.desc)
         )),
+        scrollOffset < maxOffset && React2.createElement(
+          Box2,
+          {},
+          React2.createElement(Text2, { color: "green", dim: true }, "  \u2193 " + (COMMANDS.length - scrollOffset - MAX_VISIBLE) + " more")
+        ),
         React2.createElement(
           Box2,
-          { marginTop: 1 },
-          React2.createElement(Text2, { color: "green" }, "  Esc=close/cancel  Ctrl+K=palette  up/down=history")
+          { marginTop: 0 },
+          React2.createElement(Text2, { color: "green" }, "  \u2191\u2193 scroll  Esc=close  Ctrl+K=palette  up/down=history")
         )
       );
     }
@@ -446,10 +484,13 @@ var require_CommandPalette = __commonJS({
       { cmd: "clear", desc: "Clear messages" },
       { cmd: "exit", desc: "Exit the TUI" }
     ];
+    var MAX_VISIBLE = 10;
     function CommandPalette2({ onSelect, onClose }) {
       const [selectedIdx, setSelectedIdx] = React2.useState(0);
       const [search, setSearch] = React2.useState("");
+      const [scrollOffset, setScrollOffset] = React2.useState(0);
       const filtered = COMMANDS.filter((c) => c.cmd !== "---" && c.cmd.toLowerCase().includes(search.toLowerCase()));
+      const maxOffset = Math.max(0, filtered.length - MAX_VISIBLE);
       useInput2((input, key) => {
         if (key.escape) {
           onClose();
@@ -460,22 +501,30 @@ var require_CommandPalette = __commonJS({
           return;
         }
         if (key.upArrow) {
-          setSelectedIdx((p) => Math.max(0, p - 1));
+          const newIdx = Math.max(0, selectedIdx - 1);
+          setSelectedIdx(newIdx);
+          if (newIdx < scrollOffset) setScrollOffset(newIdx);
           return;
         }
         if (key.downArrow) {
-          setSelectedIdx((p) => Math.min(filtered.length - 1, p + 1));
+          const newIdx = Math.min(filtered.length - 1, selectedIdx + 1);
+          setSelectedIdx(newIdx);
+          if (newIdx >= scrollOffset + MAX_VISIBLE) setScrollOffset(newIdx - MAX_VISIBLE + 1);
           return;
         }
         if (key.backspace || key.delete) {
           setSearch((p) => p.slice(0, -1));
+          setSelectedIdx(0);
+          setScrollOffset(0);
           return;
         }
         if (input.length >= 1) {
           setSearch((p) => p + input);
           setSelectedIdx(0);
+          setScrollOffset(0);
         }
       });
+      const visible = filtered.slice(scrollOffset, scrollOffset + MAX_VISIBLE);
       return React2.createElement(
         Box2,
         {
@@ -485,7 +534,8 @@ var require_CommandPalette = __commonJS({
           padding: 1,
           marginLeft: 2,
           marginRight: 2,
-          marginTop: 1
+          marginTop: 1,
+          height: MAX_VISIBLE + 5
         },
         React2.createElement(
           Box2,
@@ -498,24 +548,37 @@ var require_CommandPalette = __commonJS({
           React2.createElement(Text2, { color: "green" }, "> "),
           React2.createElement(Text2, { color: search ? "yellow" : "green" }, search || "Type to filter...")
         ),
-        ...filtered.map((cmd, i) => React2.createElement(
+        scrollOffset > 0 && React2.createElement(
           Box2,
-          {
-            key: cmd.cmd,
-            flexDirection: "row",
-            backgroundColor: i === selectedIdx ? "green" : void 0
-          },
-          React2.createElement(
+          {},
+          React2.createElement(Text2, { color: "green", dim: true }, "  \u2191 " + scrollOffset + " more")
+        ),
+        ...visible.map((cmd, i) => {
+          const globalIdx = scrollOffset + i;
+          return React2.createElement(
             Box2,
-            { width: 24 },
-            React2.createElement(Text2, { color: "yellow", bold: i === selectedIdx }, "  " + cmd.cmd)
-          ),
-          React2.createElement(Text2, { color: i === selectedIdx ? "yellow" : "white" }, cmd.desc)
-        )),
+            {
+              key: cmd.cmd,
+              flexDirection: "row",
+              backgroundColor: globalIdx === selectedIdx ? "green" : void 0
+            },
+            React2.createElement(
+              Box2,
+              { width: 24 },
+              React2.createElement(Text2, { color: "yellow", bold: globalIdx === selectedIdx }, "  " + cmd.cmd)
+            ),
+            React2.createElement(Text2, { color: globalIdx === selectedIdx ? "yellow" : "white" }, cmd.desc)
+          );
+        }),
+        scrollOffset < maxOffset && React2.createElement(
+          Box2,
+          {},
+          React2.createElement(Text2, { color: "green", dim: true }, "  \u2193 " + (filtered.length - scrollOffset - MAX_VISIBLE) + " more")
+        ),
         React2.createElement(
           Box2,
-          { marginTop: 1 },
-          React2.createElement(Text2, { color: "green" }, "up/down Navigate  Enter Select  Esc Close")
+          { marginTop: 0 },
+          React2.createElement(Text2, { color: "green" }, "\u2191\u2193 Navigate  Enter Select  Esc Close")
         )
       );
     }

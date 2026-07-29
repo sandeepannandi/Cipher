@@ -30,12 +30,16 @@ const COMMANDS = [
   { cmd: 'exit',         desc: 'Exit the TUI' },
 ];
 
+const MAX_VISIBLE = 10;
+
 function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt, onNavigateHistory }) {
   const [selectedIdx, setSelectedIdx] = React.useState(0);
+  const [dropdownScroll, setDropdownScroll] = React.useState(0);
 
   const showDropdown = value.trim().startsWith('/') && value.trim().length > 0;
   const filterText = value.trim().slice(1).toLowerCase();
   const filtered = showDropdown ? COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(filterText)) : [];
+  const maxDropdownScroll = Math.max(0, filtered.length - MAX_VISIBLE);
 
   useInput((input, key) => {
     if (isRunning) return;
@@ -66,15 +70,27 @@ function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt, onNavig
       return;
     }
     if (showDropdown && filtered.length > 0) {
-      if (key.upArrow) { setSelectedIdx((p) => Math.max(0, p - 1)); return; }
-      if (key.downArrow) { setSelectedIdx((p) => Math.min(filtered.length - 1, p + 1)); return; }
+      if (key.upArrow) {
+        const newIdx = Math.max(0, selectedIdx - 1);
+        setSelectedIdx(newIdx);
+        if (newIdx < dropdownScroll) setDropdownScroll(newIdx);
+        return;
+      }
+      if (key.downArrow) {
+        const newIdx = Math.min(filtered.length - 1, selectedIdx + 1);
+        setSelectedIdx(newIdx);
+        if (newIdx >= dropdownScroll + MAX_VISIBLE) setDropdownScroll(newIdx - MAX_VISIBLE + 1);
+        return;
+      }
     }
     if (key.escape) { onChange(''); return; }
-    if (key.backspace || key.delete) { onChange(value.slice(0, -1)); setSelectedIdx(0); return; }
-    if (input.length >= 1 && !key.ctrl) { onChange(value + input); setSelectedIdx(0); }
+    if (key.backspace || key.delete) { onChange(value.slice(0, -1)); setSelectedIdx(0); setDropdownScroll(0); return; }
+    if (input.length >= 1 && !key.ctrl) { onChange(value + input); setSelectedIdx(0); setDropdownScroll(0); }
   });
 
-  React.useEffect(() => { setSelectedIdx(0); }, [value]);
+  React.useEffect(() => { setSelectedIdx(0); setDropdownScroll(0); }, [value]);
+
+  const visible = filtered.slice(dropdownScroll, dropdownScroll + MAX_VISIBLE);
 
   const isEmpty = value.trim().length === 0;
   const startsWithSlash = value.trim().startsWith('/');
@@ -93,20 +109,25 @@ function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt, onNavig
     showDropdown && filtered.length > 0 && React.createElement(Box, {
       flexDirection: 'column', borderStyle: 'single', borderColor: 'yellow',
       marginLeft: 1, marginRight: 1, marginBottom: 0,
+      height: MAX_VISIBLE + 2,
     },
-      ...filtered.map((cmd, i) =>
-        React.createElement(Box, { key: cmd.cmd, flexDirection: 'row' },
+      dropdownScroll > 0 && React.createElement(Box, {},
+        React.createElement(Text, { color: 'green', dim: true }, '  ↑ ' + dropdownScroll + ' more')),
+      ...visible.map((cmd, i) => {
+        const globalIdx = dropdownScroll + i;
+        return React.createElement(Box, { key: cmd.cmd, flexDirection: 'row' },
           React.createElement(Text, {
-            color: i === selectedIdx ? 'yellow' : 'white',
-            bold: i === selectedIdx,
-          }, '  ' + cmd.cmd.padEnd(22) + cmd.desc))
-      ),
-      React.createElement(Box, { marginTop: 0 },
-        React.createElement(Text, { color: 'green', dim: true }, '  up/down navigate  Enter select'))),
+            color: globalIdx === selectedIdx ? 'yellow' : 'white',
+            bold: globalIdx === selectedIdx,
+          }, '  ' + cmd.cmd.padEnd(22) + cmd.desc));
+      }),
+      dropdownScroll < maxDropdownScroll && React.createElement(Box, {},
+        React.createElement(Text, { color: 'green', dim: true }, '  ↓ ' + (filtered.length - dropdownScroll - MAX_VISIBLE) + ' more'))),
 
     isModelCommand && modelSuggestions.length > 0 && React.createElement(Box, {
       flexDirection: 'column', borderStyle: 'single', borderColor: 'yellow',
       marginLeft: 1, marginRight: 1, marginBottom: 0,
+      height: modelSuggestions.length + 1,
     },
       ...modelSuggestions.map((m, i) =>
         React.createElement(Box, { key: m, flexDirection: 'row' },
