@@ -260,7 +260,7 @@ var require_InputBox = __commonJS({
             marginLeft: 1,
             marginRight: 1,
             marginBottom: 0,
-            height: MAX_VISIBLE + 2
+            height: MAX_VISIBLE + 4
           },
           dropdownScroll > 0 && React2.createElement(
             Box2,

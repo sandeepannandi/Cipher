@@ -109,7 +109,7 @@ function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt, onNavig
     showDropdown && filtered.length > 0 && React.createElement(Box, {
       flexDirection: 'column', borderStyle: 'single', borderColor: 'yellow',
       marginLeft: 1, marginRight: 1, marginBottom: 0,
-      height: MAX_VISIBLE + 2,
+      height: MAX_VISIBLE + 4,
     },
       dropdownScroll > 0 && React.createElement(Box, {},
         React.createElement(Text, { color: 'green', dim: true }, '  ↑ ' + dropdownScroll + ' more')),
