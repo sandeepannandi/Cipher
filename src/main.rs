@@ -15,6 +15,7 @@ mod rag;
 mod report;
 mod review;
 mod scan;
+mod sbom;
 mod secrets;
 mod zeroday;
 
@@ -258,6 +259,21 @@ enum Commands {
         no_flow: bool,
     },
 
+    /// Generate a Software Bill of Materials (SBOM) for your project
+    ///
+    /// Scans all dependency manifests and generates a CycloneDX or SPDX
+    /// compliant bill of materials in JSON format.
+    #[command(visible_alias = "bom")]
+    Sbom {
+        /// SBOM format: cyclonedx (default) or spdx
+        #[arg(long = "format", default_value = "cyclonedx")]
+        format: String,
+
+        /// Write output to a file instead of stdout
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -357,6 +373,10 @@ async fn main() -> Result<()> {
         }
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
+        }
+        Commands::Sbom { format, output } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            sbom::run_sbom(&project_path, &format, output.as_deref()).await?;
         }
         Commands::Zeroday { use_ai, model, format, output, anomaly_only, no_flow } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());

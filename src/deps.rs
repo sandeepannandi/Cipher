@@ -9,14 +9,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// A discovered dependency with version info
-#[derive(Debug, Clone)]
-struct Dependency {
-    name: String,
-    version: String,
-    ecosystem: String,
-    manifest_file: PathBuf,
-    #[allow(dead_code)]
-    is_dev: bool,
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Dependency {
+    pub name: String,
+    pub version: String,
+    pub ecosystem: String,
+    pub manifest_file: PathBuf,
+    pub is_dev: bool,
 }
 
 /// OSV.dev API response for a query
@@ -611,7 +610,7 @@ async fn query_osv(ecosystem: &str, name: &str, version: &str) -> Result<Vec<(St
 }
 
 /// Find dependency manifests in a project directory
-fn find_manifests(project_path: &Path) -> Vec<PathBuf> {
+pub fn find_manifests(project_path: &Path) -> Vec<PathBuf> {
     let mut manifests = Vec::new();
     let manifest_names = [
         "cargo.toml", "package.json", "requirements.txt",
@@ -679,7 +678,7 @@ fn find_manifests_recursive(dir: &Path, manifest_names: &[&str], manifests: &mut
 }
 
 /// Parse dependencies from a manifest file based on its name
-fn parse_manifest(path: &Path) -> Result<Vec<Dependency>> {
+pub fn parse_manifest(path: &Path) -> Result<Vec<Dependency>> {
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())

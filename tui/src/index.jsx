@@ -9,7 +9,7 @@ const { runCommand } = require('./commands/runner');
 
 const MODELS = ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'];
 
-const COMMAND_LIST = ['init', 'review', 'deps', 'secrets', 'ask', 'report', 'fix', 'attack', 'status', 'ci', 'config', 'zeroday'];
+const COMMAND_LIST = ['init', 'review', 'deps', 'secrets', 'ask', 'report', 'fix', 'attack', 'status', 'ci', 'config', 'zeroday', 'sbom'];
 
 function isQuestion(text) {
   const qWords = ['what', 'how', 'why', 'is', 'can', 'does', 'are', 'do', 'will',
@@ -160,6 +160,7 @@ function App() {
       fix: 'Generating fix...', attack: 'Analyzing attack paths...', status: 'Checking status...',
       ci: 'Running all scans...', config: 'Configuring...',
       zeroday: 'Running zero-day analysis...',
+      sbom: 'Generating SBOM...',
     };
     addMessage('command', labels[command] || 'Running ' + command + '...');
     setIsRunning(true);

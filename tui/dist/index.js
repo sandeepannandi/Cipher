@@ -175,6 +175,9 @@ var require_InputBox = __commonJS({
       { cmd: "zeroday --no-flow", desc: "Zero-day: skip taint flow analysis" },
       { cmd: "zeroday --format json", desc: "Zero-day \u2192 JSON output" },
       { cmd: "zeroday --format sarif", desc: "Zero-day \u2192 SARIF JSON output" },
+      { cmd: "sbom", desc: "Generate CycloneDX SBOM" },
+      { cmd: "sbom --format spdx", desc: "Generate SPDX SBOM" },
+      { cmd: "sbom --output bom.json", desc: "Write SBOM to file" },
       { cmd: "model", desc: "Show or switch AI model" },
       { cmd: "status", desc: "Show index and API key status" },
       { cmd: "clear", desc: "Clear messages" },
@@ -400,6 +403,9 @@ var require_CommandHelp = __commonJS({
       { cmd: "/zeroday --no-flow", desc: "Zero-day: skip taint flow analysis" },
       { cmd: "/zeroday --format json", desc: "Zero-day \u2192 JSON output" },
       { cmd: "/zeroday --format sarif", desc: "Zero-day \u2192 SARIF JSON output" },
+      { cmd: "/sbom", desc: "Generate CycloneDX SBOM" },
+      { cmd: "/sbom --format spdx", desc: "Generate SPDX SBOM" },
+      { cmd: "/sbom --output bom.json", desc: "Write SBOM to file" },
       { cmd: "/model", desc: "Show or switch AI model" },
       { cmd: "/status", desc: "Show index and API key status" },
       { cmd: "/clear", desc: "Clear messages" },
@@ -500,6 +506,9 @@ var require_CommandPalette = __commonJS({
       { cmd: "zeroday --no-flow", desc: "Zero-day: skip taint flow analysis" },
       { cmd: "zeroday --format json", desc: "Zero-day \u2192 JSON output" },
       { cmd: "zeroday --format sarif", desc: "Zero-day \u2192 SARIF JSON output" },
+      { cmd: "sbom", desc: "Generate CycloneDX SBOM" },
+      { cmd: "sbom --format spdx", desc: "Generate SPDX SBOM" },
+      { cmd: "sbom --output bom.json", desc: "Write SBOM to file" },
       { cmd: "---", desc: "---" },
       { cmd: "model", desc: "Show or switch AI model" },
       ...MODELS2.map((m) => ({ cmd: "model " + m, desc: "Switch to " + m })),
@@ -793,7 +802,7 @@ var { CommandHelp } = require_CommandHelp();
 var { CommandPalette } = require_CommandPalette();
 var { runCommand } = require_runner();
 var MODELS = ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"];
-var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "status", "ci", "config", "zeroday"];
+var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "status", "ci", "config", "zeroday", "sbom"];
 function isQuestion(text) {
   const qWords = [
     "what",
@@ -990,7 +999,8 @@ function App() {
       status: "Checking status...",
       ci: "Running all scans...",
       config: "Configuring...",
-      zeroday: "Running zero-day analysis..."
+      zeroday: "Running zero-day analysis...",
+      sbom: "Generating SBOM..."
     };
     addMessage("command", labels[command] || "Running " + command + "...");
     setIsRunning(true);
