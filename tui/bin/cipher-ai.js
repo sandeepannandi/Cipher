@@ -27,12 +27,12 @@ function findBinaryPath() {
   const globalBin = path.join(homeDir, '.cipher-ai', 'bin', binaryName);
   if (fs.existsSync(globalBin)) return path.resolve(globalBin);
 
-  // Priority 3: System PATH
+  // Priority 3: System PATH (with timeout to prevent hanging)
   try {
     const which = execFileSync(
       os.platform() === 'win32' ? 'where' : 'which',
       [binaryName],
-      { encoding: 'utf-8', stdio: 'pipe' }
+      { encoding: 'utf-8', stdio: 'pipe', timeout: 5000 }
     );
     const found = which.split('\n')[0].trim();
     if (found && fs.existsSync(found)) return found;
@@ -55,14 +55,24 @@ if (args.length > 0) {
     );
     process.exit(1);
   }
+
+  // For long-running commands like review/secrets/attack, timeout at 5 minutes
+  // to prevent the terminal from hanging indefinitely
+  const TIMEOUT_MS = 300_000; // 5 minutes
+
   try {
     execFileSync(binaryPath, args, {
       encoding: 'utf-8',
       stdio: 'inherit',
       cwd: process.cwd(),
+      timeout: TIMEOUT_MS,
     });
     process.exit(0);
   } catch (err) {
+    if (err.killed) {
+      console.error('\nCommand timed out after ' + (TIMEOUT_MS / 1000) + 's. ' +
+        'Try running on a smaller directory or see cipher-ai --help for filter options.');
+    }
     process.exit(err.status || 1);
   }
 }

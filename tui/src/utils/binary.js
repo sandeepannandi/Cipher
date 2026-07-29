@@ -36,7 +36,7 @@ function findBinaryPath() {
     const which = require('child_process').execFileSync(
       os.platform() === 'win32' ? 'where' : 'which',
       [binaryName],
-      { encoding: 'utf-8', stdio: 'pipe' }
+      { encoding: 'utf-8', stdio: 'pipe', timeout: 5000 }
     );
     const found = which.split('\n')[0].trim();
     if (found && fs.existsSync(found)) {

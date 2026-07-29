@@ -3,6 +3,7 @@ use crate::finding::{
 };
 use crate::groq::GroqClient;
 use crate::indexer;
+use crate::scan;
 use anyhow::Result;
 use colored::*;
 use ignore::WalkBuilder;
@@ -404,22 +405,34 @@ pub(crate) async fn collect_review_findings(
     let patterns = build_vuln_patterns();
     let mut report = FindingReport::new("security-review", canonical_path.to_string_lossy());
 
-    // Walk source files
+    // Walk source files with exclusions, depth limit, and file cap
     let walker = WalkBuilder::new(&canonical_path)
         .git_ignore(true)
         .git_global(true)
         .hidden(false)
+        .max_depth(Some(scan::MAX_WALK_DEPTH))
         .build();
 
+    let mut file_count = 0;
     for result in walker {
+        if file_count >= scan::MAX_SCAN_FILES {
+            eprintln!(
+                "  {} Reached scan limit of {} files. Some files may not be checked.",
+                "[!]".yellow(),
+                scan::MAX_SCAN_FILES
+            );
+            break;
+        }
+
         match result {
             Ok(entry) => {
                 let path = entry.path();
-                if path.is_file() && !is_binary(path) {
+                if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
                     let ext = file_extension(path);
                     if !ext.is_empty() && is_supported_extension(&ext) {
                         let findings = scan_file_for_vulns(path, &patterns);
                         report.extend(findings);
+                        file_count += 1;
                     }
                 }
             }
@@ -449,6 +462,8 @@ pub async fn run_review(
     max_findings: Option<usize>,
     min_severity: Option<Severity>,
     min_confidence: Option<Confidence>,
+    format: &str,
+    output: Option<&str>,
 ) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
@@ -505,6 +520,21 @@ pub async fn run_review(
     // Apply filters
     let max_show = max_findings.unwrap_or(30);
     let filtered = filter_findings(report.findings.clone(), min_severity, min_confidence, max_show);
+
+    // Handle format/output
+    if format == "sarif" {
+        println!(
+            "  {} SARIF output is not yet implemented. Showing terminal output instead.",
+            "[!]".yellow()
+        );
+    }
+    if let Some(out_path) = output {
+        println!(
+            "  {} Output will be written to {}",
+            "[FILE]".cyan(),
+            out_path.yellow()
+        );
+    }
 
     // Display results
     println!();
@@ -934,17 +964,4 @@ fn parse_owasp(s: Option<&str>) -> Option<OwaspCategory> {
     }
 }
 
-/// Check if a file is binary by looking for null bytes
-fn is_binary(path: &Path) -> bool {
-    use std::io::Read;
-    let mut file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return true,
-    };
-    let mut buf = [0u8; 1024];
-    let n = match file.read(&mut buf) {
-        Ok(n) => n,
-        Err(_) => return true,
-    };
-    buf[..n].contains(&0u8)
-}
+

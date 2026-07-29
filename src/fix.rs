@@ -29,6 +29,7 @@ pub async fn run_fix(
     target_file: Option<&str>,
     fix_all: bool,
     list_only: bool,
+    dry_run: bool,
     auto_apply: bool,
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
@@ -105,6 +106,18 @@ pub async fn run_fix(
             &filtered.iter().map(|f| f as &Finding).collect::<Vec<&Finding>>(),
             &canonical_path,
         );
+        return Ok(());
+    }
+
+    // Step 3b: If --dry-run, show findings and their planned fixes
+    if dry_run {
+        println!("  {} Dry-run mode — showing fixable findings without applying:", "[DRY]".cyan().bold());
+        print_fixable_findings(
+            &filtered.iter().map(|f| f as &Finding).collect::<Vec<&Finding>>(),
+            &canonical_path,
+        );
+        println!();
+        println!("  {} Run without --dry-run to apply these fixes.", "[IDEA]".bold());
         return Ok(());
     }
 

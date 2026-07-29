@@ -1,3 +1,4 @@
+use crate::scan;
 use anyhow::{Context, Result};
 use colored::*;
 use ignore::WalkBuilder;
@@ -5,6 +6,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+/// Max files to process before aborting (prevents hangs)
+const MAX_INDEX_FILES: usize = 5_000;
 
 /// Supported file extensions for indexing
 const SUPPORTED_EXTENSIONS: &[&str] = &[
@@ -282,19 +286,29 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
         format!("Indexing {}...", canonical_path.display()).bold()
     );
 
-    // Collect supported files
+    // Collect supported files with exclusions
     let mut files: Vec<PathBuf> = Vec::new();
     let walker = WalkBuilder::new(&canonical_path)
         .git_ignore(true)
         .git_global(true)
         .hidden(false)
+        .max_depth(Some(scan::MAX_WALK_DEPTH))
         .build();
 
     for result in walker {
+        if files.len() >= MAX_INDEX_FILES {
+            eprintln!(
+                "  {} Reached indexing limit of {} files. Some files will not be indexed.",
+                "[!]".yellow(),
+                MAX_INDEX_FILES
+            );
+            break;
+        }
+
         match result {
             Ok(entry) => {
                 let path = entry.path();
-                if path.is_file() && is_supported(path) {
+                if path.is_file() && !scan::should_exclude(path) && is_supported(path) {
                     files.push(path.to_path_buf());
                 }
             }

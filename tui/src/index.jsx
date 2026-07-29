@@ -9,6 +9,8 @@ const { runCommand } = require('./commands/runner');
 
 const MODELS = ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'];
 
+const COMMAND_LIST = ['init', 'review', 'deps', 'secrets', 'ask', 'report', 'fix', 'attack', 'status', 'ci', 'config'];
+
 function isQuestion(text) {
   const qWords = ['what', 'how', 'why', 'is', 'can', 'does', 'are', 'do', 'will',
     'would', 'could', 'should', 'has', 'have', 'did', 'was', 'were',
@@ -32,13 +34,48 @@ function App() {
   const [showAskPrompt, setShowAskPrompt] = React.useState(false);
   const [status, setStatus] = React.useState({ index: 'unknown', apiKey: 'unknown' });
   const [modelIdx, setModelIdx] = React.useState(0);
+  const [history, setHistory] = React.useState([]);
+  const [historyIdx, setHistoryIdx] = React.useState(-1);
+  const abortRef = React.useRef(null);
 
+  // Esc handling at app level: close overlays OR cancel running command
   useInput((_input, key) => {
     if (key.ctrl && _input === 'k') { setShowHelp(false); setShowPalette((p) => !p); return; }
     if (key.ctrl && _input === 'l') { setMessages([{ id: 'welcome', type: 'system', text: '' }]); return; }
     if (key.ctrl && _input === 'm') { setModelIdx((p) => (p + 1) % MODELS.length); return; }
-    if (key.escape) { setShowHelp(false); setShowPalette(false); setShowAskPrompt(false); return; }
+    if (key.escape) {
+      // Close overlays first
+      if (showHelp) { setShowHelp(false); return; }
+      if (showPalette) { setShowPalette(false); return; }
+      if (showAskPrompt) { setShowAskPrompt(false); return; }
+      // Cancel running command
+      if (isRunning && abortRef.current) {
+        abortRef.current.abort();
+        addMessage('system', 'Command cancelled.');
+        setIsRunning(false);
+        return;
+      }
+    }
   });
+
+  // Command history navigation: handled in InputBox via callbacks
+  function navigateHistory(direction) {
+    if (history.length === 0) return;
+    if (direction === 'up') {
+      const newIdx = historyIdx < history.length - 1 ? historyIdx + 1 : history.length - 1;
+      setHistoryIdx(newIdx);
+      setInput(history[history.length - 1 - newIdx]);
+    } else if (direction === 'down') {
+      const newIdx = historyIdx - 1;
+      if (newIdx < 0) {
+        setHistoryIdx(-1);
+        setInput('');
+      } else {
+        setHistoryIdx(newIdx);
+        setInput(history[history.length - 1 - newIdx]);
+      }
+    }
+  }
 
   React.useEffect(() => {
     runCommand(['status']).then((r) => {
@@ -60,6 +97,10 @@ function App() {
   async function handleSubmit(value) {
     const trimmed = value.trim();
     if (!trimmed || isRunning) return;
+
+    // Add to history
+    setHistory((prev) => [...prev, trimmed]);
+
     if (showAskPrompt) {
       setShowAskPrompt(false);
       setInput('');
@@ -83,6 +124,7 @@ function App() {
     const parts = input.slice(1).trim().split(/\s+/);
     const command = parts[0]?.toLowerCase();
     const cmdArgs = parts.slice(1);
+
     switch (command) {
       case 'help': case 'h': setShowHelp(true); return;
       case 'exit': case 'quit': case 'q': exit(); return;
@@ -104,21 +146,32 @@ function App() {
         }
         break;
     }
+
     addMessage('user', input);
-    const isKnown = ['init', 'review', 'deps', 'secrets', 'ask', 'report', 'fix', 'attack', 'status'].includes(command);
+    const isKnown = COMMAND_LIST.includes(command);
     if (!isKnown) {
       addMessage('error', 'Unknown command: /' + command + '\nRun /help for available commands.');
       return;
     }
+
     const labels = {
       init: 'Indexing project...', review: 'Running security review...', deps: 'Checking dependencies...',
       secrets: 'Scanning for secrets...', ask: 'Asking AI...', report: 'Generating report...',
       fix: 'Generating fix...', attack: 'Analyzing attack paths...', status: 'Checking status...',
+      ci: 'Running all scans...', config: 'Configuring...',
     };
     addMessage('command', labels[command] || 'Running ' + command + '...');
     setIsRunning(true);
-    const result = await runCommand([command, ...cmdArgs]);
+    setHistoryIdx(-1);
+
+    // Create AbortController for this command
+    const abortController = new AbortController();
+    abortRef.current = abortController;
+
+    const result = await runCommand([command, ...cmdArgs], abortController.signal);
     setIsRunning(false);
+    abortRef.current = null;
+
     if (result.ok) {
       addMessage('result', result.stdout.trim() || result.stderr.trim() || '(no output)');
     } else {
@@ -146,7 +199,7 @@ function App() {
     }),
     React.createElement(InputBox, {
       value: input, onChange: handleInputChange, onSubmit: handleSubmit,
-      isRunning, showAskPrompt,
+      isRunning, showAskPrompt, onNavigateHistory: navigateHistory,
     }),
     React.createElement(StatusBar, { status, model: MODELS[modelIdx], isRunning, messageCount: messages.length }),
   );

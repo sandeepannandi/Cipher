@@ -1,9 +1,11 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use colored::*;
 use std::path::PathBuf;
 
 mod attack;
+mod ci;
+mod config;
 mod deps;
 mod finding;
 mod fix;
@@ -12,6 +14,7 @@ mod indexer;
 mod rag;
 mod report;
 mod review;
+mod scan;
 mod secrets;
 
 const NAME: &str = "cipher-ai";
@@ -27,7 +30,8 @@ const VERSION: &str = "0.1.0";
     version = VERSION,
     about = "AI-powered security analysis",
     long_about = None,
-    styles = clap_styles()
+    styles = clap_styles(),
+    subcommand_required = true,
 )]
 struct Cli {
     #[command(subcommand)]
@@ -41,9 +45,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Index a codebase for security analysis
-    ///
-    /// Walks the codebase, parses files, chunks code,
-    /// and generates embeddings for semantic search.
+    #[command(visible_alias = "i")]
     Init {
         /// Path to the project to index (defaults to current directory)
         path: Option<PathBuf>,
@@ -54,12 +56,7 @@ enum Commands {
     },
 
     /// Ask a security question about your codebase
-    ///
-    /// Uses AI to answer security questions with code-level context.
-    ///
-    /// Examples:
-    ///   cipher-ai ask "Can users become admin?"
-    ///   cipher-ai ask "Find authentication bypass vulnerabilities"
+    #[command(visible_alias = "q")]
     Ask {
         /// Your security question
         query: Vec<String>,
@@ -82,8 +79,12 @@ enum Commands {
         #[arg(short = 'f', long = "format", default_value = "pretty")]
         format: String,
 
-        /// Exit with error code if secrets found (for CI/CD)
-        #[arg(long = "fail-on-secret")]
+        /// Exit with non-zero code if findings at or above this severity
+        #[arg(long = "fail-on")]
+        fail_on: Option<String>,
+
+        /// Exit with error code if secrets found (legacy, use --fail-on)
+        #[arg(long = "fail-on-secret", hide = true)]
         fail_on_secret: bool,
     },
 
@@ -91,14 +92,7 @@ enum Commands {
     Status,
 
     /// Run a comprehensive security review on the codebase
-    ///
-    /// Analyzes code for OWASP Top 10 vulnerabilities, hardcoded secrets,
-    /// injection flaws, cryptographic weaknesses, and more.
-    ///
-    /// Examples:
-    ///   cipher-ai review
-    ///   cipher-ai review --ai          # includes AI-powered deep analysis
-    ///   cipher-ai review --ai --model llama-3.3-70b-versatile
+    #[command(visible_alias = "r")]
     Review {
         /// Include AI-powered deep analysis (requires API key)
         #[arg(long = "ai")]
@@ -119,33 +113,29 @@ enum Commands {
         /// Minimum confidence to show (high, medium, low)
         #[arg(long = "min-confidence")]
         min_confidence: Option<String>,
+
+        /// Output format (terminal, json, markdown, sarif)
+        #[arg(long = "format", default_value = "terminal")]
+        format: String,
+
+        /// Write output to a file instead of stdout
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
     },
 
     /// Scan dependencies for known vulnerabilities
-    ///
-    /// Parses dependency manifests (Cargo.toml, package.json, requirements.txt)
-    /// and checks against known vulnerability databases.
-    ///
-    /// Examples:
-    ///   cipher-ai deps
-    ///   cipher-ai deps --online           # queries OSV.dev API
     Deps {
         /// Enable online vulnerability database checks (requires internet)
         #[arg(long = "online")]
         online: bool,
+
+        /// Exit with non-zero code if findings at or above this severity
+        #[arg(long = "fail-on")]
+        fail_on: Option<String>,
     },
 
     /// Generate a comprehensive security report
-    ///
-    /// Aggregates findings from security review, dependency scanning,
-    /// and secret detection into a single report.
-    ///
-    /// Examples:
-    ///   cipher-ai report
-    ///   cipher-ai report --format json
-    ///   cipher-ai report --format markdown --output report.md
-    ///   cipher-ai report --type executive     # non-technical summary
-    ///   cipher-ai report --type ci            # CI-friendly output
+    #[command(visible_alias = "rep")]
     Report {
         /// Report type: developer (default), executive, or ci
         #[arg(long = "type", default_value = "developer")]
@@ -161,16 +151,6 @@ enum Commands {
     },
 
     /// Analyze attack paths by connecting findings into realistic attack chains
-    ///
-    /// Instead of isolated vulnerability reports, discovers how weaknesses
-    /// can combine into practical attack scenarios.
-    ///
-    /// Examples:
-    ///   cipher-ai attack
-    ///   cipher-ai attack --chain privilege                  # filter by chain type
-    ///   cipher-ai attack --no-ai                             # skip AI enrichment
-    ///   cipher-ai attack --json                              # JSON output for CI
-    ///   cipher-ai attack --depth 5                           # max chain depth
     Attack {
         /// Filter by chain type (privilege-escalation, data-exfiltration, etc.)
         #[arg(long = "chain")]
@@ -190,18 +170,7 @@ enum Commands {
     },
 
     /// Auto-fix security vulnerabilities using AI
-    ///
-    /// Scans the codebase for findings, then uses AI to generate
-    /// secure patches. Shows a diff before applying.
-    ///
-    /// Examples:
-    ///   cipher fix --list                               # list fixable findings
-    ///   cipher fix --id abc12345                        # fix a specific finding
-    ///   cipher fix --risk critical                      # fix all critical findings
-    ///   cipher fix --risk critical --yes                # auto-apply without prompt
-    ///   cipher fix --file src/auth.rs                   # fix findings in a file
-    ///   cipher fix --all                                # fix all findings (interactive)
-    ///   cipher fix --all --yes                          # auto-fix everything
+    #[command(visible_alias = "f")]
     Fix {
         /// Fix a specific finding by ID (or UUID prefix)
         #[arg(long = "id")]
@@ -223,10 +192,53 @@ enum Commands {
         #[arg(long = "list")]
         list_only: bool,
 
+        /// Show what would be changed without applying (dry run)
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+
         /// Auto-apply all fixes without prompting
         #[arg(short = 'y', long = "yes")]
         auto_apply: bool,
     },
+
+    /// Run all security scans with consolidated CI output
+    #[command(visible_alias = "c")]
+    Ci {
+        /// Exit with non-zero code if findings at or above this severity
+        #[arg(long = "fail-on", default_value = "high")]
+        fail_on: Option<String>,
+
+        /// Include AI-powered deep analysis in review
+        #[arg(long = "ai")]
+        use_ai: bool,
+    },
+
+    /// Manage configuration settings
+    Config {
+        /// Action: show (default), set, get
+        action: Option<String>,
+
+        /// Config key (groq-api-key, default-model)
+        key: Option<String>,
+
+        /// Config value
+        value: Option<String>,
+    },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+}
+
+#[derive(ValueEnum, Clone)]
+enum Shell {
+    Bash,
+    Zsh,
+    Fish,
+    PowerShell,
 }
 
 fn clap_styles() -> clap::builder::Styles {
@@ -238,15 +250,23 @@ fn clap_styles() -> clap::builder::Styles {
         .placeholder(styling::AnsiColor::Yellow.on_default())
 }
 
+fn parse_severity_level(s: &str) -> Option<i32> {
+    match s.to_lowercase().as_str() {
+        "critical" => Some(4),
+        "high" => Some(3),
+        "medium" => Some(2),
+        "low" => Some(1),
+        _ => None,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing (silent by default, set RUST_LOG=info for verbose)
     tracing_subscriber::fmt()
         .with_target(false)
         .with_max_level(tracing::Level::WARN)
         .init();
 
-    // Load .env file if present
     dotenvy::dotenv().ok();
 
     let cli = Cli::parse();
@@ -256,11 +276,7 @@ async fn main() -> Result<()> {
             let project_path = path.unwrap_or_else(|| std::env::current_dir().unwrap());
             indexer::run_init(&project_path, force).await?;
         }
-        Commands::Ask {
-            query,
-            top_n,
-            model,
-        } => {
+        Commands::Ask { query, top_n, model } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             let query_str = query.join(" ");
             if query_str.trim().is_empty() {
@@ -269,100 +285,56 @@ async fn main() -> Result<()> {
             }
             rag::run_ask(&project_path, &query_str, top_n, model.as_deref()).await?;
         }
-        Commands::Secrets {
-            path,
-            format,
-            fail_on_secret,
-        } => {
+        Commands::Secrets { path, format, fail_on, fail_on_secret } => {
             let scan_path = path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            secrets::run_secrets(&scan_path, &format, fail_on_secret).await?;
+            // Combine legacy --fail-on-secret with new --fail-on
+            let fail_level = fail_on.as_deref().or(if fail_on_secret { Some("high") } else { None });
+            secrets::run_secrets(&scan_path, &format, fail_level).await?;
         }
         Commands::Status => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             indexer::run_status(&project_path).await?;
         }
-        Commands::Review {
-            use_ai,
-            model,
-            max_findings,
-            min_severity,
-            min_confidence,
-        } => {
+        Commands::Review { use_ai, model, max_findings, min_severity, min_confidence, format, output } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            let min_sev = min_severity
-                .as_deref()
-                .and_then(review::parse_severity_filter);
-            let min_conf = min_confidence
-                .as_deref()
-                .and_then(review::parse_confidence_filter);
-            let max_f = if max_findings == 0 {
-                None
-            } else {
-                Some(max_findings)
+            let min_sev = min_severity.as_deref().and_then(review::parse_severity_filter);
+            let min_conf = min_confidence.as_deref().and_then(review::parse_confidence_filter);
+            let max_f = if max_findings == 0 { None } else { Some(max_findings) };
+            review::run_review(&project_path, use_ai, model.as_deref(), max_f, min_sev, min_conf, &format, output.as_deref()).await?;
+        }
+        Commands::Deps { online, fail_on } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            deps::run_deps(&project_path, online, fail_on.as_deref()).await?;
+        }
+        Commands::Report { report_type, format, output } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            report::run_report(&project_path, &report_type, &format, output.as_deref()).await?;
+        }
+        Commands::Attack { chain, depth, json, no_ai } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            attack::run_attack(&project_path, chain.as_deref(), depth, json, !no_ai).await?;
+        }
+        Commands::Fix { finding_id, risk_level, target_file, fix_all, list_only, dry_run, auto_apply } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            fix::run_fix(&project_path, finding_id.as_deref(), risk_level.as_deref(), target_file.as_deref(), fix_all, list_only, dry_run, auto_apply).await?;
+        }
+        Commands::Ci { fail_on, use_ai } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            ci::run_ci(&project_path, fail_on.as_deref(), use_ai).await?;
+        }
+        Commands::Config { action, key, value } => {
+            config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
+        }
+        Commands::Completions { shell } => {
+            use clap::CommandFactory;
+            let mut cmd = Cli::command();
+            let shell_enum = match shell {
+                Shell::Bash => clap_complete::Shell::Bash,
+                Shell::Zsh => clap_complete::Shell::Zsh,
+                Shell::Fish => clap_complete::Shell::Fish,
+                Shell::PowerShell => clap_complete::Shell::PowerShell,
             };
-            review::run_review(
-                &project_path,
-                use_ai,
-                model.as_deref(),
-                max_f,
-                min_sev,
-                min_conf,
-            )
-            .await?;
-        }
-        Commands::Deps { online } => {
-            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            deps::run_deps(&project_path, online).await?;
-        }
-        Commands::Report {
-            report_type,
-            format,
-            output,
-        } => {
-            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            report::run_report(
-                &project_path,
-                &report_type,
-                &format,
-                output.as_deref(),
-            )
-            .await?;
-        }
-        Commands::Attack {
-            chain,
-            depth,
-            json,
-            no_ai,
-        } => {
-            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            attack::run_attack(
-                &project_path,
-                chain.as_deref(),
-                depth,
-                json,
-                !no_ai,
-            )
-            .await?;
-        }
-        Commands::Fix {
-            finding_id,
-            risk_level,
-            target_file,
-            fix_all,
-            list_only,
-            auto_apply,
-        } => {
-            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            fix::run_fix(
-                &project_path,
-                finding_id.as_deref(),
-                risk_level.as_deref(),
-                target_file.as_deref(),
-                fix_all,
-                list_only,
-                auto_apply,
-            )
-            .await?;
+            clap_complete::generate(shell_enum, &mut cmd, "cipher-ai", &mut std::io::stdout());
         }
     }
 

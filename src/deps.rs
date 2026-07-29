@@ -330,7 +330,9 @@ fn version_matches_constraint(version: &str, constraint: &str) -> bool {
 
 /// Query OSV.dev API for vulnerabilities
 async fn query_osv(ecosystem: &str, name: &str, version: &str) -> Result<Vec<(String, String, Option<String>, Severity)>> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
 
     let payload = serde_json::json!({
         "package": {
@@ -561,6 +563,7 @@ pub(crate) async fn collect_deps_findings(
 pub async fn run_deps(
     project_path: &Path,
     use_online: bool,
+    fail_on: Option<&str>,
 ) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
@@ -629,6 +632,25 @@ pub async fn run_deps(
     let report = collect_deps_findings(&canonical_path, use_online).await?;
 
     spinner.finish_and_clear();
+
+    // Handle --fail-on (exit with code 1 if threshold exceeded)
+    let fail_severity_score = fail_on.and_then(|s| match s.to_lowercase().as_str() {
+        "critical" => Some(4),
+        "high" => Some(3),
+        "medium" => Some(2),
+        "low" => Some(1),
+        _ => None,
+    });
+    if let Some(min_score) = fail_severity_score {
+        let has_failing = report.findings.iter().any(|f| f.severity.score() >= min_score);
+        if has_failing {
+            eprintln!(
+                "  {} --fail-on threshold exceeded. Exiting with code 1.",
+                "[FAIL]".red().bold()
+            );
+            std::process::exit(1);
+        }
+    }
 
     // Display results
     println!();

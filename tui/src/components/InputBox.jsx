@@ -11,20 +11,26 @@ const COMMANDS = [
   { cmd: 'review --max-findings 10',        desc: 'Review (limit to top 10 findings)' },
   { cmd: 'review --min-severity high',      desc: 'Review (only high+ severity)' },
   { cmd: 'review --min-confidence medium',  desc: 'Review (only medium+ confidence)' },
+  { cmd: 'review --format sarif',           desc: 'Review with SARIF output' },
   { cmd: 'deps',         desc: 'Check dependency vulnerabilities' },
   { cmd: 'deps --online',desc: 'Check deps with OSV.dev API' },
+  { cmd: 'deps --fail-on high', desc: 'Deps check, fail on high+' },
   { cmd: 'secrets',      desc: 'Scan for leaked credentials' },
+  { cmd: 'secrets --fail-on high', desc: 'Secrets scan, fail on high+' },
   { cmd: 'ask',          desc: 'Ask a security question (uses AI)' },
   { cmd: 'report',       desc: 'Generate security report' },
   { cmd: 'fix --list',   desc: 'List fixable findings' },
+  { cmd: 'fix --dry-run',desc: 'Preview fixes without applying' },
   { cmd: 'attack',       desc: 'Discover attack chains' },
+  { cmd: 'ci',           desc: 'Run all scans (CI mode)' },
+  { cmd: 'config',       desc: 'Show or set configuration' },
   { cmd: 'model',        desc: 'Show or switch AI model' },
   { cmd: 'status',       desc: 'Show index and API key status' },
   { cmd: 'clear',        desc: 'Clear messages' },
   { cmd: 'exit',         desc: 'Exit the TUI' },
 ];
 
-function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt }) {
+function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt, onNavigateHistory }) {
   const [selectedIdx, setSelectedIdx] = React.useState(0);
 
   const showDropdown = value.trim().startsWith('/') && value.trim().length > 0;
@@ -33,6 +39,17 @@ function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt }) {
 
   useInput((input, key) => {
     if (isRunning) return;
+
+    // History navigation (up/down when dropdown is closed or empty)
+    if (key.upArrow && (!showDropdown || filtered.length === 0)) {
+      if (onNavigateHistory) onNavigateHistory('up');
+      return;
+    }
+    if (key.downArrow && (!showDropdown || filtered.length === 0)) {
+      if (onNavigateHistory) onNavigateHistory('down');
+      return;
+    }
+
     if (key.return) {
       if (showDropdown && filtered.length > 0 && filtered[selectedIdx]) {
         const selected = filtered[selectedIdx];
@@ -82,7 +99,7 @@ function InputBox({ value, onChange, onSubmit, isRunning, showAskPrompt }) {
           React.createElement(Text, {
             color: i === selectedIdx ? 'yellow' : 'white',
             bold: i === selectedIdx,
-          }, '  ' + cmd.cmd.padEnd(18) + cmd.desc))
+          }, '  ' + cmd.cmd.padEnd(22) + cmd.desc))
       ),
       React.createElement(Box, { marginTop: 0 },
         React.createElement(Text, { color: 'green', dim: true }, '  up/down navigate  Enter select'))),

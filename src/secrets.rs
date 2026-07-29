@@ -1,4 +1,5 @@
 use crate::finding::{Confidence, Finding, FindingReport, FindingType, RemediationEffort, Severity};
+use crate::scan;
 use anyhow::{Context, Result};
 use colored::*;
 use ignore::WalkBuilder;
@@ -11,16 +12,6 @@ struct SecretPattern {
     severity: Severity,
     pattern: regex_lite::Regex,
 }
-
-/// Files/directories to always exclude from secret scanning
-const ALWAYS_EXCLUDE: &[&str] = &[
-    ".secagent", ".git", "node_modules", "vendor", "target",
-    "__pycache__", ".tox", ".venv", "venv", ".env.example",
-    "*.lock", "package-lock.json", "yarn.lock", "Cargo.lock",
-    "*.svg", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.ico",
-    "*.woff", "*.woff2", "*.ttf", "*.eot",
-    "*.min.js", "*.min.css",
-];
 
 /// Build regex patterns for secret detection
 fn build_patterns() -> Vec<SecretPattern> {
@@ -190,20 +181,7 @@ fn scan_file(path: &Path, patterns: &[SecretPattern]) -> Vec<Finding> {
 }
 
 /// Check if a path should be excluded
-fn should_exclude(path: &Path) -> bool {
-    let path_str = path.to_string_lossy().to_lowercase();
-    for exclude in ALWAYS_EXCLUDE {
-        if exclude.starts_with("*.") {
-            let ext = &exclude[1..]; // remove the *
-            if path_str.ends_with(ext) {
-                return true;
-            }
-        } else if path_str.contains(&exclude.to_lowercase()) {
-            return true;
-        }
-    }
-    false
-}
+
 
 /// Collect secret findings without displaying them (for report generation)
 pub(crate) fn collect_secrets_findings(scan_path: &Path) -> Result<FindingReport> {
@@ -215,14 +193,25 @@ pub(crate) fn collect_secrets_findings(scan_path: &Path) -> Result<FindingReport
         .git_ignore(true)
         .git_global(true)
         .hidden(false)
+        .max_depth(Some(scan::MAX_WALK_DEPTH))
         .build();
 
     let mut report = FindingReport::new("secret-scanner", canonical_path.to_string_lossy());
+    let mut file_count = 0;
     for result in walker {
+        if file_count >= scan::MAX_SCAN_FILES {
+            eprintln!(
+                "  {} Reached scan limit of {} files. Some files may not be checked for secrets.",
+                "[!]".yellow(),
+                scan::MAX_SCAN_FILES
+            );
+            break;
+        }
         if let Ok(entry) = result {
             let path = entry.path();
-            if path.is_file() && !should_exclude(path) && !is_binary(path) {
+            if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
                 report.extend(scan_file(path, &patterns));
+                file_count += 1;
             }
         }
     }
@@ -234,7 +223,7 @@ pub(crate) fn collect_secrets_findings(scan_path: &Path) -> Result<FindingReport
 pub async fn run_secrets(
     scan_path: &Path,
     format: &str,
-    fail_on_secret: bool,
+    fail_on: Option<&str>,
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(scan_path)
         .with_context(|| format!("Cannot access path: {}", scan_path.display()))?;
@@ -335,27 +324,26 @@ pub async fn run_secrets(
         }
     }
 
-    if fail_on_secret && critical_count + high_count > 0 {
-        std::process::exit(1);
+    // Handle --fail-on (exit with code 1 if threshold exceeded)
+    let fail_severity_score = fail_on.and_then(|s| match s.to_lowercase().as_str() {
+        "critical" => Some(4),
+        "high" => Some(3),
+        "medium" => Some(2),
+        "low" => Some(1),
+        _ => None,
+    });
+    if let Some(min_score) = fail_severity_score {
+        let has_failing = report.findings.iter().any(|f| f.severity.score() >= min_score);
+        if has_failing {
+            eprintln!(
+                "  {} --fail-on threshold exceeded. Exiting with code 1.",
+                "[FAIL]".red().bold()
+            );
+            std::process::exit(1);
+        }
     }
 
     Ok(())
 }
 
 
-
-/// Rough check if a file is binary by looking at the first few bytes
-fn is_binary(path: &Path) -> bool {
-    use std::io::Read;
-    let mut file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return true,
-    };
-    let mut buf = [0u8; 1024];
-    let n = match file.read(&mut buf) {
-        Ok(n) => n,
-        Err(_) => return true,
-    };
-    // Check for null bytes (common in binary files)
-    buf[..n].contains(&0u8)
-}
