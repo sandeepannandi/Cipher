@@ -16,6 +16,7 @@ mod report;
 mod review;
 mod scan;
 mod secrets;
+mod zeroday;
 
 const NAME: &str = "cipher-ai";
 const VERSION: &str = "0.1.0";
@@ -225,6 +226,38 @@ enum Commands {
         value: Option<String>,
     },
 
+    /// Detect zero-day (novel/unknown) vulnerabilities using 3-layer analysis
+    ///
+    /// Layer 1: Anomaly Detection — finds suspicious code patterns
+    /// Layer 2: Taint Flow Analysis — tracks untrusted data to dangerous sinks
+    /// Layer 3: AI Zero-Day Hunter — LLM-based novel vulnerability discovery
+    #[command(visible_alias = "zd")]
+    Zeroday {
+        /// Include AI-powered zero-day analysis (requires API key)
+        #[arg(long = "ai")]
+        use_ai: bool,
+
+        /// Model to use for AI analysis
+        #[arg(short = 'm', long = "model")]
+        model: Option<String>,
+
+        /// Output format (terminal, json, sarif)
+        #[arg(long = "format", default_value = "terminal")]
+        format: String,
+
+        /// Write output to a file instead of stdout
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
+
+        /// Skip anomaly detection, show only AI findings
+        #[arg(long = "anomaly-only")]
+        anomaly_only: bool,
+
+        /// Skip taint flow analysis
+        #[arg(long = "no-flow")]
+        no_flow: bool,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -324,6 +357,10 @@ async fn main() -> Result<()> {
         }
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
+        }
+        Commands::Zeroday { use_ai, model, format, output, anomaly_only, no_flow } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            zeroday::run_zeroday(&project_path, use_ai, model.as_deref(), &format, output.as_deref(), anomaly_only, no_flow).await?;
         }
         Commands::Completions { shell } => {
             use clap::CommandFactory;

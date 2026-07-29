@@ -169,6 +169,12 @@ var require_InputBox = __commonJS({
       { cmd: "attack", desc: "Discover attack chains" },
       { cmd: "ci", desc: "Run all scans (CI mode)" },
       { cmd: "config", desc: "Show or set configuration" },
+      { cmd: "zeroday", desc: "3-layer zero-day anomaly detection" },
+      { cmd: "zeroday --ai", desc: "Zero-day + AI-powered analysis" },
+      { cmd: "zeroday --anomaly-only", desc: "Zero-day: anomaly layer only" },
+      { cmd: "zeroday --no-flow", desc: "Zero-day: skip taint flow analysis" },
+      { cmd: "zeroday --format json", desc: "Zero-day \u2192 JSON output" },
+      { cmd: "zeroday --format sarif", desc: "Zero-day \u2192 SARIF JSON output" },
       { cmd: "model", desc: "Show or switch AI model" },
       { cmd: "status", desc: "Show index and API key status" },
       { cmd: "clear", desc: "Clear messages" },
@@ -388,6 +394,12 @@ var require_CommandHelp = __commonJS({
       { cmd: "/attack", desc: "Discover attack chains" },
       { cmd: "/ci", desc: "Run all scans (CI mode)" },
       { cmd: "/config", desc: "Show or set configuration" },
+      { cmd: "/zeroday", desc: "3-layer zero-day anomaly detection" },
+      { cmd: "/zeroday --ai", desc: "Zero-day + AI-powered analysis" },
+      { cmd: "/zeroday --anomaly-only", desc: "Zero-day: anomaly layer only" },
+      { cmd: "/zeroday --no-flow", desc: "Zero-day: skip taint flow analysis" },
+      { cmd: "/zeroday --format json", desc: "Zero-day \u2192 JSON output" },
+      { cmd: "/zeroday --format sarif", desc: "Zero-day \u2192 SARIF JSON output" },
       { cmd: "/model", desc: "Show or switch AI model" },
       { cmd: "/status", desc: "Show index and API key status" },
       { cmd: "/clear", desc: "Clear messages" },
@@ -482,6 +494,12 @@ var require_CommandPalette = __commonJS({
       { cmd: "attack", desc: "Discover attack chains" },
       { cmd: "ci", desc: "Run all scans (CI mode)" },
       { cmd: "config", desc: "Show or set configuration" },
+      { cmd: "zeroday", desc: "3-layer zero-day anomaly detection" },
+      { cmd: "zeroday --ai", desc: "Zero-day + AI-powered analysis" },
+      { cmd: "zeroday --anomaly-only", desc: "Zero-day: anomaly layer only" },
+      { cmd: "zeroday --no-flow", desc: "Zero-day: skip taint flow analysis" },
+      { cmd: "zeroday --format json", desc: "Zero-day \u2192 JSON output" },
+      { cmd: "zeroday --format sarif", desc: "Zero-day \u2192 SARIF JSON output" },
       { cmd: "---", desc: "---" },
       { cmd: "model", desc: "Show or switch AI model" },
       ...MODELS2.map((m) => ({ cmd: "model " + m, desc: "Switch to " + m })),
@@ -775,7 +793,7 @@ var { CommandHelp } = require_CommandHelp();
 var { CommandPalette } = require_CommandPalette();
 var { runCommand } = require_runner();
 var MODELS = ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"];
-var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "status", "ci", "config"];
+var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "status", "ci", "config", "zeroday"];
 function isQuestion(text) {
   const qWords = [
     "what",
@@ -971,7 +989,8 @@ function App() {
       attack: "Analyzing attack paths...",
       status: "Checking status...",
       ci: "Running all scans...",
-      config: "Configuring..."
+      config: "Configuring...",
+      zeroday: "Running zero-day analysis..."
     };
     addMessage("command", labels[command] || "Running " + command + "...");
     setIsRunning(true);
