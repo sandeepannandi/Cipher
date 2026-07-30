@@ -16,8 +16,8 @@ const MAX_STDERR_BYTES = 5 * 1024 * 1024;  // 5MB max buffered stderr
  */
 function runCommand(args, signal) {
   return new Promise((resolve) => {
-    const binaryPath = findBinaryPath();
-    if (!binaryPath) {
+    const result = findBinaryPath();
+    if (!result) {
       resolve({
         ok: false,
         stdout: '',
@@ -33,7 +33,11 @@ function runCommand(args, signal) {
     let killed = false;
     const timers = [];
 
-    const child = spawn(binaryPath, args, {
+    // If useWSL is true, prefix the command with 'wsl'
+    const command = result.useWSL ? 'wsl' : result.path;
+    const cmdArgs = result.useWSL ? [result.path, ...args] : args;
+
+    const child = spawn(command, cmdArgs, {
       cwd: process.cwd(),
       encoding: 'utf-8',
       windowsHide: true,

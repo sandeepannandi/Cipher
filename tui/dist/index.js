@@ -631,41 +631,72 @@ var require_binary = __commonJS({
     var fs = require("fs");
     var path = require("path");
     var os = require("os");
+    var isWin = os.platform() === "win32";
+    function toWslPath(winPath) {
+      if (!isWin) return winPath;
+      return winPath.replace(/^([A-Za-z]):\\/, (_, d) => `/mnt/${d.toLowerCase()}/`).replace(/\\/g, "/");
+    }
     function findBinaryPath() {
-      const binaryName = os.platform() === "win32" ? "cipher-ai.exe" : "cipher-ai";
-      const searchPaths = [
-        // From dist/ (bundled): ../../target/release/
-        path.resolve(__dirname, "..", "..", "target", "release", binaryName),
-        // From dist/ (bundled): ../../target/debug/
-        path.resolve(__dirname, "..", "..", "target", "debug", binaryName),
-        // From dist/ (bundled): ../../target/x86_64-pc-windows-gnullvm/release/
-        path.resolve(__dirname, "..", "..", "target", "x86_64-pc-windows-gnullvm", "release", binaryName),
-        // From src/utils/ (unbundled): ../../../target/release/
-        path.resolve(__dirname, "..", "..", "..", "target", "release", binaryName),
-        // From src/utils/ (unbundled): ../../../target/debug/
-        path.resolve(__dirname, "..", "..", "..", "target", "debug", binaryName),
-        // From src/utils/ (unbundled): ../../../target/x86_64-pc-windows-gnullvm/release/
-        path.resolve(__dirname, "..", "..", "..", "target", "x86_64-pc-windows-gnullvm", "release", binaryName)
+      const binaryName = "cipher-ai";
+      const winBinaryName = "cipher-ai.exe";
+      const wslPaths = [
+        // From dist/ (bundled)
+        path.resolve(__dirname, "..", "..", "target", "x86_64-unknown-linux-gnu", "release", binaryName),
+        // From src/utils/ (unbundled)
+        path.resolve(__dirname, "..", "..", "..", "target", "x86_64-unknown-linux-gnu", "release", binaryName)
       ];
-      for (const p of searchPaths) {
-        if (fs.existsSync(p)) return path.resolve(p);
+      for (const p of wslPaths) {
+        if (fs.existsSync(p)) {
+          return { path: toWslPath(path.resolve(p)), useWSL: true };
+        }
+      }
+      const winPaths = [
+        // From dist/ (bundled)
+        path.resolve(__dirname, "..", "..", "target", "release", winBinaryName),
+        path.resolve(__dirname, "..", "..", "target", "debug", winBinaryName),
+        path.resolve(__dirname, "..", "..", "target", "x86_64-pc-windows-gnullvm", "release", winBinaryName),
+        path.resolve(__dirname, "..", "..", "target", "x86_64-pc-windows-gnu", "release", winBinaryName),
+        // From src/utils/ (unbundled)
+        path.resolve(__dirname, "..", "..", "..", "target", "release", winBinaryName),
+        path.resolve(__dirname, "..", "..", "..", "target", "debug", winBinaryName),
+        path.resolve(__dirname, "..", "..", "..", "target", "x86_64-pc-windows-gnullvm", "release", winBinaryName),
+        path.resolve(__dirname, "..", "..", "..", "target", "x86_64-pc-windows-gnu", "release", winBinaryName)
+      ];
+      for (const p of winPaths) {
+        if (fs.existsSync(p)) return { path: path.resolve(p), useWSL: false };
       }
       const homeDir = os.homedir();
-      const globalBin = path.join(homeDir, ".cipher", "bin", binaryName);
-      if (fs.existsSync(globalBin)) {
-        return path.resolve(globalBin);
+      const globalWsl = path.join(homeDir, ".cipher", "bin", binaryName);
+      if (fs.existsSync(globalWsl)) {
+        return { path: toWslPath(path.resolve(globalWsl)), useWSL: isWin };
+      }
+      const globalWin = path.join(homeDir, ".cipher", "bin", winBinaryName);
+      if (fs.existsSync(globalWin)) {
+        return { path: path.resolve(globalWin), useWSL: false };
       }
       try {
         const which = require("child_process").execFileSync(
-          os.platform() === "win32" ? "where" : "which",
-          [binaryName],
+          isWin ? "where" : "which",
+          [winBinaryName],
           { encoding: "utf-8", stdio: "pipe", timeout: 5e3 }
         );
         const found = which.split("\n")[0].trim();
         if (found && fs.existsSync(found)) {
-          return found;
+          return { path: path.resolve(found), useWSL: false };
         }
       } catch {
+        try {
+          const which = require("child_process").execFileSync(
+            isWin ? "where" : "which",
+            [binaryName],
+            { encoding: "utf-8", stdio: "pipe", timeout: 5e3 }
+          );
+          const found = which.split("\n")[0].trim();
+          if (found && fs.existsSync(found)) {
+            return { path: toWslPath(path.resolve(found)), useWSL: isWin };
+          }
+        } catch {
+        }
       }
       return null;
     }
@@ -683,8 +714,8 @@ var require_runner = __commonJS({
     var MAX_STDERR_BYTES = 5 * 1024 * 1024;
     function runCommand2(args, signal) {
       return new Promise((resolve) => {
-        const binaryPath = findBinaryPath();
-        if (!binaryPath) {
+        const result = findBinaryPath();
+        if (!result) {
           resolve({
             ok: false,
             stdout: "",
@@ -698,7 +729,9 @@ var require_runner = __commonJS({
         let timedOut = false;
         let killed = false;
         const timers = [];
-        const child = spawn(binaryPath, args, {
+        const command = result.useWSL ? "wsl" : result.path;
+        const cmdArgs = result.useWSL ? [result.path, ...args] : args;
+        const child = spawn(command, cmdArgs, {
           cwd: process.cwd(),
           encoding: "utf-8",
           windowsHide: true,
