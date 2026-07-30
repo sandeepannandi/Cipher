@@ -1,6 +1,5 @@
 use crate::groq::GroqClient;
 use crate::indexer::{self, CodeChunk};
-use crate::output;
 use anyhow::Result;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};

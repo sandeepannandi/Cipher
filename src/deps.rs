@@ -1,7 +1,6 @@
 use crate::finding::{
     Confidence, Finding, FindingReport, FindingType, RemediationEffort, Severity,
 };
-use crate::output;
 use anyhow::Result;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};

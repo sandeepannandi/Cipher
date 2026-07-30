@@ -4,7 +4,6 @@
 // Every command should use these helpers instead of raw println! calls.
 
 use colored::*;
-use std::fmt::Write;
 
 // ── Box-Drawing Characters ─────────────────────────────────────────
 

@@ -1,6 +1,5 @@
 use crate::deps;
 use crate::finding::{Finding, FindingType, Severity};
-use crate::output;
 use crate::review;
 use crate::secrets;
 use anyhow::Result;
