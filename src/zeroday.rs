@@ -3,6 +3,7 @@ use crate::finding::{
 };
 use crate::groq::GroqClient;
 use crate::indexer;
+use crate::output;
 use crate::scan;
 use anyhow::Result;
 use colored::*;
@@ -1487,23 +1488,13 @@ pub async fn run_zeroday(
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
-    println!(
-        "{} {}\n",
-        "[!]".bright_yellow().bold(),
-        "CipherAI Zero-Day Vulnerability Analysis".bold()
-    );
-    println!(
-        "  {} {}",
-        "[INFO]".cyan(),
-        "Detecting NOVEL vulnerabilities that signature-based scanners miss..."
-    );
-    println!(
-        "  {} Active layers: {}{}{}\n",
-        "[LAYERS]".cyan(),
+    output::print_header("Zero-Day Vulnerability Analysis", Some("3-layer novel vulnerability detection"));
+    output::print_info("Layers", &format!(
+        "{}{}{}",
         "Anomaly Detection".bold(),
         if !no_flow { " + Taint Flow Analysis".to_string() } else { String::new() },
         if use_ai { " + AI Zero-Day Hunter".to_string() } else { String::new() },
-    );
+    ));
 
     // Use the shared collection function
     let mut report = collect_zeroday_findings(project_path, anomaly_only, no_flow).await?;
@@ -1523,19 +1514,16 @@ pub async fn run_zeroday(
             Ok(ai_findings) => {
                 report.ai_findings = ai_findings;
                 if !report.ai_findings.is_empty() {
-                    println!(
-                        "  {} AI found {} novel zero-day candidates\n",
-                        "[AI-ZD]".bright_cyan(),
+                    output::print_ok("AI Hunter", &format!(
+                        "found {} novel zero-day candidates",
                         report.ai_findings.len().to_string().bold()
-                    );
+                    ));
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "  {} AI zero-day analysis failed: {} (continuing with static analysis)",
-                    "[!]".yellow(),
-                    e
-                );
+                output::print_warn("AI Hunter", &format!(
+                    "analysis failed: {} (continuing with static analysis)", e
+                ));
             }
         }
     }
@@ -1551,15 +1539,15 @@ pub async fn run_zeroday(
 
         if let Some(out_path) = output {
             std::fs::write(out_path, &output_str)?;
-            println!(
-                "  {} {} output written to {}\n",
-                "[FILE]".cyan(),
+            output::print_ok("Output", &format!(
+                "{} written to {}",
                 format.to_uppercase().yellow().bold(),
                 out_path.yellow()
-            );
+            ));
         } else {
             println!("{}", output_str);
         }
+        output::print_footer();
         return Ok(());
     }
 
@@ -1568,39 +1556,15 @@ pub async fn run_zeroday(
 
     // Recommendations
     if !report.is_empty() {
-        println!();
-        println!("{} {}", "[TARGET]".bold(), "Priority Zero-Day Targets".bold());
-        println!("  {}", "-".repeat(40).dimmed());
-        println!(
-            "  These findings are {} — no known signature exists for them.",
-            "novel".yellow().bold()
-        );
-        println!(
-            "  Each requires {} review to determine actual exploitability.",
-            "manual".bold()
-        );
-        println!();
-        println!(
-            "  [IDEA] Run {} to see if these findings connect into an attack chain.",
-            "cipher-ai attack".yellow()
-        );
-        println!(
-            "  [IDEA] Use {} for deeper AI analysis on specific anomalies.",
-            "cipher-ai ask --model llama-3.3-70b-versatile \\\"Tell me about...\\\"".yellow()
-        );
+        output::print_recommendations(&[
+            "Run cipher-ai attack to see if these findings connect into an attack chain",
+            "Use cipher-ai ask for deeper AI analysis on specific anomalies",
+            "Review each finding manually — they represent potentially unknown vulnerabilities",
+        ]);
     }
 
+    output::print_footer();
     Ok(())
-}
-
-/// Supported file extensions for zero-day scanning
-fn is_supported_ext(ext: &str) -> bool {
-    matches!(
-        ext,
-        "rs" | "js" | "jsx" | "ts" | "tsx" | "py" | "go" | "rb" | "java" | "kt"
-            | "swift" | "c" | "cpp" | "h" | "hpp" | "cs" | "php" | "sh" | "bash"
-            | "vue" | "svelte" | "dart" | "scala" | "lua"
-    )
 }
 
 /// Supported file extensions for zero-day scanning

@@ -3,6 +3,7 @@ use crate::finding::{
 };
 use crate::groq::GroqClient;
 use crate::indexer;
+use crate::output;
 use crate::scan;
 use anyhow::Result;
 use colored::*;
@@ -468,11 +469,7 @@ pub async fn run_review(
 ) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
-    println!(
-        "{} {}",
-        "[*]".bright_blue(),
-        format!("Running security review on {}...", canonical_path.display()).bold()
-    );
+    output::print_header("Security Review", Some(&format!("Scanning {}", canonical_path.display())));
 
     // Phase 1: Pattern-based scanning
     let spinner = ProgressBar::new_spinner();

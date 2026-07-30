@@ -1,4 +1,5 @@
 use crate::finding::{Confidence, Finding, FindingReport, FindingType, RemediationEffort, Severity};
+use crate::output;
 use crate::scan;
 use anyhow::{Context, Result};
 use colored::*;
@@ -228,11 +229,7 @@ pub async fn run_secrets(
     let canonical_path = std::fs::canonicalize(scan_path)
         .with_context(|| format!("Cannot access path: {}", scan_path.display()))?;
 
-    println!(
-        "{} {}",
-        "[*]".bright_blue(),
-        format!("Scanning for secrets in {}...", canonical_path.display()).bold()
-    );
+    output::print_header("Secrets Scan", Some(&format!("Scanning {}", canonical_path.display())));
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(

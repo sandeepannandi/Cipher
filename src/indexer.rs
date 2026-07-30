@@ -1,3 +1,4 @@
+use crate::output;
 use crate::scan;
 use anyhow::{Context, Result};
 use colored::*;

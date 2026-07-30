@@ -1,4 +1,5 @@
 use crate::deps;
+use crate::output;
 use anyhow::Result;
 use colored::*;
 use serde::Serialize;

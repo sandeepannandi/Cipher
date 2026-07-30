@@ -294,16 +294,6 @@ fn clap_styles() -> clap::builder::Styles {
         .placeholder(styling::AnsiColor::Yellow.on_default())
 }
 
-fn parse_severity_level(s: &str) -> Option<i32> {
-    match s.to_lowercase().as_str() {
-        "critical" => Some(4),
-        "high" => Some(3),
-        "medium" => Some(2),
-        "low" => Some(1),
-        _ => None,
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()

@@ -11,6 +11,7 @@ pub mod finding;
 pub mod fix;
 pub mod groq;
 pub mod indexer;
+pub mod output;
 pub mod rag;
 pub mod report;
 pub mod review;

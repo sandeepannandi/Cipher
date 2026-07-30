@@ -1,5 +1,6 @@
 use crate::finding::{Finding, Severity};
 use crate::groq::GroqClient;
+use crate::output;
 use crate::{deps, review, secrets};
 use anyhow::{Context, Result};
 use colored::*;

@@ -1,4 +1,4 @@
-use crate::{deps, review, secrets, zeroday, sbom, attack};
+use crate::{deps, review, secrets, zeroday, sbom, attack, output};
 use anyhow::Result;
 use colored::*;
 use serde::Serialize;
@@ -35,7 +35,7 @@ pub async fn run_ci(
     fail_on: Option<&str>,
     use_ai: bool,
     format: &str,
-    output: Option<&str>,
+    output_path: Option<&str>,
 ) -> Result<()> {
     let fail_severity = fail_on.and_then(|s| match s.to_lowercase().as_str() {
         "critical" => Some(0),
@@ -45,11 +45,7 @@ pub async fn run_ci(
         _ => None,
     });
 
-    println!(
-        "{} {}\n",
-        "[CI]".bright_blue().bold(),
-        "CipherAI — Running All Scans".bold()
-    );
+    output::print_header("CipherAI CI Pipeline", Some("Running all security scans"));
 
     let mut steps: Vec<CiStepResult> = Vec::new();
     let mut total_critical = 0usize;
@@ -57,122 +53,97 @@ pub async fn run_ci(
     let mut total_findings = 0usize;
 
     // Step 1: Security review
-    println!("  {} Running security review...", "[1/5]".cyan());
+    output::print_step(1, 5, "Running security review");
     let review_result = review::collect_review_findings(project_path, use_ai, None).await?;
     let review_critical = review_result.findings.iter().filter(|f| f.severity.score() >= 4).count();
     let review_high = review_result.findings.iter().filter(|f| f.severity.score() >= 3).count();
-    println!(
-        "  {} Review: {} critical, {} high, {} total",
-        "[OK]".green(),
+    output::print_ok("Review", &format!(
+        "{} critical, {} high, {} total",
         review_critical.to_string().red().bold(),
         review_high.to_string().yellow().bold(),
-        review_result.len()
-    );
+        review_result.len().to_string().bold()
+    ));
     steps.push(CiStepResult { step: "review", critical: review_critical, high: review_high, total: review_result.len() });
     total_critical += review_critical;
     total_high += review_high;
     total_findings += review_result.len();
 
     // Step 2: Secrets scan
-    println!("  {} Scanning for secrets...", "[2/5]".cyan());
+    output::print_step(2, 5, "Scanning for secrets and credentials");
     let secrets_result = secrets::collect_secrets_findings(project_path)?;
     let secrets_critical = secrets_result.findings.iter().filter(|f| f.severity.score() >= 4).count();
     let secrets_high = secrets_result.findings.iter().filter(|f| f.severity.score() >= 3).count();
-    println!(
-        "  {} Secrets: {} critical, {} high, {} total",
-        "[OK]".green(),
+    output::print_ok("Secrets", &format!(
+        "{} critical, {} high, {} total",
         secrets_critical.to_string().red().bold(),
         secrets_high.to_string().yellow().bold(),
-        secrets_result.len()
-    );
+        secrets_result.len().to_string().bold()
+    ));
     steps.push(CiStepResult { step: "secrets", critical: secrets_critical, high: secrets_high, total: secrets_result.len() });
     total_critical += secrets_critical;
     total_high += secrets_high;
     total_findings += secrets_result.len();
 
     // Step 3: Deps check
-    println!("  {} Checking dependencies...", "[3/5]".cyan());
+    output::print_step(3, 5, "Checking dependencies for vulnerabilities");
     let deps_result = deps::collect_deps_findings(project_path, false).await?;
     let deps_critical = deps_result.findings.iter().filter(|f| f.severity.score() >= 4).count();
     let deps_high = deps_result.findings.iter().filter(|f| f.severity.score() >= 3).count();
-    println!(
-        "  {} Deps: {} critical, {} high, {} total",
-        "[OK]".green(),
+    output::print_ok("Deps", &format!(
+        "{} critical, {} high, {} total",
         deps_critical.to_string().red().bold(),
         deps_high.to_string().yellow().bold(),
-        deps_result.len()
-    );
+        deps_result.len().to_string().bold()
+    ));
     steps.push(CiStepResult { step: "deps", critical: deps_critical, high: deps_high, total: deps_result.len() });
     total_critical += deps_critical;
     total_high += deps_high;
     total_findings += deps_result.len();
 
     // Step 4: Zero-day anomaly scan
-    println!("  {} Scanning for zero-day anomalies...", "[4/5]".cyan());
+    output::print_step(4, 5, "Scanning for zero-day anomalies");
     let zeroday_report = zeroday::collect_zeroday_findings(project_path, false, false).await?;
     let zd_critical = zeroday_report.anomalies.iter().chain(zeroday_report.flow_findings.iter()).filter(|f| f.finding.severity.score() >= 4).count();
     let zd_high = zeroday_report.anomalies.iter().chain(zeroday_report.flow_findings.iter()).filter(|f| f.finding.severity.score() >= 3).count();
     let zd_total = zeroday_report.total();
-    println!(
-        "  {} Zero-day: {} critical, {} high, {} total",
-        "[OK]".green(),
+    output::print_ok("Zero-day", &format!(
+        "{} critical, {} high, {} total",
         zd_critical.to_string().red().bold(),
         zd_high.to_string().yellow().bold(),
-        zd_total
-    );
+        zd_total.to_string().bold()
+    ));
     steps.push(CiStepResult { step: "zeroday", critical: zd_critical, high: zd_high, total: zd_total });
     total_critical += zd_critical;
     total_high += zd_high;
     total_findings += zd_total;
 
     // Step 5: Attack path analysis
-    println!("  {} Analyzing attack paths...", "[5/5]".cyan());
+    output::print_step(5, 5, "Analyzing attack paths");
     let attack_count = match attack::collect_attack_summary(project_path).await {
         Ok(count) => {
-            println!(
-                "  {} Attack paths: {} chains found",
-                "[OK]".green(),
-                count.to_string().bold()
-            );
+            output::print_ok("Attack paths", &format!("{} attack chains found", count.to_string().bold()));
             steps.push(CiStepResult { step: "attack", critical: 0, high: 0, total: count });
             count
         }
         Err(_) => {
-            println!("  {} Attack analysis skipped (no findings to chain)", "[OK]".dimmed());
+            output::print_warn("Attack paths", "skipped (no findings to chain)");
             steps.push(CiStepResult { step: "attack", critical: 0, high: 0, total: 0 });
             0
         }
     };
 
-    // Generate SBOM (informational only)
-    println!("  {} Generating SBOM...", "[i]".dimmed());
+    // Generate SBOM (informational)
+    output::print_info("SBOM", "Generating software bill of materials...");
     match sbom::collect_sbom_summary(project_path).await {
         Ok(dep_count) => {
-            println!(
-                "  {} SBOM: {} dependencies cataloged",
-                "[OK]".dimmed(),
-                dep_count.to_string().dimmed()
-            );
+            output::print_ok("SBOM", &format!("{} dependencies cataloged", dep_count.to_string().bold()));
         }
         Err(_) => {
-            println!("  {} SBOM generation skipped", "[i]".dimmed());
+            output::print_warn("SBOM", "generation skipped");
         }
     }
 
-    // Summary
-    println!();
-    println!("{}", "══════════════════════════════════════".dimmed());
-    println!(
-        "{} CI Summary: {} critical, {} high, {} findings, {} attack chains",
-        "[CI]".bold(),
-        total_critical.to_string().red().bold(),
-        total_high.to_string().yellow().bold(),
-        total_findings.to_string().bold(),
-        attack_count.to_string().bold()
-    );
-    println!("{}", "══════════════════════════════════════".dimmed());
-
-    // Determine exit code
+    // Summary box
     let should_fail = match fail_severity {
         Some(0) => total_critical > 0,
         Some(1) => total_critical + total_high > 0,
@@ -180,6 +151,17 @@ pub async fn run_ci(
         Some(_) => total_critical + total_high > 0,
         None => false,
     };
+
+    let pass_fail = if should_fail && total_findings > 0 { "FAILED" } else { "PASSED" };
+    let pass_fail_styled = if should_fail && total_findings > 0 { pass_fail.red().bold().to_string() } else { pass_fail.green().bold().to_string() };
+
+    output::print_summary_box("CI Pipeline Results", &[
+        ("Status", &pass_fail_styled),
+        ("Critical", &total_critical.to_string().red().bold().to_string()),
+        ("High", &total_high.to_string().yellow().bold().to_string()),
+        ("Total Findings", &total_findings.to_string().bold().to_string()),
+        ("Attack Chains", &attack_count.to_string().bold().to_string()),
+    ]);
 
     // Handle JSON output
     if format == "json" {
@@ -196,17 +178,12 @@ pub async fn run_ci(
         };
 
         let json_str = serde_json::to_string_pretty(&json_report)?;
-        if let Some(out_path) = output {
+        if let Some(out_path) = output_path {
             std::fs::write(out_path, &json_str)?;
-            println!(
-                "  {} JSON output written to {}",
-                "[FILE]".cyan(),
-                out_path.yellow()
-            );
+            output::print_ok("Output", &format!("JSON written to {}", out_path.yellow()));
         } else {
             println!("{}", json_str);
         }
-        // Exit if failed
         if should_fail && total_findings > 0 {
             std::process::exit(1);
         }
@@ -214,22 +191,23 @@ pub async fn run_ci(
     }
 
     if should_fail && total_findings > 0 {
-        println!(
-            "  {} CI check failed: findings exceed --fail-on threshold.",
-            "[FAIL]".red().bold()
-        );
+        output::print_fail("CI", "check failed — findings exceed --fail-on threshold");
+        output::print_hint("Run with --fail-on critical to only fail on critical issues");
         std::process::exit(1);
     }
 
     if total_findings == 0 && attack_count == 0 {
-        println!("  {} No issues found! Your codebase looks clean.", "[PASS]".green().bold());
+        output::print_success("No issues found! Your codebase looks clean.");
     } else {
-        println!("  {} CI check passed (--fail-on threshold not exceeded).", "[PASS]".green().bold());
+        output::print_ok("CI", "check passed (--fail-on threshold not exceeded)");
     }
 
-    println!();
-    println!("  {} Run {} to view detailed findings.", "[IDEA]".bold(), "cipher-ai review".yellow());
-    println!("  {} Run {} for SBOM output.", "[IDEA]".bold(), "cipher-ai sbom".yellow());
+    output::print_recommendations(&[
+        "Run cipher-ai review for detailed findings",
+        "Run cipher-ai sbom for SBOM output",
+        "Run cipher-ai fix --risk critical to fix critical issues",
+    ]);
 
+    output::print_footer();
     Ok(())
 }
