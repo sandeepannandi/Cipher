@@ -177,7 +177,13 @@ function App() {
     if (result.ok) {
       addMessage('result', result.stdout.trim() || result.stderr.trim() || '(no output)');
     } else {
-      addMessage('error', result.stderr.trim() || result.error || 'Command failed');
+      // Show stdout output first (contains scan results), then append the error
+      const outMsg = result.stdout.trim();
+      const errMsg = result.stderr.trim() || result.error || 'Command failed';
+      if (outMsg && outMsg !== errMsg) {
+        addMessage('result', outMsg);
+      }
+      addMessage('error', errMsg);
     }
   }
 
