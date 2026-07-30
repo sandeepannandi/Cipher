@@ -390,3 +390,26 @@ pub async fn run_sbom(
 
     Ok(())
 }
+
+/// Collect SBOM dependency summary (count only, no output)
+pub async fn collect_sbom_summary(project_path: &Path) -> Result<usize> {
+    let canonical_path = std::fs::canonicalize(project_path)?;
+    let manifests = deps::find_manifests(&canonical_path);
+
+    if manifests.is_empty() {
+        return Ok(0);
+    }
+
+    let mut all_deps: Vec<deps::Dependency> = Vec::new();
+    for manifest in &manifests {
+        if let Ok(deps_found) = deps::parse_manifest(manifest) {
+            all_deps.extend(deps_found);
+        }
+    }
+
+    // Deduplicate by (name, version)
+    all_deps.sort_by(|a, b| a.ecosystem.cmp(&b.ecosystem).then(a.name.cmp(&b.name)));
+    all_deps.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name) && a.ecosystem == b.ecosystem);
+
+    Ok(all_deps.len())
+}

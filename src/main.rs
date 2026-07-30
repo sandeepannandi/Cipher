@@ -200,6 +200,14 @@ enum Commands {
         /// Include AI-powered deep analysis in review
         #[arg(long = "ai")]
         use_ai: bool,
+
+        /// Output format (terminal, json)
+        #[arg(long = "format", default_value = "terminal")]
+        format: String,
+
+        /// Write output to a file instead of stdout
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
     },
 
     /// Manage configuration settings
@@ -237,7 +245,7 @@ enum Commands {
         #[arg(short = 'o', long = "output")]
         output: Option<String>,
 
-        /// Skip anomaly detection, show only AI findings
+        /// Only run anomaly detection (skip taint flow and AI analysis)
         #[arg(long = "anomaly-only")]
         anomaly_only: bool,
 
@@ -354,9 +362,9 @@ async fn main() -> Result<()> {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             fix::run_fix(&project_path, finding_id.as_deref(), risk_level.as_deref(), target_file.as_deref(), fix_all, list_only, dry_run, auto_apply).await?;
         }
-        Commands::Ci { fail_on, use_ai } => {
+        Commands::Ci { fail_on, use_ai, format, output } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            ci::run_ci(&project_path, fail_on.as_deref(), use_ai).await?;
+            ci::run_ci(&project_path, fail_on.as_deref(), use_ai, &format, output.as_deref()).await?;
         }
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;

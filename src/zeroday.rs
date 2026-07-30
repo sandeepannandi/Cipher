@@ -1402,6 +1402,74 @@ fn parse_zeroday_confidence(s: &str) -> Confidence {
 
 // ── External API ────────────────────────────────────────────────────
 
+/// Scan for zero-day anomalies without any output (for use by other commands)
+///
+/// Runs layers 1 (Anomaly Detection) and 2 (Taint Flow Analysis) silently.
+/// Layer 3 (AI) is only run if `use_ai` is true.
+pub async fn collect_zeroday_findings(
+    project_path: &Path,
+    anomaly_only: bool,
+    no_flow: bool,
+) -> Result<ZerodayReport> {
+    let canonical_path = std::fs::canonicalize(project_path)?;
+    let mut report = ZerodayReport::new(&canonical_path.to_string_lossy());
+
+    let walker = WalkBuilder::new(&canonical_path)
+        .git_ignore(true)
+        .git_global(true)
+        .hidden(false)
+        .max_depth(Some(scan::MAX_WALK_DEPTH))
+        .build();
+
+    for result in walker {
+        if report.scanned_files >= scan::MAX_SCAN_FILES {
+            break;
+        }
+
+        match result {
+            Ok(entry) => {
+                let path = entry.path();
+                if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
+                    let ext = path
+                        .extension()
+                        .map(|e| e.to_str().unwrap_or("").to_lowercase())
+                        .unwrap_or_default();
+                    if !ext.is_empty() && is_supported_ext(&ext) {
+                        match std::fs::read_to_string(path) {
+                            Ok(content) => {
+                                let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+                                let ctx = FileContext {
+                                    path: path.to_string_lossy().to_string(),
+                                    lines,
+                                    ext,
+                                };
+
+                                // Layer 1: Anomaly Detection (always runs)
+                                let anomalies = detect_file_anomalies(&ctx);
+                                report.anomalies.extend(anomalies);
+
+                                // Layer 2: Taint Flow Analysis
+                                if !no_flow && !anomaly_only {
+                                    let flow = detect_taint_flow(&ctx);
+                                    report.flow_findings.extend(flow);
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                        report.scanned_files += 1;
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    report.anomalies.sort_by(|a, b| b.risk_score.partial_cmp(&a.risk_score).unwrap_or(std::cmp::Ordering::Equal));
+    report.flow_findings.sort_by(|a, b| b.risk_score.partial_cmp(&a.risk_score).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok(report)
+}
+
 /// Run the `cipher-ai zeroday` command
 ///
 /// Detects zero-day vulnerabilities across 3 layers:
@@ -1437,76 +1505,9 @@ pub async fn run_zeroday(
         if use_ai { " + AI Zero-Day Hunter".to_string() } else { String::new() },
     );
 
-    // Walk source files
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} Scanning files...")
-            .unwrap(),
-    );
-    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-
-    let walker = WalkBuilder::new(&canonical_path)
-        .git_ignore(true)
-        .git_global(true)
-        .hidden(false)
-        .max_depth(Some(scan::MAX_WALK_DEPTH))
-        .build();
-
-    let mut report = ZerodayReport::new(&canonical_path.to_string_lossy());
-
-    for result in walker {
-        if report.scanned_files >= scan::MAX_SCAN_FILES {
-            break;
-        }
-
-        match result {
-            Ok(entry) => {
-                let path = entry.path();
-                if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
-                    let ext = path
-                        .extension()
-                        .map(|e| e.to_str().unwrap_or("").to_lowercase())
-                        .unwrap_or_default();
-                    if !ext.is_empty() && is_supported_ext(&ext) {
-                        match std::fs::read_to_string(path) {
-                            Ok(content) => {
-                                let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-                                let ctx = FileContext {
-                                    path: path.to_string_lossy().to_string(),
-                                    lines,
-                                    ext,
-                                };
-
-                                // Layer 1: Anomaly Detection (always runs)
-                                let anomalies = detect_file_anomalies(&ctx);
-                                report.anomalies.extend(anomalies);
-
-                                // Layer 2: Taint Flow Analysis (skipped with --anomaly-only or --no-flow)
-                                if !no_flow && !anomaly_only {
-                                    let flow = detect_taint_flow(&ctx);
-                                    report.flow_findings.extend(flow);
-                                }
-                            }
-                            Err(_) => {}
-                        }
-                        report.scanned_files += 1;
-                        spinner.set_message(format!(
-                            "Scanned {} files — {} anomalies found",
-                            report.scanned_files,
-                            report.anomalies.len() + report.flow_findings.len()
-                        ));
-                    }
-                }
-            }
-            Err(_) => {}
-        }
-    }
-
-    spinner.finish_with_message(format!(
-        "Scan complete: {} files",
-        report.scanned_files
-    ));
+    // Use the shared collection function
+    let mut report = collect_zeroday_findings(project_path, anomaly_only, no_flow).await?;
+    report.project_path = canonical_path.to_string_lossy().to_string();
 
     // Layer 3: AI Zero-Day Hunter
     if use_ai {
@@ -1590,6 +1591,16 @@ pub async fn run_zeroday(
     }
 
     Ok(())
+}
+
+/// Supported file extensions for zero-day scanning
+fn is_supported_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "rs" | "js" | "jsx" | "ts" | "tsx" | "py" | "go" | "rb" | "java" | "kt"
+            | "swift" | "c" | "cpp" | "h" | "hpp" | "cs" | "php" | "sh" | "bash"
+            | "vue" | "svelte" | "dart" | "scala" | "lua"
+    )
 }
 
 /// Supported file extensions for zero-day scanning

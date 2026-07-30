@@ -225,6 +225,16 @@ async fn collect_all_findings(project_path: &Path) -> Result<Vec<Finding>> {
     Ok(all)
 }
 
+/// Collect attack chain summary (count only, no output)
+pub async fn collect_attack_summary(project_path: &Path) -> Result<usize> {
+    let findings = collect_all_findings(project_path).await?;
+    if findings.is_empty() {
+        return Ok(0);
+    }
+    let chains = discover_chains(&findings);
+    Ok(chains.len())
+}
+
 /// Chain discovery rule: describes what finding types/severities form a chain
 struct ChainRule {
     chain_type: AttackChainType,

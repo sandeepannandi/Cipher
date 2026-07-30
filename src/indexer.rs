@@ -453,15 +453,51 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Show index status
+/// Show index status and project info
 pub async fn run_status(project_path: &Path) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)
         .with_context(|| format!("Cannot access path: {}", project_path.display()))?;
 
+    println!(
+        "{} {} — {}",
+        "[STATS]".bright_blue().bold(),
+        "CipherAI Project Status".bold(),
+        canonical_path.display().to_string().yellow()
+    );
+    println!("  {}", "=".repeat(50).dimmed());
+
+    // Project name
+    let project_name = canonical_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("  {} {}", "Project:".bold(), project_name.cyan().bold());
+
+    // CLI version
+    println!("  {} v{}", "Version:".bold(), "0.1.0".cyan());
+
+    // Check config
+    let config_path = data_dir(&canonical_path).join("config.json");
+    println!(
+        "  {} {}",
+        "Config:".bold(),
+        if config_path.exists() {
+            "found".green().to_string()
+        } else {
+            "default".dimmed().to_string()
+        }
+    );
+
+    // Check index
     let index_path = data_dir(&canonical_path).join("index.json");
 
     if !index_path.exists() {
-        println!("{} Project not indexed yet.", "[-]".bright_blue());
+        println!(
+            "  {} {}",
+            "Index:".bold(),
+            "not indexed".yellow()
+        );
+        println!("  {}", "-".repeat(40).dimmed());
         println!("  Run {} to index this codebase", "cipher-ai init".yellow().bold());
         return Ok(());
     }
@@ -469,53 +505,74 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
     let content = std::fs::read_to_string(&index_path)?;
     let index: CodeIndex = serde_json::from_str(&content)?;
 
-    println!("{} {}", "[STATS]".bright_blue(), "Index Status".bold());
+    println!("  {} {}", "Index:".bold(), "ready".green());
+    println!("  {} {}", "Indexed at:".bold(), index.summary.indexed_at.cyan());
+
     println!("  {}", "-".repeat(40).dimmed());
+    println!("  {} Codebase Statistics", "[DATA]".bold());
+
     println!(
-        "  {} {}",
-        "Project:".bold(),
-        index.summary.project_path
+        "    {} {:>6} files",
+        "📄".bold(),
+        index.summary.total_files.to_string().cyan().bold()
     );
     println!(
-        "  {} {}",
-        "Indexed:".bold(),
-        index.summary.indexed_at
-    );
-    println!(
-        "  {} {} files across {} languages",
-        "Files:".bold(),
-        index.summary.total_files.to_string().cyan().bold(),
-        index.summary.languages.len().to_string().cyan()
-    );
-    println!(
-        "  {} {} code chunks",
-        "Chunks:".bold(),
+        "    {} {:>6} code chunks",
+        "🧩".bold(),
         index.summary.total_chunks.to_string().cyan().bold()
     );
 
     if !index.summary.languages.is_empty() {
-        println!(
-            "  {} {}",
-            "Languages:".bold(),
-            index
-                .summary
-                .languages
-                .iter()
-                .map(|(lang, count)| format!("{} ({} files)", lang.cyan(), count))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        println!("    {} Languages:", "🔤".bold());
+        // Sort languages by file count descending
+        let mut langs: Vec<(&String, &usize)> = index.summary.languages.iter().collect();
+        langs.sort_by(|a, b| b.1.cmp(a.1));
+        for (lang, count) in langs {
+            println!(
+                "      {} {} — {} files",
+                "•".dimmed(),
+                lang.cyan(),
+                count.to_string().bold()
+            );
+        }
     }
 
-    // Check if GROQ_API_KEY is set
+    // Config & API key status
+    println!("  {}", "-".repeat(40).dimmed());
+    println!("  {} Configuration", "[CONFIG]".bold());
     match std::env::var("GROQ_API_KEY") {
-        Ok(_) => println!("  {} Groq API key: {}", "[KEY]".bold(), "configured [OK]".green()),
+        Ok(key) => {
+            let masked = if key.len() > 8 {
+                format!("{}...{}", &key[..4], &key[key.len()-4..])
+            } else {
+                "set".to_string()
+            };
+            println!("    {} Groq API key: {} ({})", "✓".green(), "configured".green(), masked.dimmed());
+        }
         Err(_) => println!(
-            "  {} Groq API key: {} (set GROQ_API_KEY env var)",
-            "[KEY]".bold(),
+            "    {} Groq API key: {} (set GROQ_API_KEY env var)",
+            "✗".red(),
             "not set".red()
         ),
     }
+
+    // Check Dockerfile
+    let dockerfile = canonical_path.join("Dockerfile");
+    println!(
+        "    {} Dockerfile: {}",
+        if dockerfile.exists() { "✓".green() } else { "-".dimmed() },
+        if dockerfile.exists() { "present".green() } else { "not found".dimmed() }
+    );
+
+    // Available commands hint
+    println!("  {}", "=".repeat(50).dimmed());
+    println!("  {} Available commands:", "[CMD]".bold());
+    println!("    {} to scan for vulnerabilities", "cipher-ai review".cyan());
+    println!("    {} to scan for secrets", "cipher-ai secrets".cyan());
+    println!("    {} to check dependencies", "cipher-ai deps".cyan());
+    println!("    {} for zero-day analysis", "cipher-ai zeroday".cyan());
+    println!("    {} to run all scans", "cipher-ai ci".cyan());
+    println!("    {} for interactive Q&A", "cipher-ai ask <question>".cyan());
 
     Ok(())
 }
