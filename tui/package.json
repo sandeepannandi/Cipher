@@ -1,6 +1,6 @@
 {
   "name": "cipher-ai",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "CipherAI TUI — AI-powered security analysis for your codebase",
   "license": "MIT",
   "repository": {
