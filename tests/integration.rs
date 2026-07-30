@@ -1,14 +1,4 @@
-// ── Integration Tests for CipherAI ──────────────────────────────────
-//
-// These tests verify the core detection, parsing, and analysis logic.
-// They are designed to be fast — no actual filesystem scanning of
-// large directories, just targeted tests with temporary files.
-
 use cipher_ai::{deps, scan, zeroday, sbom, finding};
-
-// ═════════════════════════════════════════════════════════════════════
-// scan.rs — Exclusion & Binary Detection
-// ═════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_should_exclude_git() {
@@ -45,10 +35,6 @@ fn test_should_exclude_cipher_ai_dir() {
 fn test_should_exclude_build_dir() {
     assert!(scan::should_exclude(std::path::Path::new("/project/build/output.o")));
 }
-
-// ═════════════════════════════════════════════════════════════════════
-// zeroday.rs — Helper Function Tests
-// ═════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_is_function_signature_rust() {
@@ -172,10 +158,6 @@ fn test_is_comment_empty_line() {
     assert!(zeroday::is_comment("   ", "rs"));
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// Zeroday Report & Finding Tests
-// ═════════════════════════════════════════════════════════════════════
-
 #[test]
 fn test_zeroday_report_new_is_empty() {
     let report = zeroday::ZerodayReport::new("/test/project");
@@ -261,10 +243,6 @@ fn test_anomaly_type_categories() {
     assert_eq!(BusinessLogicFlaw.category(), "ai");
     assert_eq!(RaceCondition.category(), "ai");
 }
-
-// ═════════════════════════════════════════════════════════════════════
-// deps.rs — Manifest Parsing Tests (temporary files)
-// ═════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_parse_cargo_toml_basic() {
@@ -422,7 +400,7 @@ fn test_parse_composer_json_basic() {
 }"#).unwrap();
 
     let deps = deps::parse_composer_json(&path).unwrap();
-    assert_eq!(deps.len(), 3); // php is skipped
+    assert_eq!(deps.len(), 3);
     assert!(deps.iter().any(|d| d.name == "laravel/framework" && !d.is_dev));
     assert!(deps.iter().any(|d| d.name == "phpunit/phpunit" && d.is_dev));
     let _ = std::fs::remove_file(&path);
@@ -445,7 +423,7 @@ dev_dependencies:
 "#).unwrap();
 
     let deps = deps::parse_pubspec_yaml(&path).unwrap();
-    assert_eq!(deps.len(), 3); // flutter/flutter_test are SDK deps, skipped
+    assert_eq!(deps.len(), 3);
     assert!(deps.iter().any(|d| d.name == "http" && d.version == "1.0.0" && !d.is_dev));
     assert!(deps.iter().any(|d| d.name == "path" && d.version == "2.0.0" && !d.is_dev));
     assert!(deps.iter().any(|d| d.name == "mockito" && d.version == "5.0.0" && d.is_dev));
@@ -468,10 +446,6 @@ dependencies:
     assert_eq!(deps[0].version, "3.0.0");
     let _ = std::fs::remove_file(&path);
 }
-
-// ═════════════════════════════════════════════════════════════════════
-// deps.rs — Version Matching Tests
-// ═════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_version_match_less_than() {
@@ -502,21 +476,13 @@ fn test_version_match_not_less_or_equal() {
 
 #[test]
 fn test_version_match_edge_cases() {
-    // Invalid/parseable versions
     assert!(!deps::version_matches_constraint("abc", "<1.0.0"));
-    // Single-number versions (like "1")
     assert!(deps::version_matches_constraint("1", "<2.0.0"));
-    // Two-number versions (like "1.0")
     assert!(deps::version_matches_constraint("1.0", "<1.1.0"));
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// deps.rs — Manifest Discovery Tests
-// ═════════════════════════════════════════════════════════════════════
-
 #[test]
 fn test_find_manifests_in_project() {
-    // Use the actual project root — should find Cargo.toml
     let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let manifests = deps::find_manifests(project_root);
     assert!(!manifests.is_empty(), "Should find at least Cargo.toml");
@@ -555,10 +521,6 @@ fn test_parse_manifest_unknown_file() {
     assert!(deps.is_empty());
     let _ = std::fs::remove_file(&path);
 }
-
-// ═════════════════════════════════════════════════════════════════════
-// sbom.rs — PURL Mapping Tests
-// ═════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_ecosystem_to_purl_crates_io() {
