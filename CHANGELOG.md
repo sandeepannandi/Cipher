@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.0.0] — 2026-07-30
+
+### Added
+
+- **`cipher-ai zeroday`** — 3-layer zero-day vulnerability detection (anomaly detection, taint flow analysis, AI hunter)
+- **`cipher-ai sbom`** — CycloneDX/SPDX Software Bill of Materials generation (7 manifest parsers)
+- **`cipher-ai report`** — Comprehensive security report (developer/executive/CI modes, terminal/markdown/json)
+- **`cipher-ai config`** — Configuration management (API key, default model, settings)
+- **`cipher-ai completions`** — Shell completions for bash, zsh, fish, and PowerShell
+- **`cipher-ai ci --format json`** — CI pipeline JSON output for easy ingestion
+- **`cipher-ai ci --output`** — Write CI results to file
+- **`cipher-ai review --format json/sarif`** — SARIF and JSON output for `review`
+- **`cipher-ai review --output`** — Write review output to file
+- **`cipher-ai zeroday --format json/sarif`** — Zero-day SARIF/JSON output
+- **`cipher-ai zeroday --output`** — Write zero-day output to file
+- **`cipher-ai zeroday --anomaly-only`** — Only run anomaly detection layer
+- **`cipher-ai zeroday --no-flow`** — Skip taint flow analysis
+- **`cipher-ai zeroday --ai`** — AI-powered zero-day hunting
+- **`src/output.rs`** — Unified styled output system with box-drawn headers, summary boxes, step progress, risk distribution bars
+- 4 new manifest parsers: `go.mod`, `Gemfile`, `composer.json`, `pubspec.yaml`
+- **60 integration tests** covering scan, zeroday, deps, and sbom modules
+
+### Changed
+
+- **`ci` command**: Now runs **5 scans** (review → secrets → deps → zeroday → attack) + SBOM info
+- **`status` command**: Enhanced with language breakdown, API key masking, Dockerfile check, available commands
+- **`zeroday --anomaly-only`**: Fixed description (previously said the opposite of what it did)
+- **`ci.rs`/`zeroday.rs`**: Now use unified `output::` helpers for systematic, beautiful output
+- **TUI**: Updated command lists with new ci/zeroday/sbom flags
+- **Cross-platform**: Dockerfile, `.cargo/config.toml` for Windows MSVC/GNU targets
+
+### Refined
+
+- Extracted `collect_zeroday_findings()` for reusable scanning without output side effects
+- Added `collect_attack_summary()` and `collect_sbom_summary()` helpers for ci integration
+- Removed dead code (`parse_severity_level`) and unused imports across 9 files
+- Fixed duplicate `is_supported_ext` function in zeroday.rs
+- Comments removed from test files for cleaner code
+
 ## [0.1.1] — 2026-07-28
 
 ### Fixed
