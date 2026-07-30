@@ -177,13 +177,19 @@ function App() {
     if (result.ok) {
       addMessage('result', result.stdout.trim() || result.stderr.trim() || '(no output)');
     } else {
-      // Show stdout output first (contains scan results), then append the error
+      // Show stdout output first (contains scan results)
+      // Only show error separately if it's not already in the stdout
       const outMsg = result.stdout.trim();
       const errMsg = result.stderr.trim() || result.error || 'Command failed';
-      if (outMsg && outMsg !== errMsg) {
+      if (outMsg) {
         addMessage('result', outMsg);
+        // Only add error message if it's not already visible in stdout
+        if (!outMsg.includes(errMsg.replace(/[✗×✕✖]\s*/g, '').trim())) {
+          addMessage('error', errMsg);
+        }
+      } else {
+        addMessage('error', errMsg);
       }
-      addMessage('error', errMsg);
     }
   }
 

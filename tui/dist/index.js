@@ -1060,10 +1060,14 @@ function App() {
     } else {
       const outMsg = result.stdout.trim();
       const errMsg = result.stderr.trim() || result.error || "Command failed";
-      if (outMsg && outMsg !== errMsg) {
+      if (outMsg) {
         addMessage("result", outMsg);
+        if (!outMsg.includes(errMsg.replace(/[✗×✕✖]\s*/g, "").trim())) {
+          addMessage("error", errMsg);
+        }
+      } else {
+        addMessage("error", errMsg);
       }
-      addMessage("error", errMsg);
     }
   }
   return React.createElement(
