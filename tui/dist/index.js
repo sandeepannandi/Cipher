@@ -810,11 +810,17 @@ var require_runner = __commonJS({
             return;
           }
           if (code !== 0) {
+            const stderrMsg = stderr.trim();
+            const stdoutLines = stdout.trim().split("\n").filter((l) => l.trim());
+            const errorLine = stdoutLines.reverse().find(
+              (l) => /[✗×✕✖]\s/.test(l) || /^\s*error:/i.test(l) || /check failed/i.test(l) || /FAILED/i.test(l)
+            );
+            const errorMsg = stderrMsg || (errorLine ? errorLine.trim() : "") || "Command failed with exit code " + code;
             resolve({
               ok: false,
               stdout,
               stderr,
-              error: stderr.trim() || "Command failed with exit code " + code
+              error: errorMsg
             });
             return;
           }

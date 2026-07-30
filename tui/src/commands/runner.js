@@ -135,11 +135,20 @@ function runCommand(args, signal) {
       }
 
       if (code !== 0) {
+        // Some commands (e.g., ci) write failure messages to stdout, not stderr.
+        // Extract meaningful error from the last relevant lines of stdout.
+        const stderrMsg = stderr.trim();
+        // Look for error-like lines in stdout (lines starting with ✗, Error, error, etc.)
+        const stdoutLines = stdout.trim().split('\n').filter(l => l.trim());
+        const errorLine = stdoutLines.reverse().find(l =>
+          /[✗×✕✖]\s/.test(l) || /^\s*error:/i.test(l) || /check failed/i.test(l) || /FAILED/i.test(l)
+        );
+        const errorMsg = stderrMsg || (errorLine ? errorLine.trim() : '') || 'Command failed with exit code ' + code;
         resolve({
           ok: false,
           stdout,
           stderr,
-          error: stderr.trim() || 'Command failed with exit code ' + code,
+          error: errorMsg,
         });
         return;
       }
