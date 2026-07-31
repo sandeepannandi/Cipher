@@ -88,17 +88,22 @@ impl AggregatedReport {
         kept
     }
 
-    /// Compute an overall security score 0–100
+    /// Compute an overall security score 0–100.
+    ///
+    /// Penalty is per-finding: severity weight (critical 25 / high 10 / medium 4 /
+    /// low 1) scaled by exploitability and business impact — so a critical bug in a
+    /// payment path with high reachability hurts much more than an unreachable low
+    /// in a test file.
     pub fn security_score(&self) -> f64 {
         let total = self.total_findings();
         if total == 0 {
             return 100.0;
         }
-        let critical = self.count_by_severity(Severity::Critical) as f64 * 25.0;
-        let high = self.count_by_severity(Severity::High) as f64 * 10.0;
-        let medium = self.count_by_severity(Severity::Medium) as f64 * 4.0;
-        let low = self.count_by_severity(Severity::Low) as f64 * 1.0;
-        let penalty = critical + high + medium + low;
+        let penalty: f64 = self
+            .deduped_all()
+            .iter()
+            .map(|f| severity_weight(f.severity) * (0.5 + f.exploitability) * (0.5 + f.business_impact))
+            .sum();
         (100.0 - penalty).clamp(0.0, 100.0)
     }
 
@@ -110,6 +115,60 @@ impl AggregatedReport {
         }
         all.iter().map(|f| f.risk_score()).sum::<f64>() / all.len() as f64
     }
+}
+
+/// Base severity weight used by [`AggregatedReport::security_score`].
+fn severity_weight(severity: Severity) -> f64 {
+    match severity {
+        Severity::Critical => 25.0,
+        Severity::High => 10.0,
+        Severity::Medium => 4.0,
+        Severity::Low => 1.0,
+        Severity::Info => 0.0,
+    }
+}
+
+/// Estimate how damaging a finding is to the business, 0.0–1.0.
+///
+/// Combines the finding's type (secrets/auth/injection are high impact) with
+/// context from its file path (payment/checkout/auth/admin paths are boosted,
+/// test/example files are discounted).
+pub(crate) fn compute_business_impact(f: &Finding) -> f64 {
+    let mut impact: f64 = match f.finding_type {
+        FindingType::Secret => 0.9,
+        FindingType::Authorization => 0.85,
+        FindingType::Authentication => 0.8,
+        FindingType::BusinessLogic => 0.8,
+        FindingType::Injection => 0.75,
+        FindingType::Cryptography => 0.7,
+        FindingType::Dependency => 0.6,
+        FindingType::Misconfiguration => 0.55,
+        FindingType::Vulnerability => 0.65,
+    };
+
+    if let Some(fp) = f.file_path.as_deref() {
+        let low = fp.to_lowercase();
+        if ["payment", "billing", "checkout", "order", "wallet", "stripe", "charge"]
+            .iter()
+            .any(|k| low.contains(k))
+        {
+            impact = (impact + 0.15).min(1.0);
+        }
+        if ["login", "auth", "session", "password", "token", "admin"]
+            .iter()
+            .any(|k| low.contains(k))
+        {
+            impact = (impact + 0.1).min(1.0);
+        }
+        if ["test", "tests", "spec", "example", "sample", "fixture"]
+            .iter()
+            .any(|k| low.contains(k))
+        {
+            impact = (impact - 0.2).max(0.1);
+        }
+    }
+
+    impact.clamp(0.0, 1.0)
 }
 
 /// Run the `cipher-ai report` command
@@ -141,6 +200,17 @@ pub async fn run_report(
     agg.review = review_report.findings;
     agg.deps = deps_report.findings;
     agg.secrets = secrets_report.findings;
+
+    // Annotate findings with a business-impact estimate so scoring and output
+    // reflect severity x impact (a payment-path secret ranks above a test-only one).
+    for f in agg
+        .review
+        .iter_mut()
+        .chain(agg.deps.iter_mut())
+        .chain(agg.secrets.iter_mut())
+    {
+        f.business_impact = compute_business_impact(f);
+    }
 
     // Phase 3: Generate output
     match format {
@@ -377,6 +447,7 @@ fn generate_developer_md(report: &AggregatedReport) -> String {
             md.push_str(&format!("| Line | {} |\n", line));
         }
         md.push_str(&format!("| Exploitability | {:.0}% |\n", finding.exploitability * 100.0));
+        md.push_str(&format!("| Business Impact | {:.0}% |\n", finding.business_impact * 100.0));
         md.push_str(&format!("| Remediation Effort | {} |\n", finding.remediation_effort));
         md.push_str("\n");
 
@@ -547,12 +618,13 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
         let fp = finding.file_path.as_deref().unwrap_or("<unknown>");
         let line = finding.line_number.map(|l| format!(":{}", l)).unwrap_or_default();
         println!(
-            "    {}  {}  {}  {}  [{:.0}/10]",
+            "    {}  {}  {}  {}  [{:.0}/10]  impact:{:.0}%",
             finding.severity.badge(),
             finding.finding_type.icon(),
             format!("{}", finding.title).bold(),
             format!("{}{}", fp, line).yellow().dimmed(),
-            finding.risk_score()
+            finding.risk_score(),
+            finding.business_impact * 100.0
         );
     }
     if all.len() > max_show {

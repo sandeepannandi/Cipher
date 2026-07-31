@@ -87,6 +87,10 @@ enum Commands {
         #[arg(long = "ai")]
         use_ai: bool,
 
+        /// AI-verify scanner findings — confirm real issues and filter false positives
+        #[arg(long = "verify")]
+        verify: bool,
+
         /// Model to use for AI analysis
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
@@ -188,6 +192,10 @@ enum Commands {
         /// Auto-apply all fixes without prompting
         #[arg(short = 'y', long = "yes")]
         auto_apply: bool,
+
+        /// Verify each fix by compiling the project — revert fixes that break the build
+        #[arg(long = "verify")]
+        verify: bool,
     },
 
     /// Run all security scans with consolidated CI output
@@ -329,12 +337,12 @@ async fn main() -> Result<()> {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             indexer::run_status(&project_path).await?;
         }
-        Commands::Review { use_ai, model, max_findings, min_severity, min_confidence, format, output } => {
+        Commands::Review { use_ai, verify, model, max_findings, min_severity, min_confidence, format, output } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             let min_sev = min_severity.as_deref().and_then(review::parse_severity_filter);
             let min_conf = min_confidence.as_deref().and_then(review::parse_confidence_filter);
             let max_f = if max_findings == 0 { None } else { Some(max_findings) };
-            review::run_review(&project_path, use_ai, model.as_deref(), max_f, min_sev, min_conf, &format, output.as_deref()).await?;
+            review::run_review(&project_path, use_ai, verify, model.as_deref(), max_f, min_sev, min_conf, &format, output.as_deref()).await?;
         }
         Commands::Deps { online, fail_on } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -348,9 +356,9 @@ async fn main() -> Result<()> {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             attack::run_attack(&project_path, chain.as_deref(), depth, json, !no_ai).await?;
         }
-        Commands::Fix { finding_id, risk_level, target_file, fix_all, list_only, dry_run, auto_apply } => {
+        Commands::Fix { finding_id, risk_level, target_file, fix_all, list_only, dry_run, auto_apply, verify } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            fix::run_fix(&project_path, finding_id.as_deref(), risk_level.as_deref(), target_file.as_deref(), fix_all, list_only, dry_run, auto_apply).await?;
+            fix::run_fix(&project_path, finding_id.as_deref(), risk_level.as_deref(), target_file.as_deref(), fix_all, list_only, dry_run, auto_apply, verify).await?;
         }
         Commands::Ci { fail_on, use_ai, format, output } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());

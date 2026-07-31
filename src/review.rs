@@ -460,6 +460,7 @@ pub(crate) async fn collect_review_findings(
 pub async fn run_review(
     project_path: &Path,
     use_ai: bool,
+    verify: bool,
     model: Option<&str>,
     max_findings: Option<usize>,
     min_severity: Option<Severity>,
@@ -484,6 +485,40 @@ pub async fn run_review(
 
     let total_raw = report.len();
     spinner.finish_with_message(format!("{} files scanned — {} raw issues found", "[OK]".green(), total_raw));
+
+    // Phase 1b: AI verification — confirm real issues, filter false positives
+    if verify {
+        if report.is_empty() {
+            println!("  {} No findings to verify.", "(i)".blue());
+        } else {
+            println!(
+                "  {} AI-verifying {} findings... (filtering false positives)\n",
+                "[AI]".bright_green(),
+                report.len().to_string().bold()
+            );
+            let spinner = ProgressBar::new_spinner();
+            spinner.set_style(
+                ProgressStyle::default_spinner()
+                    .template("{spinner:.green} Asking AI to confirm findings...")
+                    .unwrap(),
+            );
+            spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+
+            let verified = crate::verify::verify_findings(report.findings.clone(), model).await;
+            let dropped = report.len().saturating_sub(verified.len());
+            spinner.finish_and_clear();
+
+            if dropped > 0 {
+                eprintln!(
+                    "  {} AI verification filtered {} potential false positives\n",
+                    "[!]".yellow(),
+                    dropped.to_string().yellow().bold()
+                );
+            }
+            report.findings = verified;
+            report.sort_by_risk();
+        }
+    }
 
     // Phase 2: AI-powered deep analysis (only if requested)
     if use_ai {

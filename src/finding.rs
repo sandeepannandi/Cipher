@@ -273,12 +273,20 @@ pub struct Finding {
     pub cve_id: Option<String>,
     /// Exploitability score 0.0–1.0
     pub exploitability: f64,
+    /// Business impact score 0.0–1.0 (how damaging this is to the business)
+    #[serde(default = "default_business_impact")]
+    pub business_impact: f64,
     /// Estimated remediation effort
     pub remediation_effort: RemediationEffort,
     /// Timestamp when the finding was created
     pub created_at: String,
     /// Source module that produced this finding
     pub source: String,
+}
+
+/// Default business impact (moderate) for findings deserialized from older reports
+fn default_business_impact() -> f64 {
+    0.5
 }
 
 impl Finding {
@@ -305,6 +313,7 @@ impl Finding {
             owasp_category: None,
             cve_id: None,
             exploitability: 0.5,
+            business_impact: 0.5,
             remediation_effort: RemediationEffort::Hours,
             created_at: Utc::now().to_rfc3339(),
             source: source.into(),
@@ -342,6 +351,12 @@ impl Finding {
         self
     }
 
+    /// Chainable setter for business impact
+    pub fn with_business_impact(mut self, score: f64) -> Self {
+        self.business_impact = score.clamp(0.0, 1.0);
+        self
+    }
+
     /// Chainable setter for remediation_effort
     pub fn with_effort(mut self, effort: RemediationEffort) -> Self {
         self.remediation_effort = effort;
@@ -354,12 +369,19 @@ impl Finding {
         self
     }
 
-    /// Compute a risk score 0–10 combining severity, confidence, and exploitability
+    /// Compute a risk score 0–10 combining severity, confidence, exploitability,
+    /// and business impact.
+    ///
+    /// - Severity contributes 2–10 (INFO→1 .. CRITICAL→5, doubled)
+    /// - Confidence contributes 0.5–1.5
+    /// - Exploitability contributes 0–2 (reachability-weighted)
+    /// - Business impact contributes 0–2
     pub fn risk_score(&self) -> f64 {
         let sev = self.severity.score() as f64 * 2.0; // 2–10
         let conf = self.confidence.score() as f64 * 0.5; // 0.5–1.5
         let exp = self.exploitability * 2.0; // 0–2
-        ((sev + conf + exp) / 13.0 * 10.0).clamp(0.0, 10.0)
+        let impact = self.business_impact * 2.0; // 0–2
+        ((sev + conf + exp + impact) / 15.0 * 10.0).clamp(0.0, 10.0)
     }
 
     /// Display a single-line summary for compact output

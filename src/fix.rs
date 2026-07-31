@@ -32,6 +32,7 @@ pub async fn run_fix(
     list_only: bool,
     dry_run: bool,
     auto_apply: bool,
+    verify: bool,
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
@@ -122,6 +123,14 @@ pub async fn run_fix(
         return Ok(());
     }
 
+    if verify {
+        println!(
+            "  {} {}",
+            "[VERIFY]".cyan().bold(),
+            "Each fix will be compile-checked; fixes that break the build are reverted."
+        );
+    }
+
     // Step 4: Filter out findings without a file path (can't auto-fix those)
     let fixable: Vec<&Finding> = filtered
         .iter()
@@ -192,19 +201,8 @@ pub async fn run_fix(
                 println!();
 
                 // Apply or skip
-                if auto_apply {
-                    if let Err(e) = apply_fix(&fix_plan) {
-                        eprintln!("  {} Failed to apply fix: {}", "[ERR]".red(), e);
-                        fail_count += 1;
-                    } else {
-                        println!(
-                            "  {} Applied fix to {}{}",
-                            "[OK]".green().bold(),
-                            file_path.yellow(),
-                            line_info
-                        );
-                        success_count += 1;
-                    }
+                let should_apply = if auto_apply {
+                    true
                 } else {
                     print!("  {} Apply this fix? [Y/n] ", "[IDEA]".bold());
                     std::io::stdout().flush()?;
@@ -214,21 +212,63 @@ pub async fn run_fix(
                     let input = input.trim().to_lowercase();
 
                     if input.is_empty() || input == "y" || input == "yes" {
-                        if let Err(e) = apply_fix(&fix_plan) {
-                            eprintln!("  {} Failed to apply fix: {}", "[ERR]".red(), e);
-                            fail_count += 1;
-                        } else {
-                            println!(
-                                "  {} Applied fix to {}{}",
-                                "[OK]".green().bold(),
-                                file_path.yellow(),
-                                line_info
-                            );
-                            success_count += 1;
-                        }
+                        true
                     } else {
                         println!("  {} Skipped.", "⏭".yellow());
                         skip_count += 1;
+                        false
+                    }
+                };
+
+                if should_apply {
+                    // Capture the pre-fix content so we can revert if verification fails
+                    let pre_fix = std::fs::read_to_string(&fix_plan.file_path).ok();
+
+                    if let Err(e) = apply_fix(&fix_plan) {
+                        eprintln!("  {} Failed to apply fix: {}", "[ERR]".red(), e);
+                        fail_count += 1;
+                        continue;
+                    }
+
+                    println!(
+                        "  {} Applied fix to {}{}",
+                        "[OK]".green().bold(),
+                        file_path.yellow(),
+                        line_info
+                    );
+
+                    if verify {
+                        println!(
+                            "    {} Compile-checking the project...",
+                            "[*]".cyan()
+                        );
+                        match verify_compiles(&canonical_path) {
+                            Ok(true) => {
+                                println!("    {} Build passes — fix is safe.", "[OK]".green().bold());
+                                success_count += 1;
+                            }
+                            Ok(false) => {
+                                // Revert the fix so we never leave a broken tree
+                                if let Some(original) = pre_fix {
+                                    let _ = std::fs::write(&fix_plan.file_path, &original);
+                                }
+                                eprintln!(
+                                    "  {} Fix broke the build — reverted. The finding needs a manual fix.\n",
+                                    "[ERR]".red().bold()
+                                );
+                                fail_count += 1;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "  {} Could not verify build ({}). Fix applied but unverified.",
+                                    "[!]".yellow(),
+                                    e
+                                );
+                                success_count += 1;
+                            }
+                        }
+                    } else {
+                        success_count += 1;
                     }
                 }
             }
@@ -427,6 +467,69 @@ fn print_fixable_findings(findings: &[&Finding], _project_path: &Path) {
         "[IDEA]".bold(),
         "cipher-ai fix --id <ID>".cyan()
     );
+}
+
+/// Compile-check a project after a fix has been applied.
+///
+/// Detects the build system from the manifest files present and runs the
+/// corresponding compile/check command with a timeout. Returns `Ok(true)` if
+/// the build passes, `Ok(false)` if it fails, and `Err` if no build system is
+/// detected or the check cannot be run (callers treat that as "unverified").
+fn verify_compiles(project_path: &Path) -> Result<bool> {
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    // Pick the compile command based on the project's manifest.
+    let (program, args, cwd) = if project_path.join("Cargo.toml").exists() {
+        ("cargo", vec!["check", "--quiet"], project_path.to_path_buf())
+    } else if project_path.join("package.json").exists() {
+        // For JS/TS projects, try tsc first (fast, no emit). Fall back to npm
+        // build ONLY if a build script exists — otherwise `npm run build` fails
+        // with a non-zero exit and a correct fix would be wrongly reverted.
+        let pkg = std::fs::read_to_string(project_path.join("package.json")).unwrap_or_default();
+        let has_build_script = serde_json::from_str::<serde_json::Value>(&pkg)
+            .ok()
+            .and_then(|v| v["scripts"]["build"].as_str().map(|s| !s.is_empty()))
+            .unwrap_or(false);
+        if project_path.join("tsconfig.json").exists() {
+            ("npx", vec!["tsc", "--noEmit", "-p", "tsconfig.json"], project_path.to_path_buf())
+        } else if has_build_script {
+            ("npm", vec!["run", "build", "--silent"], project_path.to_path_buf())
+        } else {
+            anyhow::bail!("package.json has no build script or tsconfig — cannot verify");
+        }
+    } else if project_path.join("go.mod").exists() {
+        ("go", vec!["build", "./..."], project_path.to_path_buf())
+    } else if project_path.join("pyproject.toml").exists() || project_path.join("requirements.txt").exists() {
+        ("python3", vec!["-m", "compileall", "-q", "."], project_path.to_path_buf())
+    } else {
+        // Unknown build system — cannot verify.
+        anyhow::bail!("no build system detected (expected Cargo.toml, package.json, go.mod, or pyproject.toml)");
+    };
+
+    let mut child = Command::new(program)
+        .args(&args)
+        .current_dir(&cwd)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("failed to start {}: {}", program, e))?;
+
+    // Enforce a timeout so a hung build can't stall the fix session.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.success()),
+            Ok(None) => {
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    anyhow::bail!("{} check timed out after 120s", program);
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(e) => anyhow::bail!("failed to wait for {}: {}", program, e),
+        }
+    }
 }
 
 /// Resolve a finding's stored file path against the current project.

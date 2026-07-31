@@ -18,4 +18,5 @@ pub mod review;
 pub mod scan;
 pub mod sbom;
 pub mod secrets;
+pub mod verify;
 pub mod zeroday;
