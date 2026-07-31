@@ -1,5 +1,6 @@
 use crate::finding::{dedup_findings, Finding};
 use crate::groq::GroqClient;
+use crate::trace::{self, TraceStep};
 use crate::{deps, review, secrets};
 use anyhow::Result;
 use colored::*;
@@ -82,6 +83,10 @@ pub struct AttackChain {
     pub impact: String,
     /// Number of steps in the chain
     pub steps: usize,
+    /// Real cross-file data-flow evidence (from `attack --flow`), empty when
+    /// flow analysis was not requested or no path connects the files
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<TraceStep>,
 }
 
 /// Run the `cipher-ai attack` command
@@ -91,6 +96,7 @@ pub async fn run_attack(
     depth: usize,
     json_output: bool,
     use_ai: bool,
+    use_flow: bool,
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
@@ -143,7 +149,46 @@ pub async fn run_attack(
         return Ok(());
     }
 
-    // Step 4: AI enrichment (optional)
+    // Step 4a: Real data-flow evidence (--flow). For each chain, trace taint
+    // paths between the entry finding's file and the impact finding's file. If
+    // untrusted data genuinely flows between them, attach the path steps as
+    // evidence and boost the chain's risk score.
+    if use_flow {
+        println!("  {} Attaching real data-flow evidence to chains...", "[FLOW]".cyan());
+        // Trace at most the top 8 chains (each trace walks the codebase once).
+        let flow_count = chains.len().min(8);
+        for chain in chains.iter_mut().take(flow_count) {
+            let entry_file = chain.findings.first().and_then(|f| f.file_path.clone());
+            let impact_file = chain.findings.last().and_then(|f| f.file_path.clone());
+            let (Some(entry_file), Some(impact_file)) = (entry_file, impact_file) else {
+                continue;
+            };
+            let paths = trace::trace_between_files(&canonical_path, &entry_file, &impact_file, depth);
+            if let Some(top) = paths.first() {
+                chain.evidence = top.steps.clone();
+                // A real data-flow path between the files makes the chain
+                // materially more likely to be exploitable.
+                chain.risk_score = (chain.risk_score + 1.5).min(10.0);
+                chain.description = format!(
+                    "{} — Real data-flow path confirmed: {} → {}.",
+                    chain.description, top.source, top.sink
+                );
+            }
+        }
+        // Re-sort since evidence boosted some risk scores
+        chains.sort_by(|a, b| {
+            b.risk_score
+                .partial_cmp(&a.risk_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        println!(
+            "  {} Traced {} chain(s) for data-flow evidence.",
+            "[OK]".green(),
+            flow_count.to_string().bold()
+        );
+    }
+
+    // Step 4b: AI enrichment (optional)
     if use_ai {
         println!("  {} Enriching chains with AI analysis...", "[AI]".cyan());
         if let Err(e) = enrich_chains_ai(&mut chains, &canonical_path).await {
@@ -394,6 +439,7 @@ fn discover_chains(findings: &[Finding], depth: usize) -> Vec<AttackChain> {
                     entry_point,
                     impact,
                     steps,
+                    evidence: Vec::new(),
                 });
             }
         }
@@ -653,6 +699,29 @@ fn display_chains(chains: &[AttackChain]) {
                 fp.yellow(),
                 line
             );
+        }
+
+        // Real data-flow evidence (--flow)
+        if !chain.evidence.is_empty() {
+            println!();
+            println!("    {} Real data-flow evidence (trace):", "[FLOW]".bold().cyan());
+            for step in chain.evidence.iter().take(8) {
+                let file_short = step.file.rsplit('/').next().unwrap_or(&step.file);
+                let action = match step.action.as_str() {
+                    "source" => "SOURCE".yellow(),
+                    "sink" => "SINK".red().bold(),
+                    "call" => "CALL".cyan(),
+                    _ => "FLOW".dimmed(),
+                };
+                println!(
+                    "      {} {} {}  {}:{}",
+                    "->".cyan(),
+                    action,
+                    step.detail.dimmed(),
+                    file_short.yellow(),
+                    step.line
+                );
+            }
         }
         println!();
     }

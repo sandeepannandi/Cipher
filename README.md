@@ -66,13 +66,16 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 | `cipher-ai zeroday --anomaly-only` | Only run anomaly detection layer |
 | `cipher-ai sbom` | Generate **CycloneDX or SPDX** SBOM |
 | `cipher-ai sbom --format spdx` | SPDX SBOM format |
-| `cipher-ai report` | Generate security report (terminal/markdown/json) |
+| `cipher-ai report` | Generate security report (terminal/markdown/json/html) |
+| `cipher-ai report --format html` | Generate a browser-ready HTML dashboard report |
 | `cipher-ai attack` | Discover attack chains from findings (8 chain types) |
+| `cipher-ai attack --flow` | Attack chains with real cross-file data-flow evidence |
 | `cipher-ai attack --depth 5` | Deeper attack chain analysis |
 | `cipher-ai fix --list` | List all fixable findings |
 | `cipher-ai fix --dry-run` | Preview AI-generated fixes without applying |
 | `cipher-ai fix --id <UUID>` | Generate and apply AI fix for specific finding |
 | `cipher-ai fix --risk critical` | Auto-fix all critical findings |
+| `cipher-ai fix --pr` | Apply fixes and open a GitHub PR with them |
 | `cipher-ai fix --all -y` | Fix everything without prompting |
 | `cipher-ai config` | Show current configuration |
 | `cipher-ai config set groq-api-key <key>` | Set API key in config |

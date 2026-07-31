@@ -33,6 +33,9 @@ pub async fn run_fix(
     dry_run: bool,
     auto_apply: bool,
     verify: bool,
+    open_pr: bool,
+    pr_repo: Option<&str>,
+    pr_token: Option<&str>,
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
@@ -163,6 +166,7 @@ pub async fn run_fix(
     let mut success_count = 0u32;
     let mut skip_count = 0u32;
     let mut fail_count = 0u32;
+    let mut applied: Vec<AppliedFix> = Vec::new();
 
     for (i, finding) in fixable.iter().enumerate() {
         let file_path = finding.file_path.as_deref().unwrap_or("");
@@ -237,6 +241,14 @@ pub async fn run_fix(
                         line_info
                     );
 
+                    applied.push(AppliedFix {
+                        title: finding.title.clone(),
+                        file_path: fix_plan.file_path.to_string_lossy().to_string(),
+                        severity: finding.severity.to_string(),
+                        cwe: finding.cwe_id.clone().unwrap_or_else(|| "-".to_string()),
+                        explanation: fix_plan.explanation.clone(),
+                    });
+
                     if verify {
                         println!(
                             "    {} Compile-checking the project...",
@@ -252,6 +264,7 @@ pub async fn run_fix(
                                 if let Some(original) = pre_fix {
                                     let _ = std::fs::write(&fix_plan.file_path, &original);
                                 }
+                                let _ = applied.pop(); // remove from PR list too
                                 eprintln!(
                                     "  {} Fix broke the build — reverted. The finding needs a manual fix.\n",
                                     "[ERR]".red().bold()
@@ -293,7 +306,240 @@ pub async fn run_fix(
         fail_count.to_string().bold().red(),
     );
 
+    // Step 8: Open a pull request with the applied fixes (--pr)
+    if open_pr {
+        if applied.is_empty() {
+            println!();
+            println!("  {} No fixes applied — nothing to open a PR for.", "[-]".yellow());
+        } else {
+            println!();
+            create_fix_pr(&canonical_path, &applied, pr_repo, pr_token).await?;
+        }
+    }
+
     Ok(())
+}
+
+/// A successfully applied fix, collected for the `--pr` summary.
+struct AppliedFix {
+    title: String,
+    file_path: String,
+    severity: String,
+    cwe: String,
+    explanation: String,
+}
+
+/// Create a branch with the applied fixes, push it, and open a GitHub PR.
+///
+/// Resolves the repository from `--repo`, `GITHUB_REPOSITORY`, or the origin
+/// git remote; the token from `--token` or `GITHUB_TOKEN`/`GH_TOKEN`. The base
+/// branch is the repository's default branch (GitHub API) falling back to
+/// `main`. Fails gracefully with actionable messages when git or credentials
+/// are unavailable.
+async fn create_fix_pr(
+    project_path: &Path,
+    applied: &[AppliedFix],
+    repo_arg: Option<&str>,
+    token_arg: Option<&str>,
+) -> Result<()> {
+    println!("  {} Preparing pull request with {} fix(es)...", "[PR]".cyan().bold(), applied.len());
+
+    // Resolve repository: flag > env > origin remote
+    let repo = match crate::pr::resolve_repo(repo_arg) {
+        Some(r) => r,
+        None => match git_origin_repo(project_path) {
+            Some(r) => {
+                println!("  {} Detected repository from git remote: {}", "[GIT]".cyan(), r.yellow());
+                r
+            }
+            None => {
+                eprintln!(
+                    "  {} Could not determine repository. Pass {} or set {}.",
+                    "[!]".yellow(),
+                    "--repo owner/name".cyan(),
+                    "GITHUB_REPOSITORY".cyan()
+                );
+                eprintln!(
+                    "  {} Fixes are applied locally — create the PR manually.",
+                    "[IDEA]".bold()
+                );
+                return Ok(());
+            }
+        },
+    };
+
+    // Resolve token
+    let token = match token_arg {
+        Some(t) => t.to_string(),
+        None => match std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN")) {
+            Ok(t) => t,
+            Err(_) => {
+                eprintln!(
+                    "  {} No GitHub token found. Pass {} or set {}.",
+                    "[!]".yellow(),
+                    "--token".cyan(),
+                    "GITHUB_TOKEN".cyan()
+                );
+                eprintln!(
+                    "  {} Fixes are applied locally — create the PR manually.",
+                    "[IDEA]".bold()
+                );
+                return Ok(());
+            }
+        },
+    };
+
+    // Create a branch for the fixes. Git failures degrade gracefully: the
+    // fixes stay applied locally and we print manual push instructions instead
+    // of aborting the whole command after real work was already done.
+    let branch = format!("cipherai/security-fixes-{}", chrono::Utc::now().format("%Y%m%d%H%M%S"));
+    println!("  {} Creating branch {}", "[GIT]".cyan(), branch.yellow());
+    if let Err(e) = run_git(project_path, &["checkout", "-b", &branch]) {
+        return graceful_pr_failure(&e);
+    }
+
+    // Stage and commit the fixes. Prefer staging only the fixed files so the
+    // PR stays scoped to the security changes; fall back to `-A` when a path
+    // can't be resolved relative to the repo.
+    let mut staged = false;
+    for f in applied {
+        let p = std::path::Path::new(&f.file_path);
+        let rel = p.strip_prefix(project_path).unwrap_or(p);
+        if rel.exists() && git_ok(project_path, &["add", "--", rel.to_string_lossy().as_ref()]) {
+            staged = true;
+        }
+    }
+    if !staged {
+        if let Err(e) = run_git(project_path, &["add", "-A"]) {
+            return graceful_pr_failure(&e);
+        }
+    }
+    let commit_msg = format!("fix(security): apply {} CipherAI fix(es)", applied.len());
+    if let Err(e) = run_git(project_path, &["commit", "-m", &commit_msg]) {
+        return graceful_pr_failure(&e);
+    }
+
+    // Push to origin
+    println!("  {} Pushing branch to origin...", "[GIT]".cyan());
+    if let Err(e) = run_git(project_path, &["push", "-u", "origin", &branch]) {
+        return graceful_pr_failure(&e);
+    }
+
+    // Determine the base branch (repository default branch)
+    let base = crate::pr::default_branch(&repo, &token)
+        .await
+        .unwrap_or_else(|| "main".to_string());
+
+    // Build the PR title + body
+    let title = format!("fix(security): {} CipherAI fix(es)", applied.len());
+    let body = render_fix_pr_body(applied, &base, &branch);
+
+    println!("  {} Opening PR on {} (base: {})...", "[GITHUB]".cyan(), repo.yellow(), base.yellow());
+    match crate::pr::create_pull_request(&repo, &token, &branch, &base, &title, &body).await {
+        Ok(url) => {
+            println!();
+            println!("  {} Pull request created:", "[OK]".green().bold());
+            println!("    {}", url.green().bold());
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!(
+                "  {} PR creation failed (fixes are on branch {}): {}",
+                "[!]".yellow(),
+                branch.yellow(),
+                e
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Run a git command in the project directory, failing with context on error.
+fn run_git(project_path: &Path, args: &[&str]) -> Result<()> {
+    use std::process::Command;
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run git: {}", e))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("git {} failed: {}", args.join(" "), stderr.trim());
+    }
+    Ok(())
+}
+
+/// Print a graceful PR-failure message and return `Ok(())` so the command
+/// exits cleanly — the fixes were already applied locally.
+fn graceful_pr_failure(err: &anyhow::Error) -> Result<()> {
+    eprintln!("  {} Git step failed: {}", "[!]".yellow(), err);
+    eprintln!(
+        "  {} Fixes are applied locally — commit and push them, then create the PR manually.",
+        "[IDEA]".bold()
+    );
+    Ok(())
+}
+
+/// Run a git command returning `true` on success, `false` on any failure.
+fn git_ok(project_path: &Path, args: &[&str]) -> bool {
+    use std::process::Command;
+    Command::new("git")
+        .args(args)
+        .current_dir(project_path)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Extract `owner/name` from the origin remote of a git repo.
+fn git_origin_repo(project_path: &Path) -> Option<String> {
+    use std::process::Command;
+    let out = Command::new("git")
+        .args(["config", "--get", "remote.origin.url"])
+        .current_dir(project_path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    crate::pr::repo_from_remote_url(&url)
+}
+
+/// Render the markdown body of the fix PR.
+fn render_fix_pr_body(applied: &[AppliedFix], base: &str, branch: &str) -> String {
+    let mut md = String::new();
+    md.push_str("## 🔒 CipherAI Security Fixes\n\n");
+    md.push_str(&format!(
+        "This PR was created automatically by [CipherAI](https://github.com/sandeepannandi/Cipher) — it applies **{} verified fix(es)** to security findings in this repository.\n\n",
+        applied.len()
+    ));
+
+    md.push_str("| # | Severity | Finding | File | CWE |\n");
+    md.push_str("|---|----------|---------|------|-----|\n");
+    for (i, f) in applied.iter().enumerate() {
+        let file = f.file_path.rsplit('/').next().unwrap_or(&f.file_path);
+        md.push_str(&format!(
+            "| {} | {} | {} | `{}` | {} |\n",
+            i + 1,
+            f.severity,
+            f.title.replace('|', "\\|"),
+            file,
+            f.cwe
+        ));
+    }
+
+    md.push_str("\n## What changed\n\n");
+    for (i, f) in applied.iter().enumerate() {
+        md.push_str(&format!("**{}. {}** — {}\n", i + 1, f.title, f.explanation));
+    }
+
+    md.push_str("\n---\n");
+    md.push_str(&format!(
+        "_Branch: `{}` · Base: `{}` · Review and merge if the changes look correct._\n",
+        branch, base
+    ));
+    md
 }
 
 /// Collect all fixable findings from all analysis modules
@@ -975,6 +1221,41 @@ mod tests {
         let resolved = resolve_finding_path(path.to_str().unwrap(), Path::new("."));
         assert_eq!(resolved, path);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_render_fix_pr_body_lists_fixes() {
+        let applied = vec![
+            AppliedFix {
+                title: "SQL Injection in query".to_string(),
+                file_path: "/proj/src/app.py".to_string(),
+                severity: "HIGH".to_string(),
+                cwe: "CWE-89".to_string(),
+                explanation: "Use parameterized queries.".to_string(),
+            },
+            AppliedFix {
+                title: "Hardcoded API Key".to_string(),
+                file_path: "/proj/src/config.py".to_string(),
+                severity: "CRITICAL".to_string(),
+                cwe: "CWE-798".to_string(),
+                explanation: "Move the key to an environment variable.".to_string(),
+            },
+        ];
+        let body = render_fix_pr_body(&applied, "main", "cipherai/security-fixes-20240101");
+        assert!(body.contains("SQL Injection"));
+        assert!(body.contains("CWE-89"));
+        assert!(body.contains("CWE-798"));
+        assert!(body.contains("app.py"));
+        assert!(body.contains("Use parameterized queries"));
+        assert!(body.contains("main"));
+        assert!(body.contains("cipherai/security-fixes-20240101"));
+    }
+
+    #[test]
+    fn test_render_fix_pr_body_empty() {
+        let body = render_fix_pr_body(&[], "develop", "branch-x");
+        assert!(body.contains("0 verified fix(es)"));
+        assert!(body.contains("develop"));
     }
 
     #[test]

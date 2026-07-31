@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`cipher-ai attack --flow`** — Attach real cross-file data-flow evidence to attack chains via the taint engine (proves chains are exploitable, boosts risk when a path is confirmed)
+- **`cipher-ai fix --pr`** — Apply fixes, create a branch, push, and open a GitHub PR with a per-fix summary (repo auto-detected from `--repo`, `GITHUB_REPOSITORY`, or git remote)
+- **`cipher-ai report --format html`** — Self-contained browser-ready HTML dashboard (security score, severity bars, findings table with CWE/OWASP/usage, print-to-PDF styles)
+- **Dependency reachability** — `deps` now finds where each vulnerable package is actually imported in source and boosts exploitability for used packages (lockfile-only packages get discounted)
+- **`Finding.usage`** — New serde-backward-compatible field recording where a vulnerable dependency is used in source
+
+### Changed
+
+- **TUI**: New `/attack --flow`, `/fix --pr`, `/report --format html`, and attack/report variants in help, palette, and input suggestions
+- **README**: Documented the new `--flow`, `--pr`, and `--format html` flags
+
 ## [1.0.0] — 2026-07-30
 
 ### Added

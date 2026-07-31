@@ -160,6 +160,10 @@ enum Commands {
         /// Skip AI-powered enrichment for faster results
         #[arg(long = "no-ai")]
         no_ai: bool,
+
+        /// Attach real cross-file data-flow evidence to chains (taint tracing)
+        #[arg(long = "flow")]
+        flow: bool,
     },
 
     /// Auto-fix security vulnerabilities using AI
@@ -196,6 +200,18 @@ enum Commands {
         /// Verify each fix by compiling the project — revert fixes that break the build
         #[arg(long = "verify")]
         verify: bool,
+
+        /// Open a GitHub pull request with the applied fixes
+        #[arg(long = "pr")]
+        open_pr: bool,
+
+        /// Repository as owner/name for the PR (defaults to GITHUB_REPOSITORY or git remote)
+        #[arg(long = "repo")]
+        repo: Option<String>,
+
+        /// GitHub token with repo scope for the PR (defaults to GITHUB_TOKEN)
+        #[arg(long = "token")]
+        token: Option<String>,
     },
 
     /// Run all security scans with consolidated CI output
@@ -398,13 +414,13 @@ async fn main() -> Result<()> {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             report::run_report(&project_path, &report_type, &format, output.as_deref()).await?;
         }
-        Commands::Attack { chain, depth, json, no_ai } => {
+        Commands::Attack { chain, depth, json, no_ai, flow } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            attack::run_attack(&project_path, chain.as_deref(), depth, json, !no_ai).await?;
+            attack::run_attack(&project_path, chain.as_deref(), depth, json, !no_ai, flow).await?;
         }
-        Commands::Fix { finding_id, risk_level, target_file, fix_all, list_only, dry_run, auto_apply, verify } => {
+        Commands::Fix { finding_id, risk_level, target_file, fix_all, list_only, dry_run, auto_apply, verify, open_pr, repo, token } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            fix::run_fix(&project_path, finding_id.as_deref(), risk_level.as_deref(), target_file.as_deref(), fix_all, list_only, dry_run, auto_apply, verify).await?;
+            fix::run_fix(&project_path, finding_id.as_deref(), risk_level.as_deref(), target_file.as_deref(), fix_all, list_only, dry_run, auto_apply, verify, open_pr, repo.as_deref(), token.as_deref()).await?;
         }
         Commands::Ci { fail_on, use_ai, format, output } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());

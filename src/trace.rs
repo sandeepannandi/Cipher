@@ -921,6 +921,60 @@ pub async fn run_trace(
     Ok(())
 }
 
+/// Find real data-flow paths that connect two files (used by `attack --flow`).
+///
+/// Returns taint paths whose first step originates in `from_file` and whose
+/// final step lands in `to_file` — evidence that a weakness in one file can
+/// actually reach a sink in another. Matches files loosely (suffix), so
+/// absolute and relative representations of the same file both work.
+pub fn trace_between_files(
+    project_path: &Path,
+    from_file: &str,
+    to_file: &str,
+    depth: usize,
+) -> Vec<TaintPath> {
+    let canonical_path = std::fs::canonicalize(project_path)
+        .unwrap_or_else(|_| project_path.to_path_buf());
+    let functions = collect_functions(&canonical_path);
+    if functions.is_empty() {
+        return Vec::new();
+    }
+
+    let max_depth = if depth == 0 { DEFAULT_DEPTH } else { depth };
+    let tracer = Tracer::new(&functions, "", max_depth);
+    let mut paths = tracer.trace_all();
+
+    // Keep only paths that start in `from_file` and end in `to_file`.
+    paths.retain(|p| {
+        let first = p.steps.first().map(|s| s.file.as_str()).unwrap_or("");
+        let last = p.steps.last().map(|s| s.file.as_str()).unwrap_or("");
+        files_match(first, from_file) && files_match(last, to_file)
+    });
+
+    paths.sort_by(|a, b| {
+        b.risk_score
+            .partial_cmp(&a.risk_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    paths.dedup_by(|a, b| a.source == b.source && a.sink == b.sink);
+    for (i, p) in paths.iter_mut().enumerate() {
+        p.id = format!("FLOW-{}", i + 1);
+    }
+    paths
+}
+
+/// Loose path comparison — equal if one is a suffix of the other after
+/// normalizing separators, so `/proj/src/app.js` matches `src/app.js`.
+fn files_match(a: &str, b: &str) -> bool {
+    let na = a.replace('\\', "/");
+    let nb = b.replace('\\', "/");
+    if na == nb {
+        return true;
+    }
+    na.ends_with(&format!("/{}", nb.trim_start_matches('/')))
+        || nb.ends_with(&format!("/{}", na.trim_start_matches('/')))
+}
+
 /// Enrich path descriptions with AI analysis.
 async fn enrich_paths_ai(paths: &mut [TaintPath], query: &str) -> Result<()> {
     let client = match GroqClient::from_env() {
@@ -1182,6 +1236,57 @@ mod tests {
             paths.iter().any(|p| p.steps.iter().any(|s| s.action == "call")),
             "expected a cross-file call hop in the path"
         );
+    }
+
+    #[test]
+    fn test_files_match_suffix() {
+        assert!(files_match("/proj/src/app.js", "/proj/src/app.js"));
+        assert!(files_match("/proj/src/app.js", "src/app.js"));
+        assert!(files_match("src/app.js", "/proj/src/app.js"));
+        assert!(!files_match("/proj/src/app.js", "/proj/src/lib.js"));
+    }
+
+    #[test]
+    fn test_trace_between_files_connects_cross_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "cipher_flow_{}_{}",
+            std::process::id(),
+            "between"
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("app.js"),
+            "fn handle(req) {\n    let name = req.body.name;\n    validateAndExec(name);\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("lib.js"),
+            "fn validateAndExec(name) {\n    exec(name);\n}\n",
+        )
+        .unwrap();
+
+        let from = dir.join("app.js").to_string_lossy().to_string();
+        let to = dir.join("lib.js").to_string_lossy().to_string();
+        let paths = trace_between_files(&dir, &from, &to, 4);
+        assert!(!paths.is_empty(), "expected a cross-file flow between app.js and lib.js");
+        assert!(paths[0].steps.iter().any(|s| s.action == "call"));
+        assert_eq!(paths[0].steps.last().unwrap().action, "sink");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_trace_between_files_no_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "cipher_flow_{}_{}",
+            std::process::id(),
+            "none"
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.js"), "fn a() { let x = 1; }\n").unwrap();
+        std::fs::write(dir.join("b.js"), "fn b() { let y = 2; }\n").unwrap();
+        let paths = trace_between_files(&dir, "a.js", "b.js", 4);
+        assert!(paths.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -285,6 +285,10 @@ pub struct Finding {
     pub created_at: String,
     /// Source module that produced this finding
     pub source: String,
+    /// Where a vulnerable dependency is actually imported/used in source
+    /// (usage-reachability for deps findings), e.g. "used in 3 files: a.js, b.js"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<String>,
 }
 
 /// Default business impact (moderate) for findings deserialized from older reports
@@ -321,6 +325,7 @@ impl Finding {
             remediation_effort: RemediationEffort::Hours,
             created_at: Utc::now().to_rfc3339(),
             source: source.into(),
+            usage: None,
         }
     }
 
@@ -376,6 +381,12 @@ impl Finding {
     /// Chainable setter for cve_id
     pub fn with_cve(mut self, cve: impl Into<String>) -> Self {
         self.cve_id = Some(cve.into());
+        self
+    }
+
+    /// Chainable setter for usage-reachability info (deps findings)
+    pub fn with_usage(mut self, usage: impl Into<String>) -> Self {
+        self.usage = Some(usage.into());
         self
     }
 
@@ -541,6 +552,9 @@ impl FindingReport {
             );
             if let Some(ref remediation) = finding.remediation {
                 println!("    {} {}", "Fix:".bold().green(), remediation.trim());
+            }
+            if let Some(ref usage) = finding.usage {
+                println!("    {} {}", "Usage:".bold().cyan(), usage.trim());
             }
         }
     }

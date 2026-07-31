@@ -225,9 +225,126 @@ pub(crate) async fn post_pr_comment(
 }
 
 /// Resolve the repo (owner/name) from CLI arg or environment.
-fn resolve_repo(repo: Option<&str>) -> Option<String> {
+pub(crate) fn resolve_repo(repo: Option<&str>) -> Option<String> {
     repo.map(|s| s.to_string())
         .or_else(|| std::env::var("GITHUB_REPOSITORY").ok())
+}
+
+/// Extract `owner/name` from a git remote URL.
+///
+/// Handles `https://github.com/owner/repo.git` and `git@github.com:owner/repo.git`
+/// forms. Returns `None` when the URL isn't a recognizable GitHub remote.
+pub(crate) fn repo_from_remote_url(remote: &str) -> Option<String> {
+    let trimmed = remote.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Strip the protocol/prefix to isolate the path component.
+    let path = trimmed
+        .split("github.com")
+        .nth(1)?
+        .trim_start_matches(':')
+        .trim_start_matches('/');
+    let path = path.trim_end_matches(".git").trim_end_matches('/');
+    if path.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let name = parts.pop().unwrap_or_default();
+    let owner = parts.pop().unwrap_or_default();
+    if owner.is_empty() || name.is_empty() {
+        return None;
+    }
+    Some(format!("{}/{}", owner, name))
+}
+
+/// Body of a pull-request creation request.
+#[derive(Serialize)]
+struct CreatePullRequest {
+    title: String,
+    head: String,
+    base: String,
+    body: String,
+}
+
+/// Create a pull request on GitHub and return its HTML URL.
+pub(crate) async fn create_pull_request(
+    repo: &str,
+    token: &str,
+    head: &str,
+    base: &str,
+    title: &str,
+    body: &str,
+) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .user_agent("cipher-ai/1.0")
+        .build()
+        .context("Failed to build HTTP client")?;
+
+    let url = format!("{}/repos/{}/pulls", GITHUB_API, repo);
+    let payload = CreatePullRequest {
+        title: title.to_string(),
+        head: head.to_string(),
+        base: base.to_string(),
+        body: body.to_string(),
+    };
+
+    let response = client
+        .post(&url)
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&payload)
+        .send()
+        .await
+        .context("Failed to send pull request to GitHub")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "GitHub API error ({}) creating PR on {}: {}",
+            status,
+            repo,
+            text
+        );
+    }
+
+    let json: serde_json::Value = response.json().await?;
+    Ok(json
+        .get("html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&url)
+        .to_string())
+}
+
+/// Get the default branch of a repository (used as the PR base).
+pub(crate) async fn default_branch(repo: &str, token: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("cipher-ai/1.0")
+        .build()
+        .ok()?;
+    let url = format!("{}/repos/{}", GITHUB_API, repo);
+    let response = client
+        .get(&url)
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = response.json().await.ok()?;
+    json.get("default_branch")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Resolve the PR number from CLI arg or environment (GITHUB_PR_NUMBER,
@@ -413,6 +530,36 @@ mod tests {
         std::env::set_var("GITHUB_PR_NUMBER", "42");
         assert_eq!(resolve_pr_number(Some(7)), Some(7));
         std::env::remove_var("GITHUB_PR_NUMBER");
+    }
+
+    #[test]
+    fn test_repo_from_remote_url_https() {
+        assert_eq!(
+            repo_from_remote_url("https://github.com/owner/repo.git"),
+            Some("owner/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn test_repo_from_remote_url_ssh() {
+        assert_eq!(
+            repo_from_remote_url("git@github.com:owner/repo.git"),
+            Some("owner/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn test_repo_from_remote_url_nested() {
+        assert_eq!(
+            repo_from_remote_url("https://github.com/org/team/app.git"),
+            Some("team/app".to_string())
+        );
+    }
+
+    #[test]
+    fn test_repo_from_remote_url_invalid() {
+        assert_eq!(repo_from_remote_url(""), None);
+        assert_eq!(repo_from_remote_url("not a github url"), None);
     }
 
     #[test]

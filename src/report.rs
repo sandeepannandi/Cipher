@@ -222,6 +222,10 @@ pub async fn run_report(
             let md = generate_markdown(&agg, report_type);
             write_or_print(&md, output_file)?;
         }
+        "html" => {
+            let html = generate_html(&agg, report_type);
+            write_or_print(&html, output_file)?;
+        }
         _ => {
             // terminal (default)
             print_terminal(&agg, report_type);
@@ -528,6 +532,180 @@ fn generate_ci_md(report: &AggregatedReport) -> String {
     md
 }
 
+/// Escape a string for safe embedding in HTML output.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// Generate a self-contained HTML security report (dashboard-style).
+///
+/// Embeds all CSS so the file can be opened directly in a browser or printed
+/// to PDF. Includes the security score, severity breakdown, top risks, and a
+/// full findings table with CWE/OWASP/usage annotations.
+fn generate_html(report: &AggregatedReport, report_type: &str) -> String {
+    let score = report.security_score();
+    let score_color = if score >= 80.0 {
+        "#22c55e"
+    } else if score >= 50.0 {
+        "#eab308"
+    } else {
+        "#ef4444"
+    };
+    let grade = if score >= 80.0 {
+        "GOOD"
+    } else if score >= 50.0 {
+        "MODERATE"
+    } else {
+        "CRITICAL"
+    };
+    let title = match report_type {
+        "executive" => "Executive Summary",
+        "ci" => "CI Security Report",
+        _ => "Developer Report",
+    };
+
+    let mut rows = String::new();
+    for (i, f) in report.all_sorted().iter().enumerate() {
+        let sev_class = match f.severity {
+            Severity::Critical => "crit",
+            Severity::High => "high",
+            Severity::Medium => "med",
+            Severity::Low => "low",
+            Severity::Info => "info",
+        };
+        let cwe = f.cwe_id.as_deref().unwrap_or("-");
+        let owasp = f
+            .owasp_category
+            .map(|o| o.code().to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let loc = match (&f.file_path, f.line_number) {
+            (Some(fp), Some(ln)) => format!("{}:{}", html_escape(fp), ln),
+            (Some(fp), None) => html_escape(fp),
+            (None, _) => "-".to_string(),
+        };
+        let usage = f.usage.as_deref().map(html_escape).unwrap_or_default();
+        rows.push_str(&format!(
+            r#"<tr class="{sev_class}">
+<td class="idx">{i}</td>
+<td><span class="sev {sev_class}">{sev}</span></td>
+<td class="title">{title}</td>
+<td><code>{cwe}</code></td>
+<td><code>{owasp}</code></td>
+<td class="loc">{loc}</td>
+<td class="risk">{risk:.1}</td>
+<td class="usage">{usage}</td>
+</tr>
+"#,
+            sev_class = sev_class,
+            i = i + 1,
+            sev = html_escape(&f.severity.to_string()),
+            title = html_escape(&f.title),
+            cwe = html_escape(cwe),
+            owasp = html_escape(&owasp),
+            loc = loc,
+            risk = f.risk_score(),
+            usage = usage,
+        ));
+    }
+
+    let total = report.total_findings();
+    let critical = report.count_by_severity(Severity::Critical);
+    let high = report.count_by_severity(Severity::High);
+    let medium = report.count_by_severity(Severity::Medium);
+    let low = report.count_by_severity(Severity::Low);
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CipherAI Security Report — {project}</title>
+<style>
+:root {{ color-scheme: dark; }}
+* {{ box-sizing: border-box; }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }}
+.container {{ max-width: 1100px; margin: 0 auto; }}
+header {{ border-bottom: 2px solid #334155; padding-bottom: 1rem; margin-bottom: 2rem; }}
+header h1 {{ margin: 0; font-size: 1.6rem; color: #fff; }}
+header .meta {{ color: #94a3b8; font-size: 0.9rem; margin-top: 0.4rem; }}
+.score-card {{ display: flex; gap: 2rem; flex-wrap: wrap; align-items: center; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 2rem; }}
+.score {{ font-size: 3rem; font-weight: 800; }}
+.score-badge {{ padding: 0.25rem 0.75rem; border-radius: 999px; font-weight: 700; font-size: 0.85rem; letter-spacing: 0.05em; }}
+.bars {{ display: flex; gap: 0.75rem; flex-wrap: wrap; }}
+.bar {{ background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 0.6rem 1rem; text-align: center; min-width: 6rem; }}
+.bar .n {{ font-size: 1.5rem; font-weight: 700; }}
+.bar.crit .n {{ color: #ef4444; }} .bar.high .n {{ color: #eab308; }} .bar.med .n {{ color: #38bdf8; }} .bar.low .n {{ color: #94a3b8; }}
+.bar .l {{ font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }}
+table {{ width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; font-size: 0.85rem; }}
+th, td {{ padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid #334155; }}
+th {{ background: #0f172a; color: #94a3b8; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em; }}
+tr:hover td {{ background: #273449; }}
+td.idx {{ color: #64748b; }}
+td.title {{ font-weight: 600; }}
+td.loc {{ font-family: monospace; color: #7dd3fc; font-size: 0.8rem; }}
+td.usage {{ color: #86efac; font-size: 0.8rem; }}
+td.risk {{ font-weight: 700; text-align: right; }}
+.sev {{ padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700; }}
+.sev.crit {{ background: #ef444422; color: #ef4444; }} .sev.high {{ background: #eab30822; color: #eab308; }} .sev.med {{ background: #38bdf822; color: #38bdf8; }} .sev.low {{ background: #64748b33; color: #94a3b8; }} .sev.info {{ background: #38bdf822; color: #7dd3fc; }}
+tr.crit td.title {{ color: #fca5a5; }}
+code {{ background: #0f172a; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.75rem; color: #c4b5fd; }}
+footer {{ margin-top: 2rem; color: #64748b; font-size: 0.8rem; text-align: center; }}
+@media print {{ body {{ background: #fff; color: #0f172a; }} .score-card, table {{ background: #fff; border-color: #ddd; }} th, td, tr:hover td {{ background: #fff; }} header {{ border-color: #ddd; }} }}
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+<h1>🔒 CipherAI Security Report — {title}</h1>
+<div class="meta">Project: <code>{project}</code> · Generated: {created}</div>
+</header>
+
+<div class="score-card">
+<div>
+<div class="score" style="color: {score_color}">{score:.0}/100</div>
+<span class="score-badge" style="background: {score_color}22; color: {score_color}">{grade}</span>
+</div>
+<div class="bars">
+<div class="bar crit"><div class="n">{critical}</div><div class="l">Critical</div></div>
+<div class="bar high"><div class="n">{high}</div><div class="l">High</div></div>
+<div class="bar med"><div class="n">{medium}</div><div class="l">Medium</div></div>
+<div class="bar low"><div class="n">{low}</div><div class="l">Low</div></div>
+<div class="bar"><div class="n">{total}</div><div class="l">Total</div></div>
+</div>
+</div>
+
+<table>
+<thead><tr><th>#</th><th>Severity</th><th>Finding</th><th>CWE</th><th>OWASP</th><th>Location</th><th>Risk</th><th>Usage</th></tr></thead>
+<tbody>
+{rows}
+</tbody>
+</table>
+
+<footer>Generated by <strong>CipherAI</strong> — AI-powered security analysis · <a href="https://github.com/sandeepannandi/Cipher" style="color:#7dd3fc">github.com/sandeepannandi/Cipher</a></footer>
+</div>
+</body>
+</html>
+"#,
+        project = html_escape(&report.project_path),
+        title = html_escape(title),
+        created = html_escape(&report.created_at),
+        score = score,
+        score_color = score_color,
+        grade = grade,
+        critical = critical,
+        high = high,
+        medium = medium,
+        low = low,
+        total = total,
+        rows = rows,
+    )
+}
+
 /// Print the aggregated report to the terminal
 fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     let total = report.total_findings();
@@ -709,5 +887,36 @@ mod tests {
         report.review.push(a);
         report.secrets.push(b);
         assert_eq!(report.count_by_severity(Severity::High), 1);
+    }
+
+    #[test]
+    fn test_html_escape_special_chars() {
+        assert_eq!(html_escape("<script>&\"'"), "&lt;script&gt;&amp;&quot;&#39;");
+        assert_eq!(html_escape("plain text"), "plain text");
+    }
+
+    #[test]
+    fn test_generate_html_contains_score_and_findings() {
+        let mut report = AggregatedReport::new("/proj");
+        let f = mk("SQL Injection <bad>", "security-review", Severity::Critical)
+            .at("/proj/app.py", 12)
+            .with_cwe("CWE-89");
+        report.review.push(f);
+        let html = generate_html(&report, "developer");
+        assert!(html.contains("<html"));
+        assert!(html.contains("Security Report"));
+        assert!(html.contains("75/100") || html.contains("score"));
+        assert!(html.contains("SQL Injection &lt;bad&gt;"));
+        assert!(html.contains("CWE-89"));
+        assert!(html.contains("CRITICAL"));
+    }
+
+    #[test]
+    fn test_generate_html_empty_report() {
+        let report = AggregatedReport::new("/proj");
+        let html = generate_html(&report, "executive");
+        assert!(html.contains("Executive Summary"));
+        assert!(html.contains("100/100"));
+        assert!(html.contains("GOOD"));
     }
 }

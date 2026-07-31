@@ -523,6 +523,35 @@ fn test_parse_manifest_unknown_file() {
 }
 
 #[test]
+fn test_find_usage_files_detects_imports() {
+    let dir = std::env::temp_dir().join(format!("cipher_usage_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("app.js"), "const _ = require('lodash');\n").unwrap();
+    std::fs::write(dir.join("lib.py"), "import requests\n").unwrap();
+    std::fs::write(dir.join("main.rs"), "use serde::Serialize;\n").unwrap();
+
+    let lodash = deps::find_usage_files(&dir, "lodash");
+    assert_eq!(lodash.len(), 1);
+    assert!(lodash[0].ends_with("app.js"));
+
+    let requests = deps::find_usage_files(&dir, "requests");
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].ends_with("lib.py"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_find_usage_files_no_match() {
+    let dir = std::env::temp_dir().join(format!("cipher_usage_none_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("app.js"), "const x = 5;\n").unwrap();
+    let usage = deps::find_usage_files(&dir, "lodash");
+    assert!(usage.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_ecosystem_to_purl_crates_io() {
     assert_eq!(sbom::ecosystem_to_purl_type("crates.io"), "cargo");
 }

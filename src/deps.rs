@@ -749,6 +749,188 @@ fn check_embedded_advisories(dep: &Dependency) -> Vec<Finding> {
     findings
 }
 
+/// Extract package-name tokens from a single import-ish source line.
+///
+/// Handles the common shapes across languages:
+/// - `require('lodash')`, `import _ from 'lodash'`, `import 'lodash'`
+/// - `use serde::Serialize`, `import requests`, `from django import …`
+/// - `import "github.com/gin-gonic/gin"`
+fn import_tokens(line: &str) -> Vec<String> {
+    let lower = line.to_lowercase();
+    let importish = lower.contains("import ")
+        || lower.contains("require(")
+        || lower.contains("use ")
+        || lower.contains("from ")
+        || lower.contains("include ");
+    if !importish {
+        return Vec::new();
+    }
+
+    let mut tokens = Vec::new();
+
+    // Quoted specifiers: 'lodash', "@scope/pkg", "github.com/org/repo"
+    let bytes: Vec<char> = line.chars().collect();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == '\'' || c == '"' {
+            let mut end = i + 1;
+            while end < bytes.len() && bytes[end] != c {
+                end += 1;
+            }
+            if end < bytes.len() {
+                let spec: String = bytes[i + 1..end].iter().collect();
+                let spec = spec.trim();
+                if !spec.is_empty()
+                    && spec.chars().all(|ch| ch.is_alphanumeric() || "_-.@/".contains(ch))
+                {
+                    tokens.push(spec.to_lowercase());
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    // Bare identifiers: `use serde`, `import flask`, `from flask import …`
+    for kw in ["use ", "import ", "from "] {
+        if let Some(pos) = lower.find(kw) {
+            let rest = &line[pos + kw.len()..];
+            let ident: String = rest
+                .chars()
+                .take_while(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '.' || *ch == '/')
+                .collect();
+            if !ident.is_empty() {
+                let first_seg = ident.split(['/', '.']).next().unwrap_or(&ident).to_string();
+                tokens.push(ident.to_lowercase());
+                if !first_seg.is_empty() && first_seg != ident {
+                    tokens.push(first_seg.to_lowercase());
+                }
+            }
+        }
+    }
+
+    tokens
+}
+
+/// Build a single map of `package-name → source files that import it` in one
+/// project walk. Used by deps scanning so reachability costs one walk, not one
+/// per vulnerable package.
+pub fn build_usage_map(project_path: &Path) -> std::collections::HashMap<String, Vec<String>> {
+    use ignore::WalkBuilder;
+    use crate::scan;
+
+    let walker = WalkBuilder::new(project_path)
+        .git_ignore(true)
+        .git_global(true)
+        .hidden(false)
+        .max_depth(Some(scan::MAX_WALK_DEPTH))
+        .build();
+
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut file_count = 0usize;
+
+    for result in walker {
+        if file_count >= scan::MAX_SCAN_FILES {
+            break;
+        }
+        let Ok(entry) = result else { continue };
+        let path = entry.path();
+        if !path.is_file() || scan::should_exclude(path) || scan::is_binary(path) {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .map(|e| e.to_str().unwrap_or("").to_lowercase())
+            .unwrap_or_default();
+        if !matches!(
+            ext.as_str(),
+            "rs" | "js" | "jsx" | "ts" | "tsx" | "py" | "go" | "rb" | "java"
+                | "kt" | "swift" | "c" | "cpp" | "h" | "hpp" | "cs" | "php" | "vue" | "svelte"
+        ) {
+            continue;
+        }
+        file_count += 1;
+
+        let Ok(content) = std::fs::read_to_string(path) else { continue };
+        let rel = path
+            .strip_prefix(project_path)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| path.to_string_lossy().to_string());
+
+        for line in content.lines() {
+            for token in import_tokens(line) {
+                let files = map.entry(token).or_default();
+                if !files.contains(&rel) {
+                    files.push(rel.clone());
+                }
+            }
+        }
+    }
+
+    map
+}
+
+/// Find source files that actually import/require `package` (reachability).
+///
+/// A vulnerable dependency imported by real source code is far more
+/// exploitable than one that is only declared in a manifest. Builds the usage
+/// map in a single walk and looks the package up (full name or last path
+/// segment for scoped/namespaced packages like `@scope/pkg`).
+pub fn find_usage_files(project_path: &Path, package: &str) -> Vec<String> {
+    let map = build_usage_map(project_path);
+    let pkg_lower = package.to_lowercase();
+    let short = pkg_lower.rsplit('/').next().unwrap_or("").to_string();
+
+    let mut files = map.get(&pkg_lower).cloned().unwrap_or_default();
+    if short != pkg_lower {
+        for f in map.get(&short).cloned().unwrap_or_default() {
+            if !files.contains(&f) {
+                files.push(f);
+            }
+        }
+    }
+    files
+}
+
+/// Attach usage-reachability to a dependency finding: list where the package
+/// is imported and boost exploitability when it's actually used in source.
+fn annotate_usage(
+    finding: &mut Finding,
+    usage_map: &std::collections::HashMap<String, Vec<String>>,
+    dep: &Dependency,
+) {
+    let pkg_lower = dep.name.to_lowercase();
+    let short = pkg_lower.rsplit('/').next().unwrap_or("").to_string();
+    let mut usage_files = usage_map.get(&pkg_lower).cloned().unwrap_or_default();
+    if short != pkg_lower {
+        for f in usage_map.get(&short).cloned().unwrap_or_default() {
+            if !usage_files.contains(&f) {
+                usage_files.push(f);
+            }
+        }
+    }
+
+    if usage_files.is_empty() {
+        finding.usage = Some(
+            "declared in manifest but not directly imported in source (low reachability)".to_string(),
+        );
+        // Not imported anywhere: reachability is low, discount the risk.
+        finding.exploitability = (finding.exploitability * 0.5).clamp(0.0, 1.0);
+        return;
+    }
+    let shown: Vec<&str> = usage_files.iter().take(4).map(|s| s.as_str()).collect();
+    let more = usage_files.len().saturating_sub(shown.len());
+    let mut text = format!("used in {} file(s): {}", usage_files.len(), shown.join(", "));
+    if more > 0 {
+        text.push_str(&format!(" (+{} more)", more));
+    }
+    finding.usage = Some(text);
+    // Directly imported vulnerable package: much more exploitable.
+    finding.exploitability = (finding.exploitability + 0.25).min(1.0);
+}
+
 /// Collect dependency findings without displaying them (for report generation)
 pub(crate) async fn collect_deps_findings(
     project_path: &Path,
@@ -771,9 +953,13 @@ pub(crate) async fn collect_deps_findings(
 
     let mut report = FindingReport::new("dependency-scanner", canonical_path.to_string_lossy());
 
+    // Usage map is built lazily on the first vulnerable dep (one project walk),
+    // so a clean project with no vulnerable deps never pays for the walk.
+    let mut usage_map: Option<std::collections::HashMap<String, Vec<String>>> = None;
+
     for dep in &all_deps {
         // Embedded advisories (always)
-        report.extend(check_embedded_advisories(dep));
+        let mut dep_findings = check_embedded_advisories(dep);
 
         // OSV.dev API (optional)
         if use_online {
@@ -801,10 +987,19 @@ pub(crate) async fn collect_deps_findings(
                         _ => 0.3,
                     })
                     .with_effort(RemediationEffort::Hours);
-                    report.add(finding);
+                    dep_findings.push(finding);
                 }
             }
         }
+
+        // Usage-reachability: where is this package actually imported?
+        if !dep_findings.is_empty() {
+            let map = usage_map.get_or_insert_with(|| build_usage_map(&canonical_path));
+            for finding in &mut dep_findings {
+                annotate_usage(finding, map, dep);
+            }
+        }
+        report.extend(dep_findings);
     }
 
     report.sort_by_risk();
