@@ -9,7 +9,7 @@ const { runCommand } = require('./commands/runner');
 
 const MODELS = ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'];
 
-const COMMAND_LIST = ['init', 'review', 'deps', 'secrets', 'ask', 'report', 'fix', 'attack', 'status', 'ci', 'config', 'zeroday', 'sbom'];
+const COMMAND_LIST = ['init', 'review', 'deps', 'secrets', 'ask', 'report', 'fix', 'attack', 'trace', 'pr', 'status', 'ci', 'config', 'zeroday', 'sbom'];
 
 function isQuestion(text) {
   const qWords = ['what', 'how', 'why', 'is', 'can', 'does', 'are', 'do', 'will',
@@ -157,7 +157,9 @@ function App() {
     const labels = {
       init: 'Indexing project...', review: 'Running security review...', deps: 'Checking dependencies...',
       secrets: 'Scanning for secrets...', ask: 'Asking AI...', report: 'Generating report...',
-      fix: 'Generating fix...', attack: 'Analyzing attack paths...', status: 'Checking status...',
+      fix: 'Generating fix...', attack: 'Analyzing attack paths...',
+      trace: 'Tracing data flow...', pr: 'Reviewing pull request...',
+      status: 'Checking status...',
       ci: 'Running all scans...', config: 'Configuring...',
       zeroday: 'Running zero-day analysis...',
       sbom: 'Generating SBOM...',

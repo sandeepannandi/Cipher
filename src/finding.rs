@@ -269,6 +269,9 @@ pub struct Finding {
     pub remediation: Option<String>,
     /// OWASP Top 10 category (if applicable)
     pub owasp_category: Option<OwaspCategory>,
+    /// CWE identifier (if applicable), e.g. "CWE-89"
+    #[serde(default)]
+    pub cwe_id: Option<String>,
     /// CVE identifier (if applicable)
     pub cve_id: Option<String>,
     /// Exploitability score 0.0–1.0
@@ -311,6 +314,7 @@ impl Finding {
             code_snippet: None,
             remediation: None,
             owasp_category: None,
+            cwe_id: None,
             cve_id: None,
             exploitability: 0.5,
             business_impact: 0.5,
@@ -342,6 +346,12 @@ impl Finding {
     /// Chainable setter for owasp_category
     pub fn with_owasp(mut self, category: OwaspCategory) -> Self {
         self.owasp_category = Some(category);
+        self
+    }
+
+    /// Chainable setter for cwe_id
+    pub fn with_cwe(mut self, cwe: impl Into<String>) -> Self {
+        self.cwe_id = Some(cwe.into());
         self
     }
 
@@ -503,6 +513,9 @@ impl FindingReport {
             if let Some(ref owasp) = finding.owasp_category {
                 println!("    {} {}", "OWASP:".bold().dimmed(), owasp);
             }
+            if let Some(ref cwe) = finding.cwe_id {
+                println!("    {} {}", "CWE:".bold().dimmed(), cwe.yellow());
+            }
             if let Some(ref file) = finding.file_path {
                 let line_info = finding
                     .line_number
@@ -531,6 +544,85 @@ impl FindingReport {
             }
         }
     }
+}
+
+/// Map a finding's title + type to a stable CWE identifier.
+///
+/// Falls back on the finding type when no title keyword matches.
+pub fn cwe_for_title(title: &str, finding_type: FindingType) -> Option<String> {
+    let t = title.to_lowercase();
+
+    let cwe = if t.contains("sql injection") {
+        "CWE-89"
+    } else if t.contains("command injection") {
+        "CWE-78"
+    } else if t.contains("path traversal") {
+        "CWE-22"
+    } else if t.contains("template injection") {
+        "CWE-1336"
+    } else if t.contains("xss") {
+        "CWE-79"
+    } else if t.contains("ssrf") {
+        "CWE-918"
+    } else if t.contains("md5") || t.contains("sha1") || t.contains("weak hash") {
+        "CWE-328"
+    } else if t.contains("weak encryption") || t.contains("ecb")
+        || t.contains("des_ede3") || t.contains("3des") || t.contains("tripledes") {
+        // NOTE: match "weak encryption" (both DES & ECB titles contain it)
+        // instead of bare "des", which would also match "deserialization".
+        "CWE-327"
+    } else if t.contains("hardcoded cryptographic key") || t.contains("encryption_key")
+        || t.contains("aes_key") || t.contains("secret_key") {
+        "CWE-321"
+    } else if t.contains("hardcoded") && (t.contains("credential") || t.contains("password")) {
+        "CWE-798"
+    } else if t.contains("jwt") || t.contains("token_secret") || t.contains("signing_key") {
+        "CWE-345"
+    } else if t.contains("cookie") && (t.contains("insecure") || t.contains("httponly") || t.contains("samesite")) {
+        "CWE-614"
+    } else if t.contains("debug") {
+        "CWE-489"
+    } else if t.contains("cors") {
+        "CWE-942"
+    } else if t.contains("idor") || t.contains("object reference") {
+        "CWE-639"
+    } else if t.contains("deserialization") {
+        "CWE-502"
+    } else if t.contains("mass assignment") || t.contains("autobinding") {
+        "CWE-915"
+    } else if t.contains("logging") && t.contains("sensitive") {
+        "CWE-532"
+    } else if t.contains("ssl") || t.contains("tls") || t.contains("verification") {
+        "CWE-295"
+    } else if t.contains("dependency") || t.contains("cve") || t.contains("vulnerable package") {
+        "CWE-1104"
+    } else if t.contains("secret") || t.contains("api key") || t.contains("apikey")
+        || t.contains("token") || t.contains("credential") {
+        "CWE-798"
+    } else if t.contains("auth") || t.contains("login") || t.contains("session") {
+        "CWE-287"
+    } else if t.contains("access control") || t.contains("authorization") || t.contains("permission") {
+        "CWE-862"
+    } else if t.contains("boundary") || t.contains("bounds") {
+        "CWE-125"
+    } else if t.contains("race") || t.contains("toctou") {
+        "CWE-362"
+    } else if t.contains("injection") {
+        "CWE-74"
+    } else {
+        match finding_type {
+            FindingType::Secret => "CWE-798",
+            FindingType::Injection => "CWE-74",
+            FindingType::Authentication => "CWE-287",
+            FindingType::Authorization => "CWE-862",
+            FindingType::Cryptography => "CWE-327",
+            FindingType::Dependency => "CWE-1104",
+            FindingType::Misconfiguration => "CWE-16",
+            FindingType::BusinessLogic => "CWE-840",
+            FindingType::Vulnerability => "CWE-693",
+        }
+    };
+    Some(cwe.to_string())
 }
 
 /// Returns true if a finding's title indicates a credential/secret exposure.

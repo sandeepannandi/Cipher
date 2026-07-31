@@ -4,7 +4,7 @@ use colored::*;
 use std::path::PathBuf;
 
 // Modules are declared in the library crate (src/lib.rs).
-use cipher_ai::{attack, ci, config, deps, fix, indexer, rag, report, review, sbom, secrets, zeroday};
+use cipher_ai::{attack, ci, config, deps, fix, indexer, pr, rag, report, review, sbom, secrets, trace, zeroday};
 
 const NAME: &str = "cipher-ai";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -277,6 +277,52 @@ enum Commands {
         output: Option<String>,
     },
 
+    /// Trace untrusted data across functions and files (taint-flow reasoning)
+    ///
+    /// Answers questions like "can users become admin?" by tracing data
+    /// from untrusted sources through cross-file function calls to sinks.
+    #[command(visible_alias = "t")]
+    Trace {
+        /// Security question or focus, e.g. "can users become admin?"
+        query: Vec<String>,
+
+        /// Max call depth for cross-file tracing (default: 4)
+        #[arg(long = "depth", default_value = "4")]
+        depth: usize,
+
+        /// Output as JSON
+        #[arg(long = "json")]
+        json: bool,
+
+        /// Enrich traced paths with AI analysis (requires API key)
+        #[arg(long = "ai")]
+        use_ai: bool,
+    },
+
+    /// Review a GitHub pull request and post a security comment
+    ///
+    /// Runs the full scan suite and posts findings + suggested fixes to a PR
+    /// via the GitHub API. Reads GITHUB_REPOSITORY, GITHUB_PR_NUMBER and
+    /// GITHUB_TOKEN automatically when run inside GitHub Actions.
+    #[command(visible_alias = "pull")]
+    Pr {
+        /// Repository as owner/name (defaults to GITHUB_REPOSITORY)
+        #[arg(long = "repo")]
+        repo: Option<String>,
+
+        /// Pull request number (defaults to GITHUB_PR_NUMBER or GITHUB_REF)
+        #[arg(long = "pr")]
+        pr_number: Option<u32>,
+
+        /// GitHub token with repo scope (defaults to GITHUB_TOKEN)
+        #[arg(long = "token")]
+        token: Option<String>,
+
+        /// Print the comment without posting it
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -370,6 +416,15 @@ async fn main() -> Result<()> {
         Commands::Sbom { format, output } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             sbom::run_sbom(&project_path, &format, output.as_deref()).await?;
+        }
+        Commands::Trace { query, depth, json, use_ai } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            let query_str = query.join(" ");
+            trace::run_trace(&project_path, &query_str, depth, json, use_ai).await?;
+        }
+        Commands::Pr { repo, pr_number, token, dry_run } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            pr::run_pr(&project_path, repo.as_deref(), pr_number, token.as_deref(), dry_run).await?;
         }
         Commands::Zeroday { use_ai, model, format, output, anomaly_only, no_flow } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());

@@ -172,7 +172,8 @@ fn scan_file(path: &Path, patterns: &[SecretPattern]) -> Vec<Finding> {
                         pattern.name
                     ))
                     .with_exploitability(exploitability)
-                    .with_effort(effort),
+                    .with_effort(effort)
+                    .with_cwe("CWE-798"),
                 );
             }
         }

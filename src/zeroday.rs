@@ -167,6 +167,18 @@ impl ZerodayFinding {
         .with_exploitability(exploitability)
         .with_effort(effort);
 
+        // Tag with stable CWE identifiers for triage workflows
+        finding = finding.with_cwe(match anomaly_type {
+            AnomalyType::TaintedPath => "CWE-22",
+            AnomalyType::UntrustedToSink | AnomalyType::DangerousApiProximity => "CWE-74",
+            AnomalyType::FunctionComplexity => "CWE-710",
+            AnomalyType::MissingBoundaryCheck => "CWE-125",
+            AnomalyType::TypeConfusionRisk => "CWE-843",
+            AnomalyType::SuspiciousErrorHandling => "CWE-532",
+            AnomalyType::BusinessLogicFlaw => "CWE-840",
+            AnomalyType::RaceCondition => "CWE-362",
+        });
+
         // Tag with appropriate OWASP category
         match anomaly_type {
             AnomalyType::DangerousApiProximity | AnomalyType::TaintedPath | AnomalyType::UntrustedToSink => {

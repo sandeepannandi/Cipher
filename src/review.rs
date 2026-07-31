@@ -389,6 +389,11 @@ fn scan_file_for_vulns(
                 finding = finding.with_owasp(owasp);
             }
 
+            // Attach a stable CWE identifier derived from the pattern title
+            if let Some(cwe) = crate::finding::cwe_for_title(pattern.name, FindingType::Vulnerability) {
+                finding = finding.with_cwe(cwe);
+            }
+
             findings.push(finding);
         }
     }
@@ -860,6 +865,10 @@ fn parse_ai_findings(
         line_number: Option<usize>,
         remediation: Option<String>,
         owasp_category: Option<String>,
+        #[serde(rename = "cwe")]
+        cwe_id: Option<String>,
+        #[serde(rename = "cwe_id")]
+        cwe_id_alt: Option<String>,
     }
 
     #[derive(serde::Deserialize)]
@@ -893,6 +902,8 @@ fn parse_ai_findings(
         let confidence = parse_confidence(&af.confidence.unwrap_or_default());
         let finding_type = parse_finding_type(&af.finding_type.unwrap_or_default());
         let owasp = parse_owasp(af.owasp_category.as_deref());
+        let cwe = af.cwe_id.as_deref().or(af.cwe_id_alt.as_deref())
+            .and_then(parse_cwe);
 
         let mut finding = Finding::new(
             finding_type,
@@ -928,6 +939,11 @@ fn parse_ai_findings(
 
         if let Some(owasp) = owasp {
             finding = finding.with_owasp(owasp);
+        }
+        if let Some(cwe) = cwe {
+            finding = finding.with_cwe(cwe);
+        } else if let Some(cwe) = crate::finding::cwe_for_title(&title, finding_type) {
+            finding = finding.with_cwe(cwe);
         }
 
         findings.push(finding);
@@ -1019,7 +1035,9 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
             });
 
             SarifResult {
-                rule_id: f.title.clone(),
+                // Stable rule ID: prefer the CWE identifier so findings map into
+                // existing triage workflows (GitHub code scanning, DefectDojo, etc.)
+                rule_id: f.cwe_id.clone().unwrap_or_else(|| f.title.clone()),
                 level: sarif_level(f.severity).to_string(),
                 message: SarifMessage {
                     text: format!("{}\n\n**Remediation:** {}", f.description, f.remediation.as_deref().unwrap_or("Not specified")),
@@ -1142,6 +1160,33 @@ fn parse_finding_type(s: &str) -> FindingType {
         "injection" => FindingType::Injection,
         "cryptography" => FindingType::Cryptography,
         _ => FindingType::Vulnerability,
+    }
+}
+
+/// Normalize a CWE identifier from model output.
+/// Accepts "89", "CWE-89", "cwe-89", "CWE-89: Description".
+fn parse_cwe(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let upper = s.to_uppercase();
+    if upper.starts_with("CWE-") {
+        let num: String = upper
+            .chars()
+            .skip(4)
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if num.is_empty() {
+            return None;
+        }
+        Some(format!("CWE-{}", num))
+    } else {
+        let num: String = upper.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if num.is_empty() {
+            return None;
+        }
+        Some(format!("CWE-{}", num))
     }
 }
 

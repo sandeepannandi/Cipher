@@ -26,6 +26,8 @@ const COMMANDS = [
   { cmd: 'fix --dry-run',desc: 'Preview fixes without applying' },
   { cmd: 'fix --verify', desc: 'Fix + compile-check each patch (revert broken fixes)' },
   { cmd: 'attack',       desc: 'Discover attack chains' },
+  { cmd: 'trace',        desc: 'Trace untrusted data across files (taint flow)' },
+  { cmd: 'pr',           desc: 'Post a GitHub PR security review comment' },
   { cmd: 'ci',           desc: 'Run all scans (CI mode)' },
   { cmd: 'config',       desc: 'Show or set configuration' },
   { cmd: 'zeroday',                               desc: '3-layer zero-day anomaly detection' },

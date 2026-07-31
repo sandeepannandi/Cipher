@@ -438,6 +438,9 @@ fn generate_developer_md(report: &AggregatedReport) -> String {
         if let Some(ref owasp) = finding.owasp_category {
             md.push_str(&format!("| OWASP | {} |\n", owasp));
         }
+        if let Some(ref cwe) = finding.cwe_id {
+            md.push_str(&format!("| CWE | {} |\n", cwe));
+        }
         if let Some(ref cve) = finding.cve_id {
             md.push_str(&format!("| CVE | {} |\n", cve));
         }

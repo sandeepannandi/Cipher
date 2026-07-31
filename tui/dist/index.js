@@ -169,6 +169,8 @@ var require_InputBox = __commonJS({
       { cmd: "fix --dry-run", desc: "Preview fixes without applying" },
       { cmd: "fix --verify", desc: "Fix + compile-check each patch (revert broken fixes)" },
       { cmd: "attack", desc: "Discover attack chains" },
+      { cmd: "trace", desc: "Trace untrusted data across files (taint flow)" },
+      { cmd: "pr", desc: "Post a GitHub PR security review comment" },
       { cmd: "ci", desc: "Run all scans (CI mode)" },
       { cmd: "config", desc: "Show or set configuration" },
       { cmd: "zeroday", desc: "3-layer zero-day anomaly detection" },
@@ -399,6 +401,10 @@ var require_CommandHelp = __commonJS({
       { cmd: "/fix --dry-run", desc: "Preview fixes without applying" },
       { cmd: "/fix --verify", desc: "Fix + compile-check each patch (revert broken fixes)" },
       { cmd: "/attack", desc: "Discover attack chains" },
+      { cmd: '/trace "can users become admin?"', desc: "Trace untrusted data across files (taint flow)" },
+      { cmd: '/trace --ai "is this SQL injectable?"', desc: "Trace + AI-enriched path analysis" },
+      { cmd: '/trace --json "user input reaches exec"', desc: "Trace \u2192 JSON output" },
+      { cmd: "/pr --dry-run", desc: "Preview a PR security review comment" },
       { cmd: "/ci", desc: "Run all 5 scans (review+secrets+deps+zeroday+attack)" },
       { cmd: "/ci --format json", desc: "CI \u2192 machine-readable JSON output" },
       { cmd: "/ci --format json --output ci.json", desc: "CI \u2192 JSON written to file" },
@@ -507,6 +513,10 @@ var require_CommandPalette = __commonJS({
       { cmd: "fix --dry-run", desc: "Preview fixes without applying" },
       { cmd: "fix --verify", desc: "Fix + compile-check each patch (revert broken fixes)" },
       { cmd: "attack", desc: "Discover attack chains" },
+      { cmd: 'trace "can users become admin?"', desc: "Trace untrusted data across files (taint flow)" },
+      { cmd: 'trace --ai "is this SQL injectable?"', desc: "Trace + AI-enriched path analysis" },
+      { cmd: 'trace --json "user input reaches exec"', desc: "Trace \u2192 JSON output" },
+      { cmd: "pr --dry-run", desc: "Preview a PR security review comment" },
       { cmd: "ci", desc: "Run all 5 scans (review+secrets+deps+zeroday+attack)" },
       { cmd: "ci --format json", desc: "CI \u2192 machine-readable JSON" },
       { cmd: "ci --format json --output ci.json", desc: "CI \u2192 JSON written to file" },
@@ -853,7 +863,7 @@ var { CommandHelp } = require_CommandHelp();
 var { CommandPalette } = require_CommandPalette();
 var { runCommand } = require_runner();
 var MODELS = ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"];
-var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "status", "ci", "config", "zeroday", "sbom"];
+var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "trace", "pr", "status", "ci", "config", "zeroday", "sbom"];
 function isQuestion(text) {
   const qWords = [
     "what",
@@ -1047,6 +1057,8 @@ function App() {
       report: "Generating report...",
       fix: "Generating fix...",
       attack: "Analyzing attack paths...",
+      trace: "Tracing data flow...",
+      pr: "Reviewing pull request...",
       status: "Checking status...",
       ci: "Running all scans...",
       config: "Configuring...",

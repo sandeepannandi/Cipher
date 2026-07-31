@@ -727,6 +727,7 @@ fn check_embedded_advisories(dep: &Dependency) -> Vec<Finding> {
                     0,
                 )
                 .with_cve(desc.split(':').next().unwrap_or("unknown"))
+                .with_cwe("CWE-1104")
                 .with_remediation(format!(
                     "Upgrade {} from {} to a version that fixes the vulnerability.",
                     dep.name, dep.version
@@ -789,6 +790,7 @@ pub(crate) async fn collect_deps_findings(
                     )
                     .at(dep.manifest_file.to_string_lossy().to_string(), 0)
                     .with_cve(&cve_id)
+                    .with_cwe("CWE-1104")
                     .with_remediation(format!(
                         "Upgrade {} to a patched version. See {} for details.",
                         dep.name, cve_id
