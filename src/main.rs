@@ -134,7 +134,8 @@ enum Commands {
         #[arg(long = "type", default_value = "developer")]
         report_type: String,
 
-        /// Output format: terminal (default), markdown, or json
+        /// Output format: terminal (default), markdown, html, or json.
+        /// Note: `html` always exports to cipher-ai-report.html (or --output).
         #[arg(long = "format", default_value = "terminal")]
         format: String,
 

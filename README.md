@@ -67,7 +67,7 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 | `cipher-ai sbom` | Generate **CycloneDX or SPDX** SBOM |
 | `cipher-ai sbom --format spdx` | SPDX SBOM format |
 | `cipher-ai report` | Generate security report (terminal/markdown/json/html) |
-| `cipher-ai report --format html` | Generate a browser-ready HTML dashboard report |
+| `cipher-ai report --format html` | Export a browser-ready HTML dashboard (writes `cipher-ai-report.html`) |
 | `cipher-ai attack` | Discover attack chains from findings (8 chain types) |
 | `cipher-ai attack --flow` | Attack chains with real cross-file data-flow evidence |
 | `cipher-ai attack --depth 5` | Deeper attack chain analysis |
@@ -132,7 +132,7 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 
 **`sbom`** generates Software Bill of Materials in **CycloneDX** (default) or **SPDX** formats. Parses all dependency manifests and produces a JSON document listing every dependency with its ecosystem and version.
 
-**`report`** aggregates findings from all scanners, computes a 0–100 security score, and outputs terminal, markdown, or JSON reports.
+**`report`** aggregates findings from all scanners, computes a 0–100 security score, and outputs terminal, markdown, or JSON reports. `--format html` exports a self-contained browser-ready dashboard to `cipher-ai-report.html` (or the path given with `--output`).
 
 **`attack`** connects isolated findings into **8 attack chain types**: privilege escalation, data exfiltration, remote code execution, authentication bypass, cryptographic breach, information disclosure, supply chain attack, and credential theft. Each chain shows the end-to-end attack path.
 

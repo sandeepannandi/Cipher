@@ -22,7 +22,7 @@ const COMMANDS = [
   { cmd: 'secrets --fail-on high', desc: 'Secrets scan, fail on high+' },
   { cmd: 'ask',          desc: 'Ask a security question (uses AI)' },
   { cmd: 'report',       desc: 'Generate security report' },
-  { cmd: 'report --format html', desc: 'Report → browser-ready HTML dashboard' },
+  { cmd: 'report --format html', desc: 'Report → exports cipher-ai-report.html dashboard' },
   { cmd: 'report --type executive', desc: 'Executive summary report' },
   { cmd: 'fix --list',   desc: 'List fixable findings' },
   { cmd: 'fix --dry-run',desc: 'Preview fixes without applying' },

@@ -224,7 +224,9 @@ pub async fn run_report(
         }
         "html" => {
             let html = generate_html(&agg, report_type);
-            write_or_print(&html, output_file)?;
+            // HTML is meant to be opened in a browser — always export it to a
+            // file rather than dumping raw markup into the terminal.
+            write_or_print(&html, resolve_output(format, output_file))?;
         }
         _ => {
             // terminal (default)
@@ -233,6 +235,21 @@ pub async fn run_report(
     }
 
     Ok(())
+}
+
+/// Determine where report output should be written.
+///
+/// An explicit `--output` always wins. Otherwise, HTML reports always export
+/// to a default file (`cipher-ai-report.html`) since raw markup is useless as
+/// terminal output; other formats fall back to stdout so they can be piped.
+fn resolve_output<'a>(format: &'a str, output_file: Option<&'a str>) -> Option<&'a str> {
+    if let Some(path) = output_file {
+        return Some(path);
+    }
+    match format {
+        "html" => Some("cipher-ai-report.html"),
+        _ => None,
+    }
 }
 
 /// Write content to file or print to stdout
@@ -817,6 +834,7 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     println!("  {} {}", "[IDEA]".bold(), "For a detailed report:".bold());
     println!("cipher-ai report --format markdown --output report.md");
     println!("cipher-ai report --format json --output report.json");
+    println!("cipher-ai report --format html  (exports cipher-ai-report.html)");
     println!("cipher-ai report --type executive  (for managers)");
     println!();
 
@@ -918,5 +936,19 @@ mod tests {
         assert!(html.contains("Executive Summary"));
         assert!(html.contains("100/100"));
         assert!(html.contains("GOOD"));
+    }
+
+    #[test]
+    fn test_resolve_output_html_exports_by_default() {
+        // HTML must always export to a file (raw markup is useless on stdout)
+        assert_eq!(resolve_output("html", None), Some("cipher-ai-report.html"));
+        // Explicit --output wins
+        assert_eq!(resolve_output("html", Some("custom.html")), Some("custom.html"));
+        // Other formats keep stdout fallback so they can be piped
+        assert_eq!(resolve_output("markdown", None), None);
+        assert_eq!(resolve_output("json", None), None);
+        assert_eq!(resolve_output("json", Some("report.json")), Some("report.json"));
+        // Terminal format never exports
+        assert_eq!(resolve_output("terminal", None), None);
     }
 }

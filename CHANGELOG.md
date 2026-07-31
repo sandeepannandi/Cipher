@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`cipher-ai report --format html`** — HTML reports now always export to a file (default `cipher-ai-report.html`, or `--output <path>`) instead of dumping raw HTML to stdout; updated CLI help text and TUI descriptions to match
+
 ### Added
 
 - **`cipher-ai pr --diff`** — Diff-aware PR reviews: fetches the PR's changed files, only reports findings on lines the PR introduces, and posts **inline comments** on those lines via the GitHub reviews API
