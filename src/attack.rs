@@ -1,4 +1,4 @@
-use crate::finding::Finding;
+use crate::finding::{dedup_findings, Finding};
 use crate::groq::GroqClient;
 use crate::{deps, review, secrets};
 use anyhow::Result;
@@ -88,7 +88,7 @@ pub struct AttackChain {
 pub async fn run_attack(
     project_path: &Path,
     chain_filter: Option<&str>,
-    _depth: usize,
+    depth: usize,
     json_output: bool,
     use_ai: bool,
 ) -> Result<()> {
@@ -115,8 +115,8 @@ pub async fn run_attack(
     );
 
     // Step 2: Discover attack chains using pattern matching
-    println!("  {} Analyzing attack paths...", "[*]".cyan());
-    let mut chains = discover_chains(&all_findings);
+    println!("  {} Analyzing attack paths (depth: {})...", "[*]".cyan(), depth);
+    let mut chains = discover_chains(&all_findings, depth);
 
     // Step 3: Filter by chain type if requested
     if let Some(filter) = chain_filter {
@@ -222,7 +222,9 @@ async fn collect_all_findings(project_path: &Path) -> Result<Vec<Finding>> {
         all.extend(report.findings);
     }
 
-    Ok(all)
+    // Remove duplicates reported by multiple scanners (e.g. review's
+    // "Hardcoded Credentials" and secrets' "Password in Code")
+    Ok(dedup_findings(all))
 }
 
 /// Collect attack chain summary (count only, no output)
@@ -231,7 +233,7 @@ pub async fn collect_attack_summary(project_path: &Path) -> Result<usize> {
     if findings.is_empty() {
         return Ok(0);
     }
-    let chains = discover_chains(&findings);
+    let chains = discover_chains(&findings, 3);
     Ok(chains.len())
 }
 
@@ -300,10 +302,16 @@ fn build_chain_rules() -> Vec<ChainRule> {
     ]
 }
 
-/// Discover attack chains by matching findings against chain rules
-fn discover_chains(findings: &[Finding]) -> Vec<AttackChain> {
+/// Discover attack chains by matching findings against chain rules.
+///
+/// `depth` controls how many intermediate findings are pulled into a chain:
+/// - depth 2 (default): entry + target only
+/// - depth >= 3: intermediate findings from the same file (between the entry
+///   and target lines) are added to make the chain longer and more realistic
+fn discover_chains(findings: &[Finding], depth: usize) -> Vec<AttackChain> {
     let rules = build_chain_rules();
     let mut chains = Vec::new();
+    let depth = depth.max(2);
 
     for rule in &rules {
         // Find entry findings (seeds)
@@ -346,7 +354,22 @@ fn discover_chains(findings: &[Finding]) -> Vec<AttackChain> {
                 let entry_point = entry.title.clone();
                 let impact = target.title.clone();
 
-                let steps = if same_file { 2 } else { 3 };
+                // Build the finding list: entry -> intermediates -> target
+                let mut chain_findings = Vec::new();
+                chain_findings.push((*entry).clone());
+                if depth > 2 && same_file {
+                    let intermediates = collect_intermediates(findings, entry, target, depth - 2);
+                    chain_findings.extend(intermediates.into_iter().cloned());
+                }
+                chain_findings.push((*target).clone());
+
+                // Preserve display semantics: cross-file chains count one extra
+                // hop between files, same-file chains equal the finding count.
+                let steps = if same_file {
+                    chain_findings.len()
+                } else {
+                    chain_findings.len() + 1
+                };
 
                 let description = if same_file {
                     format!(
@@ -360,14 +383,7 @@ fn discover_chains(findings: &[Finding]) -> Vec<AttackChain> {
                     )
                 };
 
-                let mut chain_findings = Vec::new();
-                chain_findings.push((*entry).clone());
-                chain_findings.push((*target).clone());
-
-                let name = format!(
-                    "{} -> {}",
-                    entry_point, impact
-                );
+                let name = format!("{} -> {}", entry_point, impact);
 
                 chains.push(AttackChain {
                     chain_type: rule.chain_type,
@@ -416,6 +432,53 @@ fn discover_chains(findings: &[Finding]) -> Vec<AttackChain> {
     });
 
     merged
+}
+
+/// Collect intermediate findings located in the same file, between the entry
+/// and target lines, up to `max_count` of them. Ordered by line number.
+fn collect_intermediates<'a>(
+    findings: &'a [Finding],
+    entry: &Finding,
+    target: &Finding,
+    max_count: usize,
+) -> Vec<&'a Finding> {
+    if max_count == 0 {
+        return Vec::new();
+    }
+
+    let entry_file = match &entry.file_path {
+        Some(fp) => fp,
+        None => return Vec::new(),
+    };
+    let (entry_line, target_line) = match (entry.line_number, target.line_number) {
+        (Some(e), Some(t)) => (e, t),
+        _ => return Vec::new(),
+    };
+    let (lo, hi) = if entry_line < target_line {
+        (entry_line, target_line)
+    } else {
+        (target_line, entry_line)
+    };
+
+    let mut in_between: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| {
+            f.id != entry.id
+                && f.id != target.id
+                && f.file_path.as_deref() == Some(entry_file.as_str())
+                && f.line_number.map(|l| l > lo && l < hi).unwrap_or(false)
+        })
+        .collect();
+
+    // Prefer findings that belong to this chain's theme (match entry or
+    // target keywords) so the intermediate steps stay on-topic.
+    in_between.sort_by_key(|f| {
+        let themed = title_contains_any(&f.title, &["sql", "inject", "exec", "token", "secret"]);
+        (std::cmp::Reverse(themed), f.line_number.unwrap_or(0))
+    });
+
+    in_between.truncate(max_count);
+    in_between
 }
 
 /// Enrich chain descriptions using AI
@@ -620,4 +683,64 @@ fn title_contains_any(title: &str, keywords: &[&str]) -> bool {
     keywords
         .iter()
         .any(|kw| title_lower.contains(&kw.to_lowercase()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::finding::{Confidence, FindingType, Severity};
+
+    fn mk(title: &str, path: &str, line: usize) -> Finding {
+        Finding::new(
+            FindingType::Vulnerability,
+            title,
+            "desc",
+            Severity::High,
+            Confidence::High,
+            "test",
+        )
+        .at(path, line)
+    }
+
+    #[test]
+    fn test_title_contains_any_case_insensitive() {
+        assert!(title_contains_any("Hardcoded Password", &["password"]));
+        assert!(!title_contains_any("SQL Injection", &["password"]));
+    }
+
+    #[test]
+    fn test_discover_chains_basic() {
+        let findings = vec![
+            mk("Hardcoded password in config", "/proj/app.py", 10),
+            mk("Mass assignment risk", "/proj/app.py", 30),
+        ];
+        let chains = discover_chains(&findings, 2);
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].chain_type, AttackChainType::PrivilegeEscalation);
+        assert_eq!(chains[0].steps, 2);
+    }
+
+    #[test]
+    fn test_discover_chains_no_match() {
+        let findings = vec![
+            mk("Weak MD5 hash", "/proj/a.py", 10),
+            mk("Debug mode enabled", "/proj/b.py", 20),
+        ];
+        let chains = discover_chains(&findings, 2);
+        assert!(chains.is_empty());
+    }
+
+    #[test]
+    fn test_discover_chains_depth_adds_intermediates() {
+        let findings = vec![
+            mk("Hardcoded password in config", "/proj/app.py", 10),
+            mk("SQL injection in query", "/proj/app.py", 20),
+            mk("Mass assignment risk", "/proj/app.py", 30),
+        ];
+        let shallow = discover_chains(&findings, 2);
+        assert_eq!(shallow[0].steps, 2);
+
+        let deep = discover_chains(&findings, 5);
+        assert!(deep[0].steps >= 3, "depth should pull in intermediates");
+    }
 }

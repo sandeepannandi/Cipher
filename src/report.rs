@@ -1,5 +1,5 @@
 use crate::deps;
-use crate::finding::{Finding, FindingType, Severity};
+use crate::finding::{dedup_key, should_collapse, Finding, FindingType, Severity};
 use crate::review;
 use crate::secrets;
 use anyhow::Result;
@@ -34,32 +34,40 @@ impl AggregatedReport {
         }
     }
 
-    /// Total number of findings across all sources
+    /// Total number of unique findings across all sources (deduplicated)
     pub fn total_findings(&self) -> usize {
-        self.review.len() + self.deps.len() + self.secrets.len()
+        self.deduped_all().len()
     }
 
-    /// Count findings by severity across all sources
+    /// Count unique findings by severity across all sources (deduplicated)
     pub fn count_by_severity(&self, severity: Severity) -> usize {
-        self.review.iter()
-            .chain(self.deps.iter())
-            .chain(self.secrets.iter())
+        self.deduped_all()
+            .iter()
             .filter(|f| f.severity == severity)
             .count()
     }
 
-    /// Count findings by type across all sources
+    /// Count unique findings by type across all sources (deduplicated)
     pub fn count_by_type(&self, finding_type: FindingType) -> usize {
-        self.review.iter()
-            .chain(self.deps.iter())
-            .chain(self.secrets.iter())
+        self.deduped_all()
+            .iter()
             .filter(|f| f.finding_type == finding_type)
             .count()
     }
 
-    /// Get all findings as a flat vector, sorted by risk score (highest first)
+    /// Get all findings as a flat vector, deduplicated across scanners and
+    /// sorted by risk score (highest first)
     pub fn all_sorted(&self) -> Vec<&Finding> {
-        let mut all: Vec<&Finding> = self.review.iter()
+        self.deduped_all()
+    }
+
+    /// Merge all findings, sort by risk (descending), then remove duplicates.
+    /// Since the list is risk-sorted, the first occurrence of each duplicate
+    /// is the highest-risk one — exactly what we want to keep.
+    fn deduped_all(&self) -> Vec<&Finding> {
+        let mut all: Vec<&Finding> = self
+            .review
+            .iter()
             .chain(self.deps.iter())
             .chain(self.secrets.iter())
             .collect();
@@ -68,7 +76,16 @@ impl AggregatedReport {
                 .partial_cmp(&a.risk_score())
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        all
+        let mut kept: Vec<&Finding> = Vec::new();
+        for f in all {
+            let is_duplicate = kept
+                .iter()
+                .any(|k| dedup_key(k) == dedup_key(f) && should_collapse(k, f));
+            if !is_duplicate {
+                kept.push(f);
+            }
+        }
+        kept
     }
 
     /// Compute an overall security score 0–100
@@ -480,22 +497,38 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     );
     println!();
 
-    // Per-source breakdown
+    // Per-source breakdown (deduplicated so the numbers stay consistent)
+    let deduped = report.deduped_all();
     println!("  {} {}\n", "[FOLDER]".bold(), "Breakdown by Source".bold());
     println!(
         "    {} Security Review:  {}",
         "[*]".cyan(),
-        report.review.len().to_string().bold()
+        deduped
+            .iter()
+            .filter(|f| f.source == "security-review" || f.source == "ai-review")
+            .count()
+            .to_string()
+            .bold()
     );
     println!(
         "    {} Dependencies:     {}",
         "[PKG]".cyan(),
-        report.deps.len().to_string().bold()
+        deduped
+            .iter()
+            .filter(|f| f.source == "dependency-scanner")
+            .count()
+            .to_string()
+            .bold()
     );
     println!(
         "    {} Secrets:          {}",
         "[KEY]".cyan(),
-        report.secrets.len().to_string().bold()
+        deduped
+            .iter()
+            .filter(|f| f.source == "secret-scanner")
+            .count()
+            .to_string()
+            .bold()
     );
     println!();
 
@@ -534,4 +567,72 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     println!("cipher-ai report --type executive  (for managers)");
     println!();
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::finding::{Confidence, FindingType, Severity};
+
+    fn mk(title: &str, source: &str, sev: Severity) -> Finding {
+        Finding::new(
+            FindingType::Vulnerability,
+            title,
+            "desc",
+            sev,
+            Confidence::High,
+            source,
+        )
+    }
+
+    #[test]
+    fn test_security_score_clean() {
+        let report = AggregatedReport::new("/proj");
+        assert_eq!(report.security_score(), 100.0);
+    }
+
+    #[test]
+    fn test_security_score_penalizes_critical() {
+        let mut report = AggregatedReport::new("/proj");
+        report.review.push(mk("SQL Injection", "security-review", Severity::Critical));
+        assert_eq!(report.security_score(), 75.0);
+    }
+
+    #[test]
+    fn test_security_score_clamped() {
+        let mut report = AggregatedReport::new("/proj");
+        // Distinct locations so dedup doesn't collapse them into one finding
+        for i in 0..10 {
+            let f = mk("SQL Injection", "security-review", Severity::Critical).at(format!("/proj/f{}.py", i), 1);
+            report.review.push(f);
+        }
+        assert_eq!(report.security_score(), 0.0);
+    }
+
+    #[test]
+    fn test_total_findings_dedup_cross_scanner() {
+        let mut report = AggregatedReport::new("/proj");
+        let mut review_f = mk("Hardcoded Credentials", "security-review", Severity::High);
+        review_f = review_f.at("/proj/a.py", 5);
+        let mut secrets_f = mk("Password in Code", "secret-scanner", Severity::High);
+        secrets_f = secrets_f.at("/proj/a.py", 5);
+        report.review.push(review_f);
+        report.secrets.push(secrets_f);
+
+        // Both point at the same credential line — should count once
+        assert_eq!(report.total_findings(), 1);
+        assert_eq!(report.all_sorted().len(), 1);
+    }
+
+    #[test]
+    fn test_count_by_severity_deduped() {
+        let mut report = AggregatedReport::new("/proj");
+        let mut a = mk("Hardcoded Credentials", "security-review", Severity::High);
+        a = a.at("/proj/a.py", 5);
+        let mut b = mk("Password in Code", "secret-scanner", Severity::High);
+        b = b.at("/proj/a.py", 5);
+        report.review.push(a);
+        report.secrets.push(b);
+        assert_eq!(report.count_by_severity(Severity::High), 1);
+    }
 }

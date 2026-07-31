@@ -10,19 +10,21 @@ const DEFAULT_MODELS: &[&str] = &[
 ];
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Config {
-    groq_api_key: Option<String>,
-    default_model: Option<String>,
+pub(crate) struct Config {
+    pub(crate) groq_api_key: Option<String>,
+    pub(crate) default_model: Option<String>,
 }
 
-fn config_path() -> Result<PathBuf> {
+/// Canonical location of the CipherAI config file.
+/// All API key / model persistence goes through this single path.
+pub(crate) fn config_path() -> Result<PathBuf> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .context("Cannot find home directory")?;
     Ok(PathBuf::from(home).join(".cipher-ai").join("config.json"))
 }
 
-fn load_config() -> Result<Config> {
+pub(crate) fn load_config() -> Result<Config> {
     let path = config_path()?;
     if path.exists() {
         let content = std::fs::read_to_string(&path)?;
@@ -46,6 +48,22 @@ fn save_config(config: &Config) -> Result<()> {
     let json = serde_json::to_string_pretty(config)?;
     std::fs::write(&path, json)?;
     Ok(())
+}
+
+/// Persist the API key to the canonical config file, unless a key is
+/// already configured. Used by `init` so the env var is remembered.
+pub(crate) fn save_api_key_if_unset(key: &str) -> Result<()> {
+    let mut config = load_config()?;
+    if config.groq_api_key.is_none() {
+        config.groq_api_key = Some(key.to_string());
+        save_config(&config)?;
+    }
+    Ok(())
+}
+
+/// Read the stored API key from the canonical config file, if any.
+pub(crate) fn stored_api_key() -> Option<String> {
+    load_config().ok().and_then(|c| c.groq_api_key)
 }
 
 pub fn run_config_set(key: &str, value: &str) -> Result<()> {

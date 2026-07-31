@@ -322,15 +322,12 @@ pub async fn run_secrets(
     }
 
     // Handle --fail-on (exit with code 1 if threshold exceeded)
-    let fail_severity_score = fail_on.and_then(|s| match s.to_lowercase().as_str() {
-        "critical" => Some(4),
-        "high" => Some(3),
-        "medium" => Some(2),
-        "low" => Some(1),
-        _ => None,
-    });
-    if let Some(min_score) = fail_severity_score {
-        let has_failing = report.findings.iter().any(|f| f.severity.score() >= min_score);
+    let fail_severity = fail_on.and_then(Severity::from_fail_on);
+    if let Some(min_severity) = fail_severity {
+        let has_failing = report
+            .findings
+            .iter()
+            .any(|f| f.severity.score() >= min_severity.score());
         if has_failing {
             eprintln!(
                 "  {} --fail-on threshold exceeded. Exiting with code 1.",

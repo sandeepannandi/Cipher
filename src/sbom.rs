@@ -211,7 +211,7 @@ fn generate_cyclonedx(deps: &[deps::Dependency], project_name: &str) -> String {
                 components: vec![CycloneDxTool {
                     tool_type: "application".to_string(),
                     name: "CipherAI".to_string(),
-                    version: "0.1.0".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
                 }],
             },
             properties: vec![CycloneDxProperty {
@@ -268,7 +268,7 @@ fn generate_spdx(deps: &[deps::Dependency], project_name: &str) -> String {
         name: format!("{}/{}", project_name, "sbom"),
         creation_info: SpdxCreationInfo {
             creators: vec![
-                "Tool: CipherAI-0.1.0".to_string(),
+                format!("Tool: CipherAI-{}", env!("CARGO_PKG_VERSION")),
             ],
             created: now,
         },

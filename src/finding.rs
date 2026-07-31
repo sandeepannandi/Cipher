@@ -47,6 +47,18 @@ impl Severity {
             Severity::Info => 1,
         }
     }
+
+    /// Parse a `--fail-on` threshold level into a `Severity`.
+    /// Returns `None` for unknown levels.
+    pub fn from_fail_on(s: &str) -> Option<Severity> {
+        match s.to_lowercase().as_str() {
+            "critical" => Some(Severity::Critical),
+            "high" => Some(Severity::High),
+            "medium" => Some(Severity::Medium),
+            "low" => Some(Severity::Low),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Severity {
@@ -496,5 +508,182 @@ impl FindingReport {
                 println!("    {} {}", "Fix:".bold().green(), remediation.trim());
             }
         }
+    }
+}
+
+/// Returns true if a finding's title indicates a credential/secret exposure.
+/// Used by dedup: the review scanner and the secret scanner both report
+/// credential-style issues at the same file:line, so they should collapse.
+fn is_credential_like(f: &Finding) -> bool {
+    let t = f.title.to_lowercase();
+    [
+        "password", "credential", "secret", "api key", "apikey", "token",
+        "private key", "jwt", "aws", "github", "gitlab", "stripe", "slack",
+        "discord", "heroku", "connection string", "service account",
+    ]
+    .iter()
+    .any(|k| t.contains(k))
+}
+
+/// Compute the dedup key for a finding — the location (+ credential bucket)
+/// used to decide whether two findings could be the same issue.
+pub(crate) fn dedup_key(f: &Finding) -> (String, usize, String) {
+    match (&f.file_path, f.line_number) {
+        (Some(fp), Some(ln)) => {
+            let bucket = if is_credential_like(f) {
+                "credential".to_string()
+            } else {
+                f.title.to_lowercase()
+            };
+            (fp.clone(), ln, bucket)
+        }
+        _ => (format!("{}:{}", f.source, f.title.to_lowercase()), 0, String::new()),
+    }
+}
+
+/// Decide whether two findings at the same location are duplicates.
+///
+/// Collapses when:
+/// - their titles match case-insensitively (true duplicates), or
+/// - both are credential-like AND reported by different scanners — the
+///   classic overlap where `review` finds "Hardcoded Credentials" and
+///   `secrets` finds "Password in Code" on the same line.
+///
+/// Two distinct secrets from the *same* scanner on the same line (e.g. an
+/// AWS access key ID + secret access key pair) are NOT collapsed.
+pub(crate) fn should_collapse(a: &Finding, b: &Finding) -> bool {
+    let same_title = a.title.to_lowercase() == b.title.to_lowercase();
+    if same_title {
+        return true;
+    }
+    is_credential_like(a) && is_credential_like(b) && a.source != b.source
+}
+
+/// Remove cross-scanner duplicate findings, keeping the highest-risk version
+/// of each duplicate. See [`Finding::risk_score`].
+pub fn dedup_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    let mut result: Vec<Finding> = Vec::new();
+
+    for f in findings {
+        let key = dedup_key(&f);
+        let mut duplicate_idx = None;
+        for (idx, existing) in result.iter().enumerate() {
+            if dedup_key(existing) == key && should_collapse(existing, &f) {
+                duplicate_idx = Some(idx);
+                break;
+            }
+        }
+        match duplicate_idx {
+            Some(idx) => {
+                // Keep the higher-risk version of the duplicate
+                if f.risk_score() > result[idx].risk_score() {
+                    result[idx] = f;
+                }
+            }
+            None => result.push(f),
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk(title: &str, path: &str, line: usize) -> Finding {
+        Finding::new(
+            FindingType::Vulnerability,
+            title,
+            "desc",
+            Severity::High,
+            Confidence::High,
+            "test",
+        )
+        .at(path, line)
+    }
+
+    #[test]
+    fn test_dedup_collapses_credential_overlap() {
+        // review scanner + secrets scanner both flag the same line
+        let mut f1 = mk("Hardcoded Credentials", "/proj/a.py", 10);
+        f1.source = "security-review".to_string();
+        let mut f2 = mk("Password in Code", "/proj/a.py", 10);
+        f2.source = "secret-scanner".to_string();
+        assert_eq!(dedup_findings(vec![f1, f2]).len(), 1);
+    }
+
+    #[test]
+    fn test_dedup_keeps_distinct_same_line() {
+        // Two genuinely different vulnerabilities on the same line survive
+        let findings = vec![
+            mk("SQL Injection", "/proj/a.py", 10),
+            mk("Command Injection", "/proj/a.py", 10),
+        ];
+        assert_eq!(dedup_findings(findings).len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_keeps_different_lines() {
+        let findings = vec![
+            mk("Hardcoded Credentials", "/proj/a.py", 10),
+            mk("Password in Code", "/proj/a.py", 20),
+        ];
+        assert_eq!(dedup_findings(findings).len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_keeps_distinct_same_scanner_secrets() {
+        // Two distinct secrets from the SAME scanner on one line survive
+        let mut f1 = mk("AWS Access Key ID", "/proj/.env", 2);
+        f1.source = "secret-scanner".to_string();
+        let mut f2 = mk("AWS Secret Access Key", "/proj/.env", 2);
+        f2.source = "secret-scanner".to_string();
+        assert_eq!(dedup_findings(vec![f1, f2]).len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_collapses_cross_scanner_credentials() {
+        let mut f1 = mk("Hardcoded Credentials", "/proj/a.py", 10);
+        f1.source = "security-review".to_string();
+        let mut f2 = mk("Password in Code", "/proj/a.py", 10);
+        f2.source = "secret-scanner".to_string();
+        let result = dedup_findings(vec![f1, f2]);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_dedup_keeps_highest_risk() {
+        let mut low = mk("Hardcoded Credentials", "/proj/a.py", 10);
+        low.source = "security-review".to_string();
+        low = low.with_effort(RemediationEffort::Minutes);
+        let mut high = mk("Password in Code", "/proj/a.py", 10);
+        high.source = "secret-scanner".to_string();
+        high = high.with_exploitability(0.9);
+        let result = dedup_findings(vec![low, high]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].source, "secret-scanner");
+    }
+
+    #[test]
+    fn test_severity_from_fail_on() {
+        assert_eq!(Severity::from_fail_on("critical"), Some(Severity::Critical));
+        assert_eq!(Severity::from_fail_on("HIGH"), Some(Severity::High));
+        assert_eq!(Severity::from_fail_on("Medium"), Some(Severity::Medium));
+        assert_eq!(Severity::from_fail_on("low"), Some(Severity::Low));
+        assert_eq!(Severity::from_fail_on("bogus"), None);
+    }
+
+    #[test]
+    fn test_risk_score_sorting() {
+        let critical = Finding::new(
+            FindingType::Vulnerability,
+            "c", "", Severity::Critical, Confidence::High, "t",
+        );
+        let low = Finding::new(
+            FindingType::Vulnerability,
+            "l", "", Severity::Low, Confidence::Low, "t",
+        );
+        assert!(critical.risk_score() > low.risk_score());
     }
 }

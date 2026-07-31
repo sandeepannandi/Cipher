@@ -67,21 +67,12 @@ impl GroqClient {
         Ok(Self { client, api_key })
     }
 
-    /// Read API key from .cipher-ai/config.json
+    /// Read API key from the canonical config file (~/.cipher-ai/config.json)
     fn read_key_from_config() -> Result<String> {
-        let config_path = std::env::current_dir()?.join(".cipher").join("config.json");
-        if config_path.exists() {
-            #[derive(Deserialize)]
-            struct Config {
-                groq_api_key: Option<String>,
-            }
-            let config: Config =
-                serde_json::from_str(&std::fs::read_to_string(&config_path)?)?;
-            if let Some(key) = config.groq_api_key {
-                return Ok(key);
-            }
+        match crate::config::stored_api_key() {
+            Some(key) => Ok(key),
+            None => anyhow::bail!("no API key found in config"),
         }
-        anyhow::bail!("no API key found")
     }
 
     /// Send a chat completion request to Groq

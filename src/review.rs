@@ -1053,7 +1053,7 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
                 driver: SarifDriver {
                     name: "CipherAI".to_string(),
                     information_uri: "https://github.com/sandeepannandi/Cipher".to_string(),
-                    version: "0.1.0".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
                 },
             },
             results,

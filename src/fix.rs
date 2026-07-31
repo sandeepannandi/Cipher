@@ -3,6 +3,7 @@ use crate::groq::GroqClient;
 use crate::{deps, review, secrets};
 use anyhow::{Context, Result};
 use colored::*;
+use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use similar::{ChangeTag, TextDiff};
 use std::io::Write;
@@ -428,17 +429,66 @@ fn print_fixable_findings(findings: &[&Finding], _project_path: &Path) {
     );
 }
 
+/// Resolve a finding's stored file path against the current project.
+///
+/// Findings store absolute paths from the time they were scanned. If the
+/// project has moved (e.g. a CI scan consumed in a fresh checkout), the
+/// stored path may no longer exist. We then look for a file in the project
+/// whose relative path matches the tail of the stored path.
+fn resolve_finding_path(stored: &str, project_path: &Path) -> PathBuf {
+    let direct = PathBuf::from(stored);
+    if direct.exists() {
+        return direct;
+    }
+    let joined = project_path.join(stored);
+    if joined.exists() {
+        return joined;
+    }
+
+    // Walk the project (bounded) looking for a file whose relative path is a
+    // suffix of the stored path — handles moved/copied checkouts.
+    let normalized_stored = stored.replace('\\', "/").trim_end_matches('/').to_string();
+    let walker = WalkBuilder::new(project_path)
+        .git_ignore(true)
+        .git_global(true)
+        .hidden(false)
+        .max_depth(Some(crate::scan::MAX_WALK_DEPTH))
+        .build();
+
+    let mut count = 0;
+    for result in walker {
+        if count >= crate::scan::MAX_SCAN_FILES {
+            break;
+        }
+        count += 1;
+        if let Ok(entry) = result {
+            let path = entry.path();
+            if path.is_file() && !crate::scan::should_exclude(path) {
+                if let Ok(rel) = path.strip_prefix(project_path) {
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    if normalized_stored.ends_with(&format!("/{}", rel_str)) {
+                        return path.to_path_buf();
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to the stored path; a read will fail with a clear error.
+    direct
+}
+
 /// Generate a fix for a specific finding using AI
 async fn generate_fix(
     client: &GroqClient,
     finding: &Finding,
-    _project_path: &Path,
+    project_path: &Path,
 ) -> Result<FixPlan> {
     let file_path = finding
         .file_path
         .as_deref()
         .context("Finding has no file path")?;
-    let file_path = PathBuf::from(file_path);
+    let file_path = resolve_finding_path(file_path, project_path);
 
     // Read the current file content fresh from disk
     let file_content = std::fs::read_to_string(&file_path)
@@ -726,4 +776,118 @@ fn apply_fix(fix: &FixPlan) -> Result<()> {
         .with_context(|| format!("Failed to write to {}", fix.file_path.display()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_file(name: &str, content: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "cipher_fix_test_{}_{}",
+            std::process::id(),
+            name
+        ));
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_parse_fix_response_plain_json() {
+        let response = r#"{"fixed_code": "let x = 1;", "explanation": "safe"}"#;
+        let (code, expl) = parse_fix_response(response).unwrap();
+        assert_eq!(code, "let x = 1;");
+        assert_eq!(expl, "safe");
+    }
+
+    #[test]
+    fn test_parse_fix_response_markdown_fenced() {
+        let response = "```json\n{\"fixed_code\": \"let y = 2;\", \"explanation\": \"ok\"}\n```";
+        let (code, _) = parse_fix_response(response).unwrap();
+        assert_eq!(code, "let y = 2;");
+    }
+
+    #[test]
+    fn test_parse_fix_response_empty_errors() {
+        let response = r#"{"fixed_code": "", "explanation": "nothing"}"#;
+        assert!(parse_fix_response(response).is_err());
+    }
+
+    #[test]
+    fn test_parse_fix_response_no_json_errors() {
+        assert!(parse_fix_response("no json here").is_err());
+    }
+
+    #[test]
+    fn test_apply_fix_replaces_range() {
+        let path = temp_file("apply", "line1\nline2\nline3\nline4\n");
+        let finding = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "test", "test",
+            Severity::High,
+            crate::finding::Confidence::High,
+            "test",
+        );
+        let plan = FixPlan {
+            finding,
+            file_path: path.clone(),
+            original_code: "line2\nline3".to_string(),
+            fixed_code: "FIXED".to_string(),
+            explanation: "test".to_string(),
+            start_line: 2,
+            end_line: 3,
+        };
+        apply_fix(&plan).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "line1\nFIXED\nline4\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_apply_fix_out_of_range_errors() {
+        let path = temp_file("oob", "a\nb\n");
+        let finding = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "test", "test",
+            Severity::High,
+            crate::finding::Confidence::High,
+            "test",
+        );
+        let plan = FixPlan {
+            finding,
+            file_path: path.clone(),
+            original_code: String::new(),
+            fixed_code: "x".to_string(),
+            explanation: String::new(),
+            start_line: 99,
+            end_line: 100,
+        };
+        assert!(apply_fix(&plan).is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_resolve_finding_path_direct() {
+        let path = temp_file("direct", "x\n");
+        let resolved = resolve_finding_path(path.to_str().unwrap(), Path::new("."));
+        assert_eq!(resolved, path);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_resolve_finding_path_moved_checkout() {
+        let dir = std::env::temp_dir().join(format!(
+            "cipher_fix_move_{}",
+            std::process::id()
+        ));
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("main.rs"), "fn main() {}").unwrap();
+
+        // Stored path from an old checkout — should resolve inside the project
+        let stored = format!("C:/old/checkout/src/main.rs");
+        let resolved = resolve_finding_path(&stored, &dir);
+        assert_eq!(resolved, src.join("main.rs"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

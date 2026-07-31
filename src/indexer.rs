@@ -208,8 +208,8 @@ fn is_stopword(term: &str) -> bool {
             | "virtual" | "abstract" | "sealed" | "readonly" | "async" | "await"
             | "import" | "export" | "require" | "include" | "package" | "module"
             | "namespace" | "default" | "case" | "switch" | "match" | "break"
-            | "continue" | "loop" | "for" | "try" | "catch"
-            | "finally" | "throw" | "throws" | "raise" | "except" | "with"
+            | "continue" | "loop" | "try" | "catch"
+            | "finally" | "throw" | "throws" | "raise" | "except"
             | "yield" | "println" | "print" | "console" | "log" | "debug"
             | "info" | "warn" | "error" | "assert" | "expect" | "unwrap" | "panic"
             | "todo" | "fixme" | "hack" | "xxx" | "note" | "warning"
@@ -425,15 +425,10 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
     let json = serde_json::to_string_pretty(&index)?;
     std::fs::write(&index_path, &json)?;
 
-    // Save API key to config if not already saved
-    let config_path = sec_dir.join("config.json");
-    if !config_path.exists() {
-        if let Ok(key) = std::env::var("GROQ_API_KEY") {
-            let config = serde_json::json!({
-                "groq_api_key": key
-            });
-            std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
-        }
+    // Remember the API key in the canonical config file if not already saved.
+    // Failures are non-fatal — indexing should succeed even if key persistence fails.
+    if let Ok(key) = std::env::var("GROQ_API_KEY") {
+        let _ = crate::config::save_api_key_if_unset(&key);
     }
 
     println!();
@@ -474,14 +469,16 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
     println!("  {} {}", "Project:".bold(), project_name.cyan().bold());
 
     // CLI version
-    println!("  {} v{}", "Version:".bold(), "0.1.0".cyan());
+    println!("  {} v{}", "Version:".bold(), env!("CARGO_PKG_VERSION").cyan());
 
-    // Check config
-    let config_path = data_dir(&canonical_path).join("config.json");
+    // Check config (canonical location)
     println!(
         "  {} {}",
         "Config:".bold(),
-        if config_path.exists() {
+        if crate::config::config_path()
+            .map(|p| p.exists())
+            .unwrap_or(false)
+        {
             "found".green().to_string()
         } else {
             "default".dimmed().to_string()

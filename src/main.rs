@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use cipher_ai::{attack, ci, config, deps, fix, indexer, rag, report, review, sbom, secrets, zeroday};
 
 const NAME: &str = "cipher-ai";
-const VERSION: &str = "1.0.0";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// CipherAI — AI-powered security analysis for your codebase.
 ///
