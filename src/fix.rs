@@ -20,6 +20,9 @@ pub struct FixPlan {
     pub explanation: String,
     pub start_line: usize,
     pub end_line: usize,
+    /// Optional regression test that would catch this vulnerability if it
+    /// regressed (included in `fix --pr` PR bodies, never written to disk).
+    pub test_code: Option<String>,
 }
 
 /// Run the `cipher-ai fix` command
@@ -247,6 +250,7 @@ pub async fn run_fix(
                         severity: finding.severity.to_string(),
                         cwe: finding.cwe_id.clone().unwrap_or_else(|| "-".to_string()),
                         explanation: fix_plan.explanation.clone(),
+                        test_code: fix_plan.test_code.clone(),
                     });
 
                     if verify {
@@ -327,6 +331,8 @@ struct AppliedFix {
     severity: String,
     cwe: String,
     explanation: String,
+    /// Optional regression test generated for this fix
+    test_code: Option<String>,
 }
 
 /// Create a branch with the applied fixes, push it, and open a GitHub PR.
@@ -532,6 +538,15 @@ fn render_fix_pr_body(applied: &[AppliedFix], base: &str, branch: &str) -> Strin
     md.push_str("\n## What changed\n\n");
     for (i, f) in applied.iter().enumerate() {
         md.push_str(&format!("**{}. {}** — {}\n", i + 1, f.title, f.explanation));
+    }
+
+    let with_tests: Vec<&AppliedFix> = applied.iter().filter(|f| f.test_code.is_some()).collect();
+    if !with_tests.is_empty() {
+        md.push_str("\n## Regression tests\n\n");
+        md.push_str("The following tests would catch these vulnerabilities if they regressed — add them to your test suite:\n\n");
+        for f in &with_tests {
+            md.push_str(&format!("**{}**\n\n```\n{}\n```\n\n", f.title, f.test_code.as_deref().unwrap_or("")));
+        }
     }
 
     md.push_str("\n---\n");
@@ -881,9 +896,7 @@ async fn generate_fix(
     let remediation = finding
         .remediation
         .as_deref()
-        .unwrap_or("No specific remediation provided.");
-
-    let system_prompt = r#"You are Cipher, an expert application security engineer. Your job is to generate secure patches for code vulnerabilities.
+        .unwrap_or("No specific remediation provided.");        let system_prompt = r#"You are Cipher, an expert application security engineer. Your job is to generate secure patches for code vulnerabilities.
 
 For each vulnerability, you receive:
 1. The finding details (title, description, severity, confidence, remediation)
@@ -893,6 +906,7 @@ For each vulnerability, you receive:
 You must respond with a JSON object containing:
 - "fixed_code": The COMPLETE replacement for the code block. Return ALL lines — only change the vulnerable ones and keep everything else identical.
 - "explanation": A brief explanation of what was vulnerable and how the fix addresses it (1-3 sentences)
+- "test_code": OPTIONAL. A short regression test (in the same language, idiomatic to the project's test framework) that would catch this vulnerability if it regressed. Return null when a test isn't practical for this finding.
 
 Rules:
 - Only fix the specific vulnerability — do not change unrelated code
@@ -954,7 +968,7 @@ Generate a secure fix. Return JSON with "fixed_code" (the complete replacement, 
     spinner.finish_and_clear();
 
     // Parse the JSON response
-    let (fixed_code, explanation) = parse_fix_response(&response)?;
+    let (fixed_code, explanation, test_code) = parse_fix_response(&response)?;
 
     // SAFETY CHECK: The AI MUST return roughly the same number of lines as the original.
     // If it returns too few lines, it would corrupt the file by deleting code.
@@ -980,11 +994,12 @@ Generate a secure fix. Return JSON with "fixed_code" (the complete replacement, 
         explanation,
         start_line: start_line_1based,
         end_line: end_line_1based,
+        test_code,
     })
 }
 
 /// Parse the AI's JSON fix response
-fn parse_fix_response(response: &str) -> Result<(String, String)> {
+fn parse_fix_response(response: &str) -> Result<(String, String, Option<String>)> {
     // Extract JSON from the response (handles markdown code blocks and extra text)
     let json_str = if let Some(start) = response.find('{') {
         let end = response[start..]
@@ -1000,6 +1015,7 @@ fn parse_fix_response(response: &str) -> Result<(String, String)> {
     struct FixResponse {
         fixed_code: Option<String>,
         explanation: Option<String>,
+        test_code: Option<String>,
     }
 
     let parsed: FixResponse = serde_json::from_str(json_str)
@@ -1008,16 +1024,26 @@ fn parse_fix_response(response: &str) -> Result<(String, String)> {
     let fixed_code = parsed.fixed_code.unwrap_or_default();
     let explanation =
         parsed.explanation.unwrap_or_else(|| "No explanation provided.".to_string());
+    let test_code = parsed
+        .test_code
+        .map(|t| strip_code_fences(&t))
+        .filter(|t| !t.is_empty());
 
     if fixed_code.is_empty() {
         anyhow::bail!("AI returned an empty fix");
     }
 
     // The AI sometimes nests the code inside markdown code fences inside the JSON string.
-    // The JSON extraction above already handles the outer fences, but the fixed_code
-    // string value itself might contain ``` markers.
-    let cleaned = fixed_code
-        .trim()
+    // The JSON extraction above already handles the outer fences, but the code
+    // string values themselves might contain ``` markers.
+    let cleaned = strip_code_fences(&fixed_code);
+
+    Ok((cleaned, explanation, test_code))
+}
+
+/// Strip surrounding markdown code fences from an AI-generated code string.
+fn strip_code_fences(code: &str) -> String {
+    code.trim()
         .trim_start_matches("```")
         .trim_start_matches("```rust")
         .trim_start_matches("```python")
@@ -1028,9 +1054,7 @@ fn parse_fix_response(response: &str) -> Result<(String, String)> {
         .trim_start_matches("```ruby")
         .trim_end_matches("```")
         .trim()
-        .to_string();
-
-    Ok((cleaned, explanation))
+        .to_string()
 }
 
 /// Display a colored diff between original and fixed code
@@ -1144,15 +1168,23 @@ mod tests {
     #[test]
     fn test_parse_fix_response_plain_json() {
         let response = r#"{"fixed_code": "let x = 1;", "explanation": "safe"}"#;
-        let (code, expl) = parse_fix_response(response).unwrap();
+        let (code, expl, test) = parse_fix_response(response).unwrap();
         assert_eq!(code, "let x = 1;");
         assert_eq!(expl, "safe");
+        assert!(test.is_none());
+    }
+
+    #[test]
+    fn test_parse_fix_response_with_test_code() {
+        let response = r#"{"fixed_code": "let x = 1;", "explanation": "safe", "test_code": "assert!(x == 1);"}"#;
+        let (_, _, test) = parse_fix_response(response).unwrap();
+        assert_eq!(test.as_deref(), Some("assert!(x == 1);"));
     }
 
     #[test]
     fn test_parse_fix_response_markdown_fenced() {
         let response = "```json\n{\"fixed_code\": \"let y = 2;\", \"explanation\": \"ok\"}\n```";
-        let (code, _) = parse_fix_response(response).unwrap();
+        let (code, _, _) = parse_fix_response(response).unwrap();
         assert_eq!(code, "let y = 2;");
     }
 
@@ -1185,6 +1217,7 @@ mod tests {
             explanation: "test".to_string(),
             start_line: 2,
             end_line: 3,
+            test_code: None,
         };
         apply_fix(&plan).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
@@ -1210,6 +1243,7 @@ mod tests {
             explanation: String::new(),
             start_line: 99,
             end_line: 100,
+            test_code: None,
         };
         assert!(apply_fix(&plan).is_err());
         let _ = std::fs::remove_file(&path);
@@ -1232,6 +1266,7 @@ mod tests {
                 severity: "HIGH".to_string(),
                 cwe: "CWE-89".to_string(),
                 explanation: "Use parameterized queries.".to_string(),
+                test_code: Some("def test_no_sql_injection():\n    assert True".to_string()),
             },
             AppliedFix {
                 title: "Hardcoded API Key".to_string(),
@@ -1239,6 +1274,7 @@ mod tests {
                 severity: "CRITICAL".to_string(),
                 cwe: "CWE-798".to_string(),
                 explanation: "Move the key to an environment variable.".to_string(),
+                test_code: None,
             },
         ];
         let body = render_fix_pr_body(&applied, "main", "cipherai/security-fixes-20240101");
@@ -1249,6 +1285,9 @@ mod tests {
         assert!(body.contains("Use parameterized queries"));
         assert!(body.contains("main"));
         assert!(body.contains("cipherai/security-fixes-20240101"));
+        // Regression-tests section only includes fixes that have test code
+        assert!(body.contains("Regression tests"));
+        assert!(body.contains("def test_no_sql_injection"));
     }
 
     #[test]

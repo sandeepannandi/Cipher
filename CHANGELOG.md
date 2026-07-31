@@ -4,6 +4,9 @@
 
 ### Added
 
+- **`cipher-ai pr --diff`** — Diff-aware PR reviews: fetches the PR's changed files, only reports findings on lines the PR introduces, and posts **inline comments** on those lines via the GitHub reviews API
+- **`cipher-ai watch`** — Continuous monitoring: scans on an interval, persists a findings fingerprint to `.cipher-ai/watch-state.json`, and reports what is **new** since the last scan; `--pr` auto-fixes new findings and opens a GitHub PR; `--once` for cron/CI
+- **`.github/workflows/security-watch.yml`** — Nightly scheduled watch that auto-opens a fix PR for new high+ findings
 - **`cipher-ai attack --flow`** — Attach real cross-file data-flow evidence to attack chains via the taint engine (proves chains are exploitable, boosts risk when a path is confirmed)
 - **`cipher-ai fix --pr`** — Apply fixes, create a branch, push, and open a GitHub PR with a per-fix summary (repo auto-detected from `--repo`, `GITHUB_REPOSITORY`, or git remote)
 - **`cipher-ai report --format html`** — Self-contained browser-ready HTML dashboard (security score, severity bars, findings table with CWE/OWASP/usage, print-to-PDF styles)
@@ -12,8 +15,9 @@
 
 ### Changed
 
-- **TUI**: New `/attack --flow`, `/fix --pr`, `/report --format html`, and attack/report variants in help, palette, and input suggestions
-- **README**: Documented the new `--flow`, `--pr`, and `--format html` flags
+- **TUI**: New `/attack --flow`, `/fix --pr`, `/report --format html`, `/pr --diff`, and `/watch` commands in help, palette, and input suggestions
+- **`pr` workflow** (`.github/workflows/pr-review.yml`): now runs with `--diff` for focused, line-accurate reviews
+- **README**: Documented the new `--flow`, `--pr`, `--format html`, `--diff`, and `watch` flags
 
 ## [1.0.0] — 2026-07-30
 

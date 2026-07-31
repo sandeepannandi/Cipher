@@ -2,7 +2,7 @@ use crate::finding::{Finding, Severity};
 use crate::{attack, deps, output, review, secrets, zeroday};
 use anyhow::{Context, Result};
 use colored::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// GitHub REST API base URL.
@@ -370,13 +370,298 @@ fn resolve_pr_number(pr_number: Option<u32>) -> Option<u32> {
     None
 }
 
+/// A file changed in a pull request (from the GitHub files API).
+#[derive(Debug, Clone)]
+pub(crate) struct ChangedFile {
+    pub path: String,
+    /// Unified-diff patch for this file (absent for binary/large files)
+    pub patch: Option<String>,
+}
+
+/// Fetch the list of files changed in a pull request.
+///
+/// Calls `GET /repos/{repo}/pulls/{number}/files`. Used by `pr --diff` to
+/// restrict review comments to the lines this PR actually touches.
+pub(crate) async fn get_pr_changed_files(
+    repo: &str,
+    token: &str,
+    pr_number: u32,
+) -> Result<Vec<ChangedFile>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .user_agent("cipher-ai/1.0")
+        .build()
+        .context("Failed to build HTTP client")?;
+
+    #[derive(Deserialize)]
+    struct RawFile {
+        filename: String,
+        patch: Option<String>,
+    }
+
+    // The files API returns at most 100 results per page. Keep fetching pages
+    // until a page comes back short (GitHub returns an empty array past the
+    // end), so PRs with more than 100 changed files are fully covered.
+    let mut all = Vec::new();
+    let mut page = 1u32;
+    loop {
+        let url = format!(
+            "{}/repos/{}/pulls/{}/files?per_page=100&page={}",
+            GITHUB_API, repo, pr_number, page
+        );
+        let response = client
+            .get(&url)
+            .bearer_auth(token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .context("Failed to fetch PR files from GitHub")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "GitHub API error ({}) fetching files for {}#{}: {}",
+                status,
+                repo,
+                pr_number,
+                text
+            );
+        }
+
+        let files: Vec<RawFile> = response.json().await?;
+        let count = files.len();
+        all.extend(files.into_iter().map(|f| ChangedFile {
+            path: f.filename,
+            patch: f.patch,
+        }));
+        if count < 100 {
+            break;
+        }
+        page += 1;
+    }
+
+    Ok(all)
+}
+
+/// Parse the 1-based new-file line numbers of *added* lines in a unified diff.
+///
+/// Added lines are the ones this PR introduces — the only lines we want to
+/// flag in a review. Handles `@@ -old,oldcount +new,newcount @@` hunk headers.
+pub(crate) fn parse_added_lines(patch: &str) -> Vec<usize> {
+    let mut added = Vec::new();
+    let mut new_line: Option<usize> = None;
+
+    for line in patch.lines() {
+        if line.starts_with("@@") {
+            let header = line.trim_start_matches("@@").trim_end_matches("@@");
+            // header: ` -3,7 +10,3 ` — we want the new-file start after '+'
+            let new_start = header
+                .split('+')
+                .nth(1)
+                .and_then(|s| s.split(',').next())
+                .and_then(|s| s.trim().parse::<usize>().ok());
+            new_line = new_start;
+            continue;
+        }
+        let Some(n) = new_line else { continue };
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue; // file headers, not hunks
+        }
+        if line.starts_with('+') {
+            added.push(n);
+            new_line = Some(n + 1);
+        } else if line.starts_with('-') {
+            // removed line — consumes no new-file line number
+        } else if line.starts_with('\\') {
+            // `\ No newline at end of file` marker — consumes no line number
+        } else {
+            // context line — occupies a new-file line number
+            new_line = Some(n + 1);
+        }
+    }
+
+    added
+}
+
+/// Find the changed file whose path matches a finding's file path.
+///
+/// Case-insensitive exact match, or suffix match so absolute finding paths
+/// (e.g. `/proj/src/app.js`) line up with repo-relative changed-file paths
+/// (`src/app.js`).
+pub(crate) fn match_changed_file<'a>(fp: &str, files: &'a [ChangedFile]) -> Option<&'a ChangedFile> {
+    let fp_norm = fp.replace('\\', "/").to_lowercase();
+    files.iter().find(|cf| {
+        let cf_norm = cf.path.replace('\\', "/").to_lowercase();
+        cf_norm == fp_norm || fp_norm.ends_with(&format!("/{}", cf_norm))
+    })
+}
+
+/// Split findings into those introduced by the PR's diff and pre-existing ones.
+///
+/// A finding is "in the diff" when its file is among the PR's changed files
+/// AND its line is one of the added lines (findings without a patch or line
+/// number fall back to a file-level match so nothing is silently dropped).
+/// Returns `(in_diff, preexisting)`.
+pub(crate) fn split_by_diff(
+    findings: Vec<Finding>,
+    files: &[ChangedFile],
+) -> (Vec<Finding>, Vec<Finding>) {
+    let mut in_diff = Vec::new();
+    let mut preexisting = Vec::new();
+
+    for f in findings {
+        let Some(fp) = f.file_path.as_deref() else {
+            preexisting.push(f);
+            continue;
+        };
+        let Some(cf) = match_changed_file(fp, files) else {
+            preexisting.push(f);
+            continue;
+        };
+
+        let is_added = match (cf.patch.as_deref(), f.line_number) {
+            (Some(patch), Some(ln)) => parse_added_lines(patch).contains(&ln),
+            // No patch (binary/large) or no line number: file-level match counts
+            _ => true,
+        };
+        if is_added {
+            in_diff.push(f);
+        } else {
+            preexisting.push(f);
+        }
+    }
+
+    (in_diff, preexisting)
+}
+
+/// Build the inline review comments (path, line, body) for critical/high
+/// findings that have a file path and line number. Findings in changed files
+/// without a patch (binary/large files) are skipped — GitHub cannot position
+/// comments there and would reject the whole review. Capped at 10 comments.
+fn build_inline_comments(findings: &[Finding], files: &[ChangedFile]) -> Vec<(String, usize, String)> {
+    findings
+        .iter()
+        .filter(|f| f.severity == Severity::Critical || f.severity == Severity::High)
+        .filter(|f| {
+            // Skip patchless files (binary/large) so post_review_comments can't
+            // 422 the entire request on an unpositionable line.
+            let Some(fp) = f.file_path.as_deref() else {
+                return false;
+            };
+            match match_changed_file(fp, files) {
+                Some(cf) => cf.patch.is_some(),
+                // No changed file matched — only happens when the diff fetch
+                // failed (changed_files empty). No positionable comments exist
+                // then, so exclude everything rather than 422 the review.
+                None => false,
+            }
+        })
+        .filter_map(|f| {
+            let path = f.file_path.clone()?;
+            let line = f.line_number?;
+            let cwe = f.cwe_id.clone().unwrap_or_else(|| "no CWE".to_string());
+            let body = format!(
+                "**{}** ({}) · {}\n\n{}",
+                f.title,
+                f.severity,
+                cwe,
+                f.remediation
+                    .clone()
+                    .unwrap_or_else(|| "Review this finding manually.".to_string())
+            );
+            Some((path, line, body))
+        })
+        .take(10)
+        .collect()
+}
+
+/// Post inline review comments at specific file:line positions.
+///
+/// Uses the GitHub reviews API (`POST /repos/{repo}/pulls/{n}/reviews`) so the
+/// comments appear directly on the changed lines, not just as one summary.
+/// `comments` is `(path, line, body)` tuples; no-ops when empty.
+pub(crate) async fn post_review_comments(
+    repo: &str,
+    token: &str,
+    pr_number: u32,
+    comments: &[(String, usize, String)],
+) -> Result<()> {
+    if comments.is_empty() {
+        return Ok(());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .user_agent("cipher-ai/1.0")
+        .build()
+        .context("Failed to build HTTP client")?;
+
+    #[derive(Serialize)]
+    struct ReviewComment {
+        path: String,
+        line: usize,
+        body: String,
+    }
+
+    #[derive(Serialize)]
+    struct ReviewBody {
+        event: String,
+        body: String,
+        comments: Vec<ReviewComment>,
+    }
+
+    let url = format!("{}/repos/{}/pulls/{}/reviews", GITHUB_API, repo, pr_number);
+    let body = ReviewBody {
+        event: "COMMENT".to_string(),
+        body: format!("🔒 CipherAI found {} issue(s) in this diff.", comments.len()),
+        comments: comments
+            .iter()
+            .map(|(path, line, text)| ReviewComment {
+                path: path.clone(),
+                line: *line,
+                body: text.clone(),
+            })
+            .collect(),
+    };
+
+    let response = client
+        .post(&url)
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to post review comments")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "GitHub API error ({}) posting review to {}#{}: {}",
+            status,
+            repo,
+            pr_number,
+            text
+        );
+    }
+    Ok(())
+}
+
 /// Run the `cipher-ai pr` command — review a pull request and comment.
+///
+/// With `--diff`, fetches the PR's changed files and only reports findings that
+/// touch lines this PR introduces (pre-existing issues are summarized but not
+/// commented on), and posts inline comments on the changed lines.
 pub async fn run_pr(
     project_path: &Path,
     repo: Option<&str>,
     pr_number: Option<u32>,
     token: Option<&str>,
     dry_run: bool,
+    diff_only: bool,
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
@@ -417,8 +702,10 @@ pub async fn run_pr(
         pr_number.to_string().yellow().bold()
     );
 
+    let total_steps = if diff_only { 5 } else { 3 };
+
     // Step 1: run the scan suite
-    output::print_step(1, 3, "Running security scans (review + secrets + deps + zeroday)");
+    output::print_step(1, total_steps, "Running security scans (review + secrets + deps + zeroday)");
     let (findings, attack_count) = collect_pr_findings(&canonical_path).await?;
     let (critical, high, medium, low) = severity_counts(&findings);
     output::print_ok("Scans", &format!(
@@ -430,21 +717,87 @@ pub async fn run_pr(
         findings.len().to_string().bold()
     ));
 
-    // Step 2: render the comment
-    output::print_step(2, 3, "Rendering review comment");
+    // Step 2 (diff-aware only): fetch changed files and filter findings
+    let mut findings = findings;
+    let mut preexisting: Vec<Finding> = Vec::new();
+    let mut changed_files: Vec<ChangedFile> = Vec::new();
+    if diff_only {
+        output::print_step(2, total_steps, "Fetching PR changed files");
+        match get_pr_changed_files(&repo, &token, pr_number).await {
+            Ok(files) => {
+                let (in_diff, pre) = split_by_diff(findings, &files);
+                findings = in_diff;
+                preexisting = pre;
+                changed_files = files;
+                output::print_ok("Diff", &format!(
+                    "{} finding(s) in this PR's changes, {} pre-existing",
+                    findings.len(),
+                    preexisting.len()
+                ));
+            }
+            Err(e) => {
+                output::print_warn("Diff", &format!(
+                    "could not fetch changed files ({}); reviewing full repository",
+                    e
+                ));
+            }
+        }
+    }
+
+    // Step 3 (or 2): render the comment
+    let render_step = if diff_only { 3 } else { 2 };
+    output::print_step(render_step, total_steps, "Rendering review comment");
     let comment = render_pr_comment(&findings, attack_count, &repo, pr_number);
 
-    // Step 3: dry-run or post
+    // Dry-run: preview the summary comment AND the inline comments that would
+    // be posted, so the preview shows exactly what the review will contain.
     if dry_run {
-        output::print_step(3, 3, "Dry-run mode — comment not posted");
+        output::print_step(total_steps, total_steps, "Dry-run mode — nothing posted");
         println!();
         println!("{}", comment);
+        if !preexisting.is_empty() {
+            println!();
+            println!(
+                "  {} {} pre-existing finding(s) outside this diff were excluded from the review.",
+                "[NOTE]".bold(),
+                preexisting.len().to_string().cyan()
+            );
+        }
+        if diff_only {
+            let inline = build_inline_comments(&findings, &changed_files);
+            if !inline.is_empty() {
+                println!();
+                println!("  {} {} inline comment(s) would be posted:", "[INLINE]".bold().cyan(), inline.len().to_string().cyan());
+                for (path, line, body) in &inline {
+                    println!("    {} {}:{}", "->".cyan(), path.yellow(), line);
+                    for l in body.lines().take(3) {
+                        println!("      {}", l.dimmed());
+                    }
+                    println!();
+                }
+            }
+        }
         println!();
-        output::print_ok("Dry-run", "Rerun without --dry-run to post this comment to the PR.");
+        output::print_ok("Dry-run", "Rerun without --dry-run to post this review to the PR.");
         return Ok(());
     }
 
-    output::print_step(3, 3, "Posting comment to GitHub");
+    // Step 4 (diff-aware only): post inline comments on changed lines
+    if diff_only {
+        output::print_step(4, total_steps, "Posting inline review comments");
+        let inline = build_inline_comments(&findings, &changed_files);
+        if inline.is_empty() {
+            output::print_ok("Inline", "no critical/high findings in the diff");
+        } else {
+            match post_review_comments(&repo, &token, pr_number, &inline).await {
+                Ok(()) => output::print_ok("Inline", &format!("{} comment(s) posted", inline.len())),
+                Err(e) => output::print_warn("Inline", &format!("could not post inline comments ({})", e)),
+            }
+        }
+    }
+
+    let post_step = if diff_only { 5 } else { 3 };
+    output::print_step(post_step, total_steps, "Posting summary comment to GitHub");
     match post_pr_comment(&repo, pr_number, &token, &comment).await {
         Ok(()) => {
             output::print_success(&format!(
@@ -530,6 +883,108 @@ mod tests {
         std::env::set_var("GITHUB_PR_NUMBER", "42");
         assert_eq!(resolve_pr_number(Some(7)), Some(7));
         std::env::remove_var("GITHUB_PR_NUMBER");
+    }
+
+    #[test]
+    fn test_parse_added_lines_simple() {
+        let patch = "@@ -1,3 +1,4 @@\n fn existing() {\n-    let x = 1;\n+    let x = 2;\n+    exec(x);\n }\n";
+        let added = parse_added_lines(patch);
+        assert_eq!(added, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_parse_added_lines_multiple_hunks() {
+        let patch = "@@ -5,2 +5,2 @@\n a\n+ b\n@@ -20,1 +21,1 @@\n+ c\n";
+        let added = parse_added_lines(patch);
+        assert_eq!(added, vec![6, 21]);
+    }
+
+    #[test]
+    fn test_parse_added_lines_empty() {
+        assert!(parse_added_lines("").is_empty());
+        assert!(parse_added_lines("no hunks here").is_empty());
+    }
+
+    #[test]
+    fn test_parse_added_lines_no_newline_marker() {
+        // `\ No newline at end of file` must not shift subsequent line numbers
+        let patch = "@@ -1,2 +1,3 @@\n a\n+    exec(x);\n\\ No newline at end of file\n";
+        let added = parse_added_lines(patch);
+        assert_eq!(added, vec![2]);
+    }
+
+    #[test]
+    fn test_split_by_diff_keeps_added_lines() {
+        let files = vec![ChangedFile {
+            path: "src/app.js".to_string(),
+            patch: Some("@@ -1,2 +1,3 @@\n a\n+    exec(x);\n b\n".to_string()),
+        }];
+        let findings = vec![
+            mk("Command Injection", Severity::Critical, "CWE-78", "src/app.js", 2),
+            mk("Weak hash", Severity::Medium, "CWE-328", "src/app.js", 1),
+            mk("Old issue", Severity::Low, "CWE-693", "src/other.js", 5),
+        ];
+        let (in_diff, preexisting) = split_by_diff(findings, &files);
+        assert_eq!(in_diff.len(), 1);
+        assert_eq!(in_diff[0].title, "Command Injection");
+        assert_eq!(preexisting.len(), 2);
+    }
+
+    #[test]
+    fn test_split_by_diff_file_level_fallback() {
+        // No patch (binary/large file) → file-level match counts
+        let files = vec![ChangedFile {
+            path: "src/app.js".to_string(),
+            patch: None,
+        }];
+        let findings = vec![mk("Secret", Severity::High, "CWE-798", "src/app.js", 9)];
+        let (in_diff, preexisting) = split_by_diff(findings, &files);
+        assert_eq!(in_diff.len(), 1);
+        assert!(preexisting.is_empty());
+    }
+
+    #[test]
+    fn test_split_by_diff_path_suffix_match() {
+        // Finding paths may be absolute; changed-file paths are repo-relative
+        let files = vec![ChangedFile {
+            path: "src/app.js".to_string(),
+            patch: Some("@@ -1,1 +1,2 @@\n a\n+  bug();\n".to_string()),
+        }];
+        let findings = vec![mk("Bug", Severity::High, "CWE-693", "/proj/src/app.js", 2)];
+        let (in_diff, _) = split_by_diff(findings, &files);
+        assert_eq!(in_diff.len(), 1);
+    }
+
+    #[test]
+    fn test_build_inline_comments_skips_patchless_files() {
+        // Findings in binary/large changed files (no patch) must NOT produce
+        // inline comments — GitHub can't position them and would reject the
+        // whole review request with a 422.
+        let files = vec![
+            ChangedFile {
+                path: "src/app.js".to_string(),
+                patch: Some("@@ -1,1 +1,2 @@\n a\n+  bug();\n".to_string()),
+            },
+            ChangedFile {
+                path: "assets/big.bin".to_string(),
+                patch: None,
+            },
+        ];
+        let findings = vec![
+            mk("Bug", Severity::High, "CWE-693", "src/app.js", 2),
+            mk("Secret in binary", Severity::Critical, "CWE-798", "assets/big.bin", 5),
+        ];
+        let inline = build_inline_comments(&findings, &files);
+        assert_eq!(inline.len(), 1);
+        assert_eq!(inline[0].0, "src/app.js");
+    }
+
+    #[test]
+    fn test_build_inline_comments_empty_changed_files() {
+        // When the diff fetch failed (empty changed_files), no comments can be
+        // positioned — the function must return nothing rather than 422.
+        let findings = vec![mk("Bug", Severity::High, "CWE-693", "src/app.js", 2)];
+        assert!(build_inline_comments(&findings, &[]).is_empty());
     }
 
     #[test]

@@ -4,7 +4,7 @@ use colored::*;
 use std::path::PathBuf;
 
 // Modules are declared in the library crate (src/lib.rs).
-use cipher_ai::{attack, ci, config, deps, fix, indexer, pr, rag, report, review, sbom, secrets, trace, zeroday};
+use cipher_ai::{attack, ci, config, deps, fix, indexer, pr, rag, report, review, sbom, secrets, trace, watch, zeroday};
 
 const NAME: &str = "cipher-ai";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -337,6 +337,43 @@ enum Commands {
         /// Print the comment without posting it
         #[arg(long = "dry-run")]
         dry_run: bool,
+
+        /// Diff-aware review: only comment on findings in the PR's changed lines
+        #[arg(long = "diff")]
+        diff: bool,
+    },
+
+    /// Continuously monitor for new security findings
+    ///
+    /// Scans on an interval, persists the findings fingerprint, and reports
+    /// what is NEW since the last scan. With `--pr`, automatically fixes new
+    /// findings and opens a GitHub pull request (dependabot-style). Use
+    /// `--once` in a nightly cron/CI job.
+    #[command(visible_alias = "mon")]
+    Watch {
+        /// Minutes between scans (default: 360 = every 6 hours)
+        #[arg(long = "interval", default_value = "360")]
+        interval_minutes: u64,
+
+        /// Risk level to auto-fix: critical | high | medium | low (default: high)
+        #[arg(long = "risk", default_value = "high")]
+        risk_level: String,
+
+        /// Auto-fix new findings and open a GitHub pull request
+        #[arg(long = "pr")]
+        open_pr: bool,
+
+        /// Repository as owner/name for the fix PR (defaults to GITHUB_REPOSITORY)
+        #[arg(long = "repo")]
+        repo: Option<String>,
+
+        /// GitHub token with repo scope (defaults to GITHUB_TOKEN)
+        #[arg(long = "token")]
+        token: Option<String>,
+
+        /// Run a single scan and exit (for cron/CI)
+        #[arg(long = "once")]
+        once: bool,
     },
 
     /// Generate shell completions
@@ -438,9 +475,13 @@ async fn main() -> Result<()> {
             let query_str = query.join(" ");
             trace::run_trace(&project_path, &query_str, depth, json, use_ai).await?;
         }
-        Commands::Pr { repo, pr_number, token, dry_run } => {
+        Commands::Pr { repo, pr_number, token, dry_run, diff } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            pr::run_pr(&project_path, repo.as_deref(), pr_number, token.as_deref(), dry_run).await?;
+            pr::run_pr(&project_path, repo.as_deref(), pr_number, token.as_deref(), dry_run, diff).await?;
+        }
+        Commands::Watch { interval_minutes, risk_level, open_pr, repo, token, once } => {
+            let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+            watch::run_watch(&project_path, interval_minutes, Some(risk_level.as_str()), open_pr, repo.as_deref(), token.as_deref(), once).await?;
         }
         Commands::Zeroday { use_ai, model, format, output, anomaly_only, no_flow } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());

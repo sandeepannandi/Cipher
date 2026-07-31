@@ -77,6 +77,10 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 | `cipher-ai fix --risk critical` | Auto-fix all critical findings |
 | `cipher-ai fix --pr` | Apply fixes and open a GitHub PR with them |
 | `cipher-ai fix --all -y` | Fix everything without prompting |
+| `cipher-ai pr --diff` | Diff-aware PR review — only findings on changed lines + inline comments |
+| `cipher-ai watch` | Continuous monitoring — report new findings vs last scan |
+| `cipher-ai watch --pr` | Watch + auto-fix new findings and open a GitHub PR (dependabot-style) |
+| `cipher-ai watch --once` | Single watch scan (for cron/CI) |
 | `cipher-ai config` | Show current configuration |
 | `cipher-ai config set groq-api-key <key>` | Set API key in config |
 | `cipher-ai status` | Show project index, languages, API key status |

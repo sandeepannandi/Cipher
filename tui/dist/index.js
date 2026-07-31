@@ -174,6 +174,10 @@ var require_InputBox = __commonJS({
       { cmd: "attack --flow", desc: "Attack chains + real data-flow evidence" },
       { cmd: "trace", desc: "Trace untrusted data across files (taint flow)" },
       { cmd: "pr", desc: "Post a GitHub PR security review comment" },
+      { cmd: "pr --diff", desc: "Diff-aware PR review (changed lines only)" },
+      { cmd: "watch", desc: "Monitor for new findings (every 6h)" },
+      { cmd: "watch --once", desc: "Watch: single scan, report what is new" },
+      { cmd: "watch --pr", desc: "Watch + auto-fix new findings via GitHub PR" },
       { cmd: "ci", desc: "Run all scans (CI mode)" },
       { cmd: "config", desc: "Show or set configuration" },
       { cmd: "zeroday", desc: "3-layer zero-day anomaly detection" },
@@ -414,6 +418,11 @@ var require_CommandHelp = __commonJS({
       { cmd: '/trace --ai "is this SQL injectable?"', desc: "Trace + AI-enriched path analysis" },
       { cmd: '/trace --json "user input reaches exec"', desc: "Trace \u2192 JSON output" },
       { cmd: "/pr --dry-run", desc: "Preview a PR security review comment" },
+      { cmd: "/pr --diff", desc: "Diff-aware PR review: only findings on changed lines (+ inline comments)" },
+      { cmd: "/watch", desc: "Monitor for new findings (every 6h, uses saved state)" },
+      { cmd: "/watch --once", desc: "Watch: single scan, report what is new since last scan" },
+      { cmd: "/watch --pr", desc: "Watch + auto-fix new findings and open a GitHub PR" },
+      { cmd: "/watch --interval 60", desc: "Watch: scan every 60 minutes" },
       { cmd: "/ci", desc: "Run all 5 scans (review+secrets+deps+zeroday+attack)" },
       { cmd: "/ci --format json", desc: "CI \u2192 machine-readable JSON output" },
       { cmd: "/ci --format json --output ci.json", desc: "CI \u2192 JSON written to file" },
@@ -532,6 +541,11 @@ var require_CommandPalette = __commonJS({
       { cmd: 'trace --ai "is this SQL injectable?"', desc: "Trace + AI-enriched path analysis" },
       { cmd: 'trace --json "user input reaches exec"', desc: "Trace \u2192 JSON output" },
       { cmd: "pr --dry-run", desc: "Preview a PR security review comment" },
+      { cmd: "pr --diff", desc: "Diff-aware PR review (changed lines only + inline comments)" },
+      { cmd: "watch", desc: "Monitor for new findings (every 6h, saved state)" },
+      { cmd: "watch --once", desc: "Watch: single scan, report what is new" },
+      { cmd: "watch --pr", desc: "Watch + auto-fix new findings via GitHub PR" },
+      { cmd: "watch --interval 60", desc: "Watch: scan every 60 minutes" },
       { cmd: "ci", desc: "Run all 5 scans (review+secrets+deps+zeroday+attack)" },
       { cmd: "ci --format json", desc: "CI \u2192 machine-readable JSON" },
       { cmd: "ci --format json --output ci.json", desc: "CI \u2192 JSON written to file" },
@@ -878,7 +892,7 @@ var { CommandHelp } = require_CommandHelp();
 var { CommandPalette } = require_CommandPalette();
 var { runCommand } = require_runner();
 var MODELS = ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"];
-var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "trace", "pr", "status", "ci", "config", "zeroday", "sbom"];
+var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "trace", "pr", "watch", "status", "ci", "config", "zeroday", "sbom"];
 function isQuestion(text) {
   const qWords = [
     "what",
@@ -1074,6 +1088,7 @@ function App() {
       attack: "Analyzing attack paths...",
       trace: "Tracing data flow...",
       pr: "Reviewing pull request...",
+      watch: "Monitoring for new findings...",
       status: "Checking status...",
       ci: "Running all scans...",
       config: "Configuring...",

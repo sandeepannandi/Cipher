@@ -1,0 +1,45 @@
+name: Security Watch
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # daily at 03:00 UTC
+  workflow_dispatch: # allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  watch:
+    name: CipherAI Security Watch
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The watch state (.cipher-ai/watch-state.json) records what was found in
+      # the previous scan. Fresh checkouts would reset the baseline every night,
+      # so persist it across runs with the actions/cache.
+      # actions/cache never overwrites an existing key, so the key MUST change
+      # every run (run_id) while restore-keys falls back to the most recent
+      # previous run — otherwise the baseline would be pinned to run #1 forever.
+      - name: Cache watch state
+        uses: actions/cache@v4
+        with:
+          path: .cipher-ai/watch-state.json
+          key: cipherai-watch-${{ github.run_id }}
+          restore-keys: |
+            cipherai-watch-
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build cipher-ai
+        run: cargo build --release
+
+      - name: Run security watch (auto-fix PR)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: ./target/release/cipher-ai watch --once --risk high --pr --path .

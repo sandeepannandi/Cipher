@@ -21,4 +21,5 @@ pub mod sbom;
 pub mod secrets;
 pub mod trace;
 pub mod verify;
+pub mod watch;
 pub mod zeroday;
