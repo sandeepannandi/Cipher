@@ -35,7 +35,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build cipher-ai
-        run: cargo build --release
+        run: cargo build --release --target x86_64-unknown-linux-gnu
 
       - name: Run security watch (auto-fix PR)
         env:

@@ -13,7 +13,9 @@ const https = require('https');
 const os = require('os');
 
 const REPO = 'sandeepannandi/Cipher';
-const VERSION = 'v0.1.0';
+// Derive the release tag from the npm version so it can never go stale
+// (keep the GitHub release tag in sync with tui/package.json version).
+const VERSION = 'v' + require('./package.json').version;
 const BINARY_NAME = 'cipher-ai';
 
 function getPlatform() {

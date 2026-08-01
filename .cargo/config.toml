@@ -1,10 +1,35 @@
 # Cipher build configuration
-# Remove or comment out [build] target to let Rust use the default for each platform
-# (e.g., x86_64-unknown-linux-gnu on Linux/WSL, x86_64-pc-windows-msvc on Windows with MSVC)
 #
-# For Windows without MSVC, use:
-[build]
-target = "x86_64-pc-windows-gnu"
-
-[target.x86_64-pc-windows-gnu]
-linker = "rust-lld"
+# IMPORTANT: Do NOT set a global [build] target here. A committed default
+# target makes every `cargo build` that does NOT pass an explicit `--target`
+# try to cross-compile for that one target — including CI jobs that run plain
+# `cargo build --release` (pr-review.yml, security-watch.yml). Those runners
+# do not have the target's std installed, which fails with:
+#
+#   error[E0463]: can't find crate for `core`
+#   note: the `x86_64-pc-windows-gnu` target may not be installed
+#
+# Leave [build] target unset so cargo uses the host platform's default
+# (x86_64-pc-windows-msvc on Windows with MSVC, x86_64-unknown-linux-gnu on
+# Linux, etc.). Release CI always passes an explicit --target per matrix row,
+# so it is unaffected by this file.
+#
+# For local development on Windows WITHOUT MSVC, build for the GNU target
+# explicitly instead of forcing it globally (install it first):
+#
+#   rustup target add x86_64-pc-windows-gnu
+#   cargo build --target x86_64-pc-windows-gnu
+#
+# Note: this uses the default GNU linker, so a MinGW toolchain (gcc) must be
+# on PATH. If you previously relied on the rust-lld override below, install
+# MinGW-w64 or re-enable the [target.x86_64-pc-windows-gnu] linker section.
+#
+# or scope it to your shell only:
+#
+#   export CARGO_BUILD_TARGET=x86_64-pc-windows-gnu
+#
+# [build]
+# target = "x86_64-pc-windows-gnu"
+#
+# [target.x86_64-pc-windows-gnu]
+# linker = "rust-lld"

@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **TUI `postinstall.js` release version** — binary download version is now derived from `tui/package.json` (was hardcoded to the stale `v0.1.0`, which had no matching release assets), so `npm install` fetches a real binary and stays in sync with future releases
+- **CI cross-compile error `can't find crate for core` / `x86_64-pc-windows-gnu target may not be installed`** — `.cargo/config.toml` no longer forces a global `[build] target = "x86_64-pc-windows-gnu"`; `pr-review` and `security-watch` workflows now build with an explicit `--target x86_64-unknown-linux-gnu`. Local Windows-without-MSVC builds can opt in via `cargo build --target x86_64-pc-windows-gnu` or `CARGO_BUILD_TARGET`
 - **`cipher-ai report --format html`** — HTML reports now always export to a file (default `cipher-ai-report.html`, or `--output <path>`) instead of dumping raw HTML to stdout; updated CLI help text and TUI descriptions to match
 
 ### Added
