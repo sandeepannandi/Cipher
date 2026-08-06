@@ -21,6 +21,7 @@
 - **Multi-provider AI client** — `cipher-ai config set provider openai|anthropic` + per-provider API keys; `CIPHER_AI_PROVIDER` / `CIPHER_AI_MODEL` / `CIPHER_AI_BASE_URL` overrides; every AI command honors the active provider
 - **Agent tool-calling protocol** — provider-agnostic `agent_turn` contract in `src/llm.rs` (`ToolSchema`, `AgentTurn`, `AgentSummary`, structured `AgentTurnError` + `recovery_message` retry loop) that powers the pentester
 - **`cipher-ai pentest`** — Phase 1 of the autonomous AI security engineer (`src/pentest/`): a provider-agnostic agent loop that maps the codebase (`list_files`, `get_project_map`, `find_entry_points`), investigates with `search_code`, `read_file`, `semantic_search`, `trace_taint`, and consumes scanner output as hypotheses (`get_scanner_findings`), then reports evidence-backed findings with severity + CWE mapping. `--json` / `--output` / `--max-turns` / `--target-dir` flags. Full plan in `docs/PENTESTER-PLAN.md`
+- **Pentest recon (Phase 2)** — framework-aware attack-surface mapping in `src/pentest/recon.rs`: extracts HTTP endpoints with method/path/handler/file:line and per-route auth detection for 10 frameworks (FastAPI, Flask, Express, NestJS, Rails, gin, Spring, Laravel, axum, actix); detects project-wide auth mechanisms (JWT / session cookies / API keys / OAuth), auth middleware names, and likely secret env vars; new `map_attack_surface` agent tool + recon-backed `find_entry_points`
 
 ### Changed
 
