@@ -156,7 +156,7 @@ pub async fn run_fix(
 
     // Step 5: Initialize AI client
     let client = GroqClient::from_env().context(
-        "GROQ_API_KEY required for fix generation.\nSet it via:\n  export GROQ_API_KEY=gsk_your_key_here",
+        "AI API key required for fix generation.\nSet GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY in your environment,\n  or persist one with: cipher-ai config set <provider>-api-key <key>",
     )?;
 
     println!(

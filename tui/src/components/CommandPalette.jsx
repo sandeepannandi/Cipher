@@ -1,7 +1,13 @@
 const React = require('react');
 const { Box, Text, useInput } = require('ink');
 
-const MODELS = ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'];
+const MODELS = [
+  'llama-3.3-70b-versatile',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it',
+  'gpt-4o-mini',
+  'claude-3-7-sonnet-20250219',
+];
 
 const COMMANDS = [
   { cmd: 'init',         desc: 'Index your codebase for analysis' },
@@ -46,6 +52,14 @@ const COMMANDS = [
   { cmd: 'ci --format json --output ci.json', desc: 'CI → JSON written to file' },
   { cmd: 'ci --fail-on critical',             desc: 'CI: fail only on critical findings' },
   { cmd: 'config',       desc: 'Show or set configuration' },
+  { cmd: 'config set provider groq',      desc: 'Switch AI provider → Groq' },
+  { cmd: 'config set provider openai',    desc: 'Switch AI provider → OpenAI' },
+  { cmd: 'config set provider anthropic', desc: 'Switch AI provider → Anthropic' },
+  { cmd: 'pentest',                               desc: 'Autonomous AI security engineer (agent hunts + reports)' },
+  { cmd: 'pentest "hunt for exploitable vulnerabilities"', desc: 'Pentest with a default objective' },
+  { cmd: 'pentest "can users escalate privileges?"', desc: 'Pentest with a specific objective' },
+  { cmd: 'pentest --json',                        desc: 'Pentest → machine-readable JSON' },
+  { cmd: 'pentest --max-turns 60',                desc: 'Pentest with a larger agent budget' },
   { cmd: 'zeroday',                               desc: '3-layer zero-day anomaly detection' },
   { cmd: 'zeroday --ai',                           desc: 'Zero-day + AI-powered analysis' },
   { cmd: 'zeroday --anomaly-only',                 desc: 'Zero-day: anomaly layer only' },
@@ -56,7 +70,11 @@ const COMMANDS = [
   { cmd: 'sbom --output bom.json',                     desc: 'Write SBOM to file' },
   { cmd: '---',          desc: '---' },
   { cmd: 'model',        desc: 'Show or switch AI model' },
-  ...MODELS.map((m) => ({ cmd: 'model ' + m, desc: 'Switch to ' + m })),
+  { cmd: 'model llama-3.3-70b-versatile',    desc: 'Groq — default chat model' },
+  { cmd: 'model mixtral-8x7b-32768',         desc: 'Groq — 32K context' },
+  { cmd: 'model gemma2-9b-it',               desc: 'Groq — fast & light' },
+  { cmd: 'model gpt-4o-mini',                desc: 'OpenAI — default' },
+  { cmd: 'model claude-3-7-sonnet-20250219', desc: 'Anthropic — default' },
   { cmd: 'status',       desc: 'Show index and API key status' },
   { cmd: '---',          desc: '---' },
   { cmd: 'clear',        desc: 'Clear messages' },

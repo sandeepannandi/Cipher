@@ -4,7 +4,7 @@ use colored::*;
 use std::path::PathBuf;
 
 // Modules are declared in the library crate (src/lib.rs).
-use cipher_ai::{attack, ci, config, deps, fix, indexer, pr, rag, report, review, sbom, secrets, trace, watch, zeroday};
+use cipher_ai::{attack, ci, config, deps, fix, indexer, pentest, pr, rag, report, review, sbom, secrets, trace, watch, zeroday};
 
 const NAME: &str = "cipher-ai";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -279,6 +279,37 @@ enum Commands {
         no_flow: bool,
     },
 
+    /// Run the autonomous AI security engineer (agent loop)
+    ///
+    /// Spawns an AI agent that maps the codebase, investigates with code
+    /// tools (search, read, semantic search, taint tracing, scanner feeds),
+    /// and reports evidence-backed findings. Requires an AI API key.
+    #[command(visible_alias = "pt")]
+    Pentest {
+        /// Security objective for the agent to investigate
+        objective: Vec<String>,
+
+        /// Project directory to analyze (defaults to --path or current dir)
+        #[arg(long = "target-dir")]
+        target_dir: Option<PathBuf>,
+
+        /// Maximum agent turns before giving up (default: 40)
+        #[arg(long = "max-turns", default_value = "40")]
+        max_turns: usize,
+
+        /// Model to use (defaults to config or provider default)
+        #[arg(short = 'm', long = "model")]
+        model: Option<String>,
+
+        /// Output results as JSON
+        #[arg(long = "json")]
+        json: bool,
+
+        /// Write results JSON to a file
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
+    },
+
     /// Generate a Software Bill of Materials (SBOM) for your project
     ///
     /// Scans all dependency manifests and generates a CycloneDX or SPDX
@@ -466,6 +497,21 @@ async fn main() -> Result<()> {
         }
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
+        }
+        Commands::Pentest { objective, target_dir, max_turns, model, json, output } => {
+            let project_path = target_dir
+                .or(cli.path)
+                .unwrap_or_else(|| std::env::current_dir().unwrap());
+            let objective_str = objective.join(" ");
+            pentest::run_pentest(
+                &project_path,
+                &objective_str,
+                max_turns,
+                model.as_deref(),
+                json,
+                output.as_deref(),
+            )
+            .await?;
         }
         Commands::Sbom { format, output } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());

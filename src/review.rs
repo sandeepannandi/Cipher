@@ -22,6 +22,13 @@ struct VulnPattern {
     owasp: Option<OwaspCategory>,
     /// Regex pattern to match in code
     pattern: Regex,
+    /// Optional regex: when the matched line also matches this, the finding is
+    /// suppressed (e.g. a cookie call that already sets the security flags).
+    ///
+    /// Exists because the `regex` crate has no look-around, so "match X unless
+    /// Y" cannot be expressed in a single pattern. This is a whole-line check:
+    /// a cookie literally named "Secure" is therefore treated as flagged.
+    negative: Option<Regex>,
     /// File extensions to target (empty = all supported)
     target_extensions: &'static [&'static str],
     /// Remediation suggestion template
@@ -35,7 +42,10 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     // Helper macro
     macro_rules! add_vuln {
         ($name:expr, $desc:expr, $sev:expr, $conf:expr, $owasp:expr, $re:expr, $exts:expr, $fix:expr) => {
-            if let Ok(re) = Regex::new($re) {
+            add_vuln!($name, $desc, $sev, $conf, $owasp, $re, None, $exts, $fix)
+        };
+        ($name:expr, $desc:expr, $sev:expr, $conf:expr, $owasp:expr, $re:expr, $neg:expr, $exts:expr, $fix:expr) => {
+            if let (Ok(re), Ok(negative)) = (Regex::new($re), $neg.map(Regex::new).transpose()) {
                 patterns.push(VulnPattern {
                     name: $name,
                     description: $desc,
@@ -43,6 +53,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
                     confidence: $conf,
                     owasp: $owasp,
                     pattern: re,
+                    negative,
                     target_extensions: $exts,
                     remediation: $fix,
                 });
@@ -173,7 +184,8 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Insecure Cookie Configuration",
         "Cookies missing Secure, HttpOnly, or SameSite flags can be exploited via XSS or MITM.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A05SecurityMisconfiguration),
-        r#"(?i)(?:cookie|Cookie|set_cookie)\s*\(\s*['\"]\w+['\"]\s*,\s*['\"]\w+['\"]\s*(?!.*(?:HttpOnly|Secure|SameSite))"#,
+        r#"(?i)(?:cookie|Cookie|set_cookie)\s*\(\s*['\"]\w+['\"]\s*,\s*['\"]\w+['\"]"#,
+        Some(r#"(?i)(?:HttpOnly|Secure|SameSite)"#),
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Set Secure, HttpOnly, and SameSite=Lax/Strict flags on all cookies."
     );
@@ -213,9 +225,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Insecure Deserialization",
         "Deserializing untrusted data can lead to remote code execution.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A08IntegrityFailures),
-        // Removed JSON.parse (safe in JS) and serde_json::from_str (safe in Rust).
-        // Only flag genuinely dangerous deserialization APIs.
-        r#"(?i)(?:pickle\.loads|marshal\.load|yaml\.load\b(?!.*safe)|from_string|unserialize|php://input)"#,
+        // `yaml.load\b` already excludes `yaml.load_safe` (no word boundary
+        // before `_`), so no look-around is needed here.
+        r#"(?i)(?:pickle\.loads|marshal\.load|yaml\.load\b|from_string|unserialize|php://input)"#,
         &["py", "rb", "php"],
         "Avoid deserializing untrusted data. If necessary, use safe deserialization and validate the result against a schema."
     );
@@ -352,6 +364,16 @@ fn scan_file_for_vulns(
             }
 
             if !pattern.pattern.is_match(line) {
+                continue;
+            }
+
+            // Suppress matches that also hit the negative filter, e.g. a
+            // cookie call that already sets HttpOnly/Secure/SameSite.
+            if pattern
+                .negative
+                .as_ref()
+                .is_some_and(|neg| neg.is_match(line))
+            {
                 continue;
             }
 

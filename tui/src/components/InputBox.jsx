@@ -1,7 +1,13 @@
 const React = require('react');
 const { Box, Text, useInput } = require('ink');
 
-const MODELS = ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'];
+const MODELS = [
+  'llama-3.3-70b-versatile',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it',
+  'gpt-4o-mini',
+  'claude-3-7-sonnet-20250219',
+];
 
 const COMMANDS = [
   { cmd: 'init',         desc: 'Index your codebase for analysis' },
@@ -37,6 +43,11 @@ const COMMANDS = [
   { cmd: 'watch --pr',   desc: 'Watch + auto-fix new findings via GitHub PR' },
   { cmd: 'ci',           desc: 'Run all scans (CI mode)' },
   { cmd: 'config',       desc: 'Show or set configuration' },
+  { cmd: 'config set provider groq',      desc: 'Switch AI provider → Groq' },
+  { cmd: 'config set provider openai',    desc: 'Switch AI provider → OpenAI' },
+  { cmd: 'config set provider anthropic', desc: 'Switch AI provider → Anthropic' },
+  { cmd: 'pentest',                               desc: 'Autonomous AI security engineer (agent hunts + reports)' },
+  { cmd: 'pentest --json',                        desc: 'Pentest → JSON findings' },
   { cmd: 'zeroday',                               desc: '3-layer zero-day anomaly detection' },
   { cmd: 'zeroday --ai',                           desc: 'Zero-day + AI-powered analysis' },
   { cmd: 'zeroday --anomaly-only',                 desc: 'Zero-day: anomaly layer only' },

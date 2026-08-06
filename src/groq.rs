@@ -1,134 +1,70 @@
-use anyhow::{Context, Result};
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
+// ── Legacy Groq client (backward-compatible wrapper) ─────────────────
+//
+// Phase 0 introduced the provider-agnostic client in `llm.rs`. This module
+// keeps the original `GroqClient` name and API (`from_env` + `chat`) so every
+// existing caller (verify, fix, attack, rag, review, trace, zeroday) compiles
+// and behaves exactly as before.
+//
+// `GroqClient::from_env()` honors the active provider — by default Groq, but
+// set `CIPHER_AI_PROVIDER=openai|anthropic` to route all existing commands
+// through another provider without touching their code.
 
-const GROQ_API_BASE: &str = "https://api.groq.com/openai/v1";
-const DEFAULT_CHAT_MODEL: &str = "llama-3.3-70b-versatile";
+use anyhow::Result;
 
-/// Groq API client for chat completions
+use crate::llm::{AiClient, AiProvider};
+
+/// Groq API client for chat completions.
+///
+/// Now backed by the shared multi-provider [`AiClient`]; the name is retained
+/// for backward compatibility with the original single-provider design.
 pub struct GroqClient {
-    client: Client,
-    api_key: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<Message>,
-    temperature: f32,
-    max_tokens: u32,
-    stream: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Message {
-    role: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatResponse {
-    choices: Vec<Choice>,
-    #[allow(dead_code)]
-    usage: Option<Usage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Choice {
-    message: Message,
-    #[allow(dead_code)]
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Usage {
-    #[allow(dead_code)]
-    prompt_tokens: u32,
-    #[allow(dead_code)]
-    completion_tokens: u32,
-    #[allow(dead_code)]
-    total_tokens: u32,
+    inner: AiClient,
 }
 
 impl GroqClient {
-    /// Create a new Groq client from the API key in environment variable GROQ_API_KEY
+    /// Create a client for the active AI provider.
+    ///
+    /// Reads the API key from the provider's environment variable
+    /// (`GROQ_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`) falling back
+    /// to the persisted config file, and honors `CIPHER_AI_BASE_URL` /
+    /// `CIPHER_AI_MODEL` overrides.
     pub fn from_env() -> Result<Self> {
-        let api_key = std::env::var("GROQ_API_KEY")
-            .or_else(|_| Self::read_key_from_config())
-            .context(
-                "GROQ_API_KEY not found. Set it via:\n  export GROQ_API_KEY=gsk_your_key_here\n  or add it to a .env file in your project root.",
-            )?;
-
-        let client = Client::builder()
-            .timeout(Duration::from_secs(120))
-            .build()?;
-
-        Ok(Self { client, api_key })
+        // Explicitly request the Groq provider from a real Groq key? No —
+        // honor the active provider so multi-provider works everywhere.
+        Ok(Self {
+            inner: AiClient::from_env()?,
+        })
     }
 
-    /// Read API key from the canonical config file (~/.cipher-ai/config.json)
-    fn read_key_from_config() -> Result<String> {
-        match crate::config::stored_api_key() {
-            Some(key) => Ok(key),
-            None => anyhow::bail!("no API key found in config"),
-        }
-    }
-
-    /// Send a chat completion request to Groq
+    /// Send a chat completion request to the active AI provider.
     pub async fn chat(
         &self,
         system_prompt: &str,
         user_message: &str,
         model: Option<&str>,
     ) -> Result<String> {
-        let model = model.unwrap_or(DEFAULT_CHAT_MODEL);
+        self.inner.chat(system_prompt, user_message, model).await
+    }
 
-        let request = ChatRequest {
-            model: model.to_string(),
-            messages: vec![
-                Message {
-                    role: "system".to_string(),
-                    content: system_prompt.to_string(),
-                },
-                Message {
-                    role: "user".to_string(),
-                    content: user_message.to_string(),
-                },
-            ],
-            temperature: 0.1,
-            max_tokens: 4096,
-            stream: false,
-        };
+    /// The provider this client is talking to.
+    pub fn provider(&self) -> AiProvider {
+        self.inner.provider()
+    }
+}
 
-        let response = self
-            .client
-            .post(format!("{}/chat/completions", GROQ_API_BASE))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send chat request to Groq API")?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Groq API error ({}): {}", status, body);
+    #[test]
+    fn test_groq_client_rejects_missing_key() {
+        // No API key in env or config (typical test environment) — must error
+        // cleanly rather than panic.
+        if std::env::var("GROQ_API_KEY").is_ok()
+            || crate::config::stored_api_key().is_some()
+        {
+            return;
         }
-
-        let chat_response: ChatResponse = response
-            .json()
-            .await
-            .context("Failed to parse Groq chat response")?;
-
-        let content = chat_response
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .unwrap_or_default();
-
-        Ok(content)
+        assert!(GroqClient::from_env().is_err());
     }
 }

@@ -2,8 +2,31 @@ const { spawn } = require('child_process');
 const { findBinaryPath } = require('../utils/binary');
 
 const BINARY_TIMEOUT_MS = 120_000; // 2 minutes (reduced from 5)
+// Autonomous pentest agent runs can take several minutes (LLM turns + tool
+// scans), so give `pentest` a much larger budget than the default.
+const PENTEST_TIMEOUT_MS = 600_000; // 10 minutes
 const MAX_STDOUT_BYTES = 10 * 1024 * 1024; // 10MB max buffered output
 const MAX_STDERR_BYTES = 5 * 1024 * 1024;  // 5MB max buffered stderr
+
+/**
+ * Command timeout in ms: `pentest` gets a much larger budget than other
+ * commands (agent loop runs many LLM turns + tool scans).
+ */
+function commandTimeoutMs(args) {
+  return args[0] === 'pentest' ? PENTEST_TIMEOUT_MS : BINARY_TIMEOUT_MS;
+}
+
+// Active AI model selected in the TUI, forwarded to the Rust binary via
+// CIPHER_AI_MODEL (the provider-agnostic override every command honors).
+let currentModel = null;
+
+/**
+ * Set the AI model override for all subsequent commands (null = provider default).
+ * @param {string|null} model
+ */
+function setModel(model) {
+  currentModel = model || null;
+}
 
 /**
  * Run a command against the Rust cipher binary.
@@ -32,19 +55,24 @@ function runCommand(args, signal) {
     let timedOut = false;
     let killed = false;
     const timers = [];
+    const timeoutMs = commandTimeoutMs(args);
 
     // If useWSL is true, prefix the command with 'wsl'
     const command = result.useWSL ? 'wsl' : result.path;
     const cmdArgs = result.useWSL ? [result.path, ...args] : args;
+
+    const env = { ...process.env };
+    if (currentModel) env.CIPHER_AI_MODEL = currentModel;
 
     const child = spawn(command, cmdArgs, {
       cwd: process.cwd(),
       encoding: 'utf-8',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env,
     });
 
-    // Timeout: kill after BINARY_TIMEOUT_MS
+    // Timeout: kill after timeoutMs (longer for pentest)
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
       child.killed || child.kill('SIGTERM');
@@ -52,7 +80,7 @@ function runCommand(args, signal) {
       setTimeout(() => {
         child.killed || child.kill('SIGKILL');
       }, 5000).unref();
-    }, BINARY_TIMEOUT_MS);
+    }, timeoutMs);
     timers.push(timeoutTimer);
 
     // Abort signal support
@@ -129,7 +157,7 @@ function runCommand(args, signal) {
           ok: false,
           stdout,
           stderr,
-          error: 'Command timed out after ' + (BINARY_TIMEOUT_MS / 1000) + 's. Try on a smaller directory or use --filter flags.',
+          error: 'Command timed out after ' + (timeoutMs / 1000) + 's. Try on a smaller directory or use --filter flags.',
         });
         return;
       }
@@ -166,3 +194,4 @@ function runCommand(args, signal) {
 }
 
 module.exports.runCommand = runCommand;
+module.exports.setModel = setModel;

@@ -5,11 +5,18 @@ const { InputBox } = require('./components/InputBox');
 const { StatusBar } = require('./components/StatusBar');
 const { CommandHelp } = require('./components/CommandHelp');
 const { CommandPalette } = require('./components/CommandPalette');
-const { runCommand } = require('./commands/runner');
+const { runCommand, setModel } = require('./commands/runner');
 
-const MODELS = ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'];
+// Default models for each provider (mirrors src/llm.rs AiProvider::default_model)
+const MODELS = [
+  'llama-3.3-70b-versatile',      // Groq
+  'mixtral-8x7b-32768',           // Groq
+  'gemma2-9b-it',                 // Groq
+  'gpt-4o-mini',                  // OpenAI
+  'claude-3-7-sonnet-20250219',   // Anthropic
+];
 
-const COMMAND_LIST = ['init', 'review', 'deps', 'secrets', 'ask', 'report', 'fix', 'attack', 'trace', 'pr', 'watch', 'status', 'ci', 'config', 'zeroday', 'sbom'];
+const COMMAND_LIST = ['init', 'review', 'deps', 'secrets', 'ask', 'report', 'fix', 'attack', 'trace', 'pr', 'watch', 'status', 'ci', 'config', 'pentest', 'zeroday', 'sbom'];
 
 function isQuestion(text) {
   const qWords = ['what', 'how', 'why', 'is', 'can', 'does', 'are', 'do', 'will',
@@ -32,7 +39,7 @@ function App() {
   const [showHelp, setShowHelp] = React.useState(false);
   const [showPalette, setShowPalette] = React.useState(false);
   const [showAskPrompt, setShowAskPrompt] = React.useState(false);
-  const [status, setStatus] = React.useState({ index: 'unknown', apiKey: 'unknown' });
+  const [status, setStatus] = React.useState({ index: 'unknown', apiKey: 'unknown', provider: 'groq' });
   const [modelIdx, setModelIdx] = React.useState(0);
   const [history, setHistory] = React.useState([]);
   const [historyIdx, setHistoryIdx] = React.useState(-1);
@@ -42,7 +49,12 @@ function App() {
   useInput((_input, key) => {
     if (key.ctrl && _input === 'k') { setShowHelp(false); setShowPalette((p) => !p); return; }
     if (key.ctrl && _input === 'l') { setMessages([{ id: 'welcome', type: 'system', text: '' }]); return; }
-    if (key.ctrl && _input === 'm') { setModelIdx((p) => (p + 1) % MODELS.length); return; }
+    if (key.ctrl && _input === 'm') {
+      const n = (modelIdx + 1) % MODELS.length;
+      setModelIdx(n);
+      setModel(MODELS[n]);
+      return;
+    }
     if (key.escape) {
       // Close overlays first
       if (showHelp) { setShowHelp(false); return; }
@@ -78,13 +90,29 @@ function App() {
   }
 
   React.useEffect(() => {
+    // Index + key status (provider-aware key check)
     runCommand(['status']).then((r) => {
       if (r.ok) {
         const out = r.stdout.toLowerCase();
-        setStatus({
-          index: out.includes('indexed') ? 'indexed' : 'not indexed',
-          apiKey: out.includes('groq_api_key') || out.includes('api key') ? 'set' : 'unknown',
-        });
+        setStatus((prev) => ({
+          ...prev,
+          index: out.includes('not indexed') ? 'not indexed'
+            : out.includes('index:') ? 'indexed' : 'unknown',
+        }));
+      }
+    }).catch(() => {});
+
+    // Resolve the active AI provider and check ITS api key
+    runCommand(['config', 'get', 'provider']).then((r) => {
+      const provider = r.ok && r.stdout.trim() ? r.stdout.trim() : 'groq';
+      setStatus((prev) => ({ ...prev, provider }));
+      return runCommand(['config', 'get', provider + '-api-key']);
+    }).then((r2) => {
+      if (r2 && r2.ok) {
+        setStatus((prev) => ({
+          ...prev,
+          apiKey: r2.stdout.includes('not set') ? 'missing' : 'set',
+        }));
       }
     }).catch(() => {});
   }, []);
@@ -123,7 +151,9 @@ function App() {
   async function handleCommand(input) {
     const parts = input.slice(1).trim().split(/\s+/);
     const command = parts[0]?.toLowerCase();
-    const cmdArgs = parts.slice(1);
+    // Strip surrounding quotes so palette/help entries like
+    // `pentest "hunt for vulns"` pass a clean objective to the binary.
+    const cmdArgs = parts.slice(1).map((a) => a.replace(/^["']|["']$/g, ''));
 
     switch (command) {
       case 'help': case 'h': setShowHelp(true); return;
@@ -132,10 +162,15 @@ function App() {
       case 'model':
         if (cmdArgs.length > 0) {
           const idx = MODELS.indexOf(cmdArgs[0]);
-          if (idx >= 0) { setModelIdx(idx); addMessage('result', 'Model switched to: ' + MODELS[idx]); }
+          if (idx >= 0) {
+            setModelIdx(idx);
+            setModel(MODELS[idx]);
+            addMessage('result', 'Model switched to: ' + MODELS[idx]);
+          }
           else { addMessage('error', 'Unknown model. Available: ' + MODELS.join(', ')); }
         } else {
-          addMessage('result', 'Current model: ' + MODELS[modelIdx] + '\nSwitch: /model <name>\nAvailable: ' + MODELS.join(', '));
+          addMessage('result', 'Current model: ' + MODELS[modelIdx]
+            + '\nSwitch: /model <name>' + '\nAvailable: ' + MODELS.join(', '));
         }
         return;
       case 'ask':
@@ -162,6 +197,7 @@ function App() {
       watch: 'Monitoring for new findings...',
       status: 'Checking status...',
       ci: 'Running all scans...', config: 'Configuring...',
+      pentest: 'Running autonomous pentest...',
       zeroday: 'Running zero-day analysis...',
       sbom: 'Generating SBOM...',
     };
@@ -207,7 +243,7 @@ function App() {
         if (cmd.startsWith('model ')) {
           const m = cmd.slice(6);
           const idx = MODELS.indexOf(m);
-          if (idx >= 0) setModelIdx(idx);
+          if (idx >= 0) { setModelIdx(idx); setModel(MODELS[idx]); }
           return;
         }
         handleSubmit('/' + cmd);

@@ -3,6 +3,7 @@ const { Box, Text } = require('ink');
 
 const indexColors = { indexed: 'green', 'not indexed': 'yellow', unknown: 'green' };
 const keyColors = { set: 'green', missing: 'yellow', unknown: 'green' };
+const providerColors = { groq: 'yellow', openai: 'green', anthropic: 'magenta' };
 
 function StatusBar({ status, model, isRunning, messageCount }) {
   return React.createElement(Box, {
@@ -11,6 +12,8 @@ function StatusBar({ status, model, isRunning, messageCount }) {
   },
     React.createElement(Text, { color: 'green' }, ' index '),
     React.createElement(Text, { color: indexColors[status.index] || 'green' }, status.index),
+    React.createElement(Text, { color: 'green' }, ' | provider '),
+    React.createElement(Text, { color: providerColors[status.provider] || 'white' }, status.provider || 'groq'),
     React.createElement(Text, { color: 'green' }, ' | api '),
     React.createElement(Text, { color: keyColors[status.apiKey] || 'green' }, status.apiKey),
     React.createElement(Box, { flexGrow: 1 }),

@@ -81,8 +81,12 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 | `cipher-ai watch` | Continuous monitoring — report new findings vs last scan |
 | `cipher-ai watch --pr` | Watch + auto-fix new findings and open a GitHub PR (dependabot-style) |
 | `cipher-ai watch --once` | Single watch scan (for cron/CI) |
+| `cipher-ai pentest "hunt for vulns"` | Autonomous AI security engineer — agent maps the codebase, investigates with tools, reports evidence-backed findings |
 | `cipher-ai config` | Show current configuration |
-| `cipher-ai config set groq-api-key <key>` | Set API key in config |
+| `cipher-ai config set groq-api-key <key>` | Set Groq API key in config |
+| `cipher-ai config set openai-api-key <key>` | Set OpenAI API key in config |
+| `cipher-ai config set anthropic-api-key <key>` | Set Anthropic API key in config |
+| `cipher-ai config set provider openai` | Switch the active AI provider (groq \| openai \| anthropic) |
 | `cipher-ai status` | Show project index, languages, API key status |
 | `cipher-ai completions bash` | Generate shell completions (bash/zsh/fish/powershell) |
 
@@ -104,6 +108,8 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 | `/attack` | Analyze attack paths |
 | `/ci` | Run all 5 scans (review + secrets + deps + zeroday + attack) |
 | `/ci --format json` | CI → JSON output |
+| `/pentest` | Autonomous AI security engineer (agent hunts + reports findings) |
+| `/pentest --json` | Pentest → machine-readable JSON |
 | `/config` | Show or set configuration |
 | `/zeroday` | 3-layer zero-day anomaly detection |
 | `/zeroday --ai` | Zero-day + AI analysis |
@@ -130,6 +136,8 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 
 **`zeroday`** detects novel/unknown vulnerabilities that signature-based scanners miss. Uses 3 layers: (1) **Anomaly Detection** — finds complex functions, dangerous API proximity, missing bounds checks, type confusion, and silent error handling; (2) **Taint Flow Analysis** — tracks untrusted data from sources to dangerous sinks without known signatures; (3) **AI Zero-Day Hunter** — LLM-based novel vulnerability discovery. Supports **terminal**, **JSON**, and **SARIF** output.
 
+**`pentest`** runs the **autonomous AI security engineer**: an agent loop (powered by the provider-agnostic client — Groq/OpenAI/Anthropic) that maps the codebase with `list_files` / `get_project_map` / `find_entry_points`, investigates with `search_code` / `read_file` / `semantic_search`, consumes scanner output as hypotheses via `get_scanner_findings`, and confirms cross-file data flows with `trace_taint`. It reports only evidence-backed findings (file:line references) with severity and CWE mapping. Use `--json` for machine-readable output or `--output file.json` to save. (Later phases add live exploitation, multi-agent orchestration, and pentest reports — see `docs/PENTESTER-PLAN.md`.)
+
 **`sbom`** generates Software Bill of Materials in **CycloneDX** (default) or **SPDX** formats. Parses all dependency manifests and produces a JSON document listing every dependency with its ecosystem and version.
 
 **`report`** aggregates findings from all scanners, computes a 0–100 security score, and outputs terminal, markdown, or JSON reports. `--format html` exports a self-contained browser-ready dashboard to `cipher-ai-report.html` (or the path given with `--output`).
@@ -138,7 +146,30 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 
 **`fix`** sends vulnerable code to the AI, which returns a secure replacement with a colored diff. Supports `--dry-run` for preview, `--list` to see fixable findings, `--risk` for severity filtering, `--id` for targeted fixing, and `--all -y` for unattended batch fixing.
 
-**`config`** manages your API key, default AI model, and other settings. No environment variables needed after initial setup.
+**`config`** manages your API keys, default AI model, active provider, and other settings. No environment variables needed after initial setup.
+
+## AI providers
+
+CipherAI is provider-agnostic. The active provider is resolved from `CIPHER_AI_PROVIDER`, falling back to the persisted `provider` config value, then to `groq` for backward compatibility.
+
+| Provider | Env var for key | Default model |
+|---|---|---|
+| `groq` (default) | `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
+| `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-3-7-sonnet-20250219` |
+
+Select a provider and persist its key once — no env vars needed afterwards:
+
+```sh
+cipher-ai config set provider anthropic
+cipher-ai config set anthropic-api-key sk-ant-...
+```
+
+Additional overrides:
+- `CIPHER_AI_BASE_URL` — route all traffic through a gateway or self-hosted endpoint (LiteLLM, vLLM, Ollama bridge, corporate proxy)
+- `CIPHER_AI_MODEL` — override the default model for every call
+
+Every AI-powered command (`ask`, `review --ai`, `verify`, `fix`, `attack`, `trace`, `zeroday`) honors the active provider automatically.
 
 **`completions`** generates shell completions for bash, zsh, fish, and PowerShell.
 
@@ -159,7 +190,7 @@ All commands produce **systematic, beautiful output** with consistent formatting
 
 ## Privacy
 
-Your code stays local. Only retrieved code chunks are sent to the LLM when using `ask`, `review --ai`, `zeroday --ai`, `attack`, or `fix`. Use a local endpoint (Ollama, vLLM) for zero data egress.
+Your code stays local. Only retrieved code chunks are sent to the LLM when using `ask`, `review --ai`, `zeroday --ai`, `attack`, `verify`, `trace`, or `fix`. Use a local endpoint (Ollama, vLLM) via `CIPHER_AI_BASE_URL` for zero data egress.
 
 ## Project structure
 
@@ -174,7 +205,8 @@ Cipher/
 │   ├── deps.rs       # Dependency scanner (7 manifest parsers)
 │   ├── finding.rs    # Finding/FindingReport types
 │   ├── fix.rs        # AI-powered auto-fix
-│   ├── groq.rs       # Groq AI client
+│   ├── groq.rs       # Legacy Groq client (thin wrapper)
+│   ├── llm.rs        # Multi-provider AI client (Groq/OpenAI/Anthropic)
 │   ├── indexer.rs    # TF-IDF code indexer
 │   ├── output.rs     # Unified styled output helpers
 │   ├── rag.rs        # RAG-based Q&A

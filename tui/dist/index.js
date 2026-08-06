@@ -145,7 +145,13 @@ var require_InputBox = __commonJS({
   "src/components/InputBox.jsx"(exports2, module2) {
     var React2 = require("react");
     var { Box: Box2, Text: Text2, useInput: useInput2 } = require("ink");
-    var MODELS2 = ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"];
+    var MODELS2 = [
+      "llama-3.3-70b-versatile",
+      "mixtral-8x7b-32768",
+      "gemma2-9b-it",
+      "gpt-4o-mini",
+      "claude-3-7-sonnet-20250219"
+    ];
     var COMMANDS = [
       { cmd: "init", desc: "Index your codebase for analysis" },
       { cmd: "init --force", desc: "Force re-index" },
@@ -180,6 +186,11 @@ var require_InputBox = __commonJS({
       { cmd: "watch --pr", desc: "Watch + auto-fix new findings via GitHub PR" },
       { cmd: "ci", desc: "Run all scans (CI mode)" },
       { cmd: "config", desc: "Show or set configuration" },
+      { cmd: "config set provider groq", desc: "Switch AI provider \u2192 Groq" },
+      { cmd: "config set provider openai", desc: "Switch AI provider \u2192 OpenAI" },
+      { cmd: "config set provider anthropic", desc: "Switch AI provider \u2192 Anthropic" },
+      { cmd: "pentest", desc: "Autonomous AI security engineer (agent hunts + reports)" },
+      { cmd: "pentest --json", desc: "Pentest \u2192 JSON findings" },
       { cmd: "zeroday", desc: "3-layer zero-day anomaly detection" },
       { cmd: "zeroday --ai", desc: "Zero-day + AI-powered analysis" },
       { cmd: "zeroday --anomaly-only", desc: "Zero-day: anomaly layer only" },
@@ -349,6 +360,7 @@ var require_StatusBar = __commonJS({
     var { Box: Box2, Text: Text2 } = require("ink");
     var indexColors = { indexed: "green", "not indexed": "yellow", unknown: "green" };
     var keyColors = { set: "green", missing: "yellow", unknown: "green" };
+    var providerColors = { groq: "yellow", openai: "green", anthropic: "magenta" };
     function StatusBar2({ status, model, isRunning, messageCount }) {
       return React2.createElement(
         Box2,
@@ -361,6 +373,8 @@ var require_StatusBar = __commonJS({
         },
         React2.createElement(Text2, { color: "green" }, " index "),
         React2.createElement(Text2, { color: indexColors[status.index] || "green" }, status.index),
+        React2.createElement(Text2, { color: "green" }, " | provider "),
+        React2.createElement(Text2, { color: providerColors[status.provider] || "white" }, status.provider || "groq"),
         React2.createElement(Text2, { color: "green" }, " | api "),
         React2.createElement(Text2, { color: keyColors[status.apiKey] || "green" }, status.apiKey),
         React2.createElement(Box2, { flexGrow: 1 }),
@@ -428,6 +442,14 @@ var require_CommandHelp = __commonJS({
       { cmd: "/ci --format json --output ci.json", desc: "CI \u2192 JSON written to file" },
       { cmd: "/ci --fail-on critical", desc: "CI: fail only on critical findings" },
       { cmd: "/config", desc: "Show or set configuration" },
+      { cmd: "/config set provider openai", desc: "Switch AI provider (groq | openai | anthropic)" },
+      { cmd: "/config set groq-api-key <key>", desc: "Persist Groq API key" },
+      { cmd: "/config set openai-api-key <key>", desc: "Persist OpenAI API key" },
+      { cmd: "/config set anthropic-api-key <key>", desc: "Persist Anthropic API key" },
+      { cmd: "/pentest", desc: "Autonomous AI security engineer (agent hunts + reports findings)" },
+      { cmd: '/pentest "can users escalate privileges?"', desc: "Pentest with a specific objective" },
+      { cmd: "/pentest --json", desc: "Pentest \u2192 machine-readable JSON" },
+      { cmd: "/pentest --max-turns 60", desc: "Pentest with a larger agent budget" },
       { cmd: "/zeroday", desc: "3-layer zero-day anomaly detection" },
       { cmd: "/zeroday --ai", desc: "Zero-day + AI-powered analysis" },
       { cmd: "/zeroday --anomaly-only", desc: "Zero-day: anomaly layer only" },
@@ -437,7 +459,7 @@ var require_CommandHelp = __commonJS({
       { cmd: "/sbom", desc: "Generate CycloneDX SBOM" },
       { cmd: "/sbom --format spdx", desc: "Generate SPDX SBOM" },
       { cmd: "/sbom --output bom.json", desc: "Write SBOM to file" },
-      { cmd: "/model", desc: "Show or switch AI model" },
+      { cmd: "/model", desc: "Show or switch AI model (any provider)" },
       { cmd: "/status", desc: "Show index and API key status" },
       { cmd: "/clear", desc: "Clear messages" },
       { cmd: "/exit", desc: "Exit the TUI" }
@@ -507,7 +529,6 @@ var require_CommandPalette = __commonJS({
   "src/components/CommandPalette.jsx"(exports2, module2) {
     var React2 = require("react");
     var { Box: Box2, Text: Text2, useInput: useInput2 } = require("ink");
-    var MODELS2 = ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"];
     var COMMANDS = [
       { cmd: "init", desc: "Index your codebase for analysis" },
       { cmd: "init --force", desc: "Force re-index" },
@@ -551,6 +572,14 @@ var require_CommandPalette = __commonJS({
       { cmd: "ci --format json --output ci.json", desc: "CI \u2192 JSON written to file" },
       { cmd: "ci --fail-on critical", desc: "CI: fail only on critical findings" },
       { cmd: "config", desc: "Show or set configuration" },
+      { cmd: "config set provider groq", desc: "Switch AI provider \u2192 Groq" },
+      { cmd: "config set provider openai", desc: "Switch AI provider \u2192 OpenAI" },
+      { cmd: "config set provider anthropic", desc: "Switch AI provider \u2192 Anthropic" },
+      { cmd: "pentest", desc: "Autonomous AI security engineer (agent hunts + reports)" },
+      { cmd: 'pentest "hunt for exploitable vulnerabilities"', desc: "Pentest with a default objective" },
+      { cmd: 'pentest "can users escalate privileges?"', desc: "Pentest with a specific objective" },
+      { cmd: "pentest --json", desc: "Pentest \u2192 machine-readable JSON" },
+      { cmd: "pentest --max-turns 60", desc: "Pentest with a larger agent budget" },
       { cmd: "zeroday", desc: "3-layer zero-day anomaly detection" },
       { cmd: "zeroday --ai", desc: "Zero-day + AI-powered analysis" },
       { cmd: "zeroday --anomaly-only", desc: "Zero-day: anomaly layer only" },
@@ -562,7 +591,11 @@ var require_CommandPalette = __commonJS({
       { cmd: "sbom --output bom.json", desc: "Write SBOM to file" },
       { cmd: "---", desc: "---" },
       { cmd: "model", desc: "Show or switch AI model" },
-      ...MODELS2.map((m) => ({ cmd: "model " + m, desc: "Switch to " + m })),
+      { cmd: "model llama-3.3-70b-versatile", desc: "Groq \u2014 default chat model" },
+      { cmd: "model mixtral-8x7b-32768", desc: "Groq \u2014 32K context" },
+      { cmd: "model gemma2-9b-it", desc: "Groq \u2014 fast & light" },
+      { cmd: "model gpt-4o-mini", desc: "OpenAI \u2014 default" },
+      { cmd: "model claude-3-7-sonnet-20250219", desc: "Anthropic \u2014 default" },
       { cmd: "status", desc: "Show index and API key status" },
       { cmd: "---", desc: "---" },
       { cmd: "clear", desc: "Clear messages" },
@@ -755,8 +788,16 @@ var require_runner = __commonJS({
     var { spawn } = require("child_process");
     var { findBinaryPath } = require_binary();
     var BINARY_TIMEOUT_MS = 12e4;
+    var PENTEST_TIMEOUT_MS = 6e5;
     var MAX_STDOUT_BYTES = 10 * 1024 * 1024;
     var MAX_STDERR_BYTES = 5 * 1024 * 1024;
+    function commandTimeoutMs(args) {
+      return args[0] === "pentest" ? PENTEST_TIMEOUT_MS : BINARY_TIMEOUT_MS;
+    }
+    var currentModel = null;
+    function setModel2(model) {
+      currentModel = model || null;
+    }
     function runCommand2(args, signal) {
       return new Promise((resolve) => {
         const result = findBinaryPath();
@@ -774,13 +815,17 @@ var require_runner = __commonJS({
         let timedOut = false;
         let killed = false;
         const timers = [];
+        const timeoutMs = commandTimeoutMs(args);
         const command = result.useWSL ? "wsl" : result.path;
         const cmdArgs = result.useWSL ? [result.path, ...args] : args;
+        const env = { ...process.env };
+        if (currentModel) env.CIPHER_AI_MODEL = currentModel;
         const child = spawn(command, cmdArgs, {
           cwd: process.cwd(),
           encoding: "utf-8",
           windowsHide: true,
-          stdio: ["ignore", "pipe", "pipe"]
+          stdio: ["ignore", "pipe", "pipe"],
+          env
         });
         const timeoutTimer = setTimeout(() => {
           timedOut = true;
@@ -788,7 +833,7 @@ var require_runner = __commonJS({
           setTimeout(() => {
             child.killed || child.kill("SIGKILL");
           }, 5e3).unref();
-        }, BINARY_TIMEOUT_MS);
+        }, timeoutMs);
         timers.push(timeoutTimer);
         let abortHandler;
         if (signal) {
@@ -850,7 +895,7 @@ var require_runner = __commonJS({
               ok: false,
               stdout,
               stderr,
-              error: "Command timed out after " + BINARY_TIMEOUT_MS / 1e3 + "s. Try on a smaller directory or use --filter flags."
+              error: "Command timed out after " + timeoutMs / 1e3 + "s. Try on a smaller directory or use --filter flags."
             });
             return;
           }
@@ -879,6 +924,7 @@ var require_runner = __commonJS({
       });
     }
     module2.exports.runCommand = runCommand2;
+    module2.exports.setModel = setModel2;
   }
 });
 
@@ -890,9 +936,20 @@ var { InputBox } = require_InputBox();
 var { StatusBar } = require_StatusBar();
 var { CommandHelp } = require_CommandHelp();
 var { CommandPalette } = require_CommandPalette();
-var { runCommand } = require_runner();
-var MODELS = ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"];
-var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "trace", "pr", "watch", "status", "ci", "config", "zeroday", "sbom"];
+var { runCommand, setModel } = require_runner();
+var MODELS = [
+  "llama-3.3-70b-versatile",
+  // Groq
+  "mixtral-8x7b-32768",
+  // Groq
+  "gemma2-9b-it",
+  // Groq
+  "gpt-4o-mini",
+  // OpenAI
+  "claude-3-7-sonnet-20250219"
+  // Anthropic
+];
+var COMMAND_LIST = ["init", "review", "deps", "secrets", "ask", "report", "fix", "attack", "trace", "pr", "watch", "status", "ci", "config", "pentest", "zeroday", "sbom"];
 function isQuestion(text) {
   const qWords = [
     "what",
@@ -936,7 +993,7 @@ function App() {
   const [showHelp, setShowHelp] = React.useState(false);
   const [showPalette, setShowPalette] = React.useState(false);
   const [showAskPrompt, setShowAskPrompt] = React.useState(false);
-  const [status, setStatus] = React.useState({ index: "unknown", apiKey: "unknown" });
+  const [status, setStatus] = React.useState({ index: "unknown", apiKey: "unknown", provider: "groq" });
   const [modelIdx, setModelIdx] = React.useState(0);
   const [history, setHistory] = React.useState([]);
   const [historyIdx, setHistoryIdx] = React.useState(-1);
@@ -952,7 +1009,9 @@ function App() {
       return;
     }
     if (key.ctrl && _input === "m") {
-      setModelIdx((p) => (p + 1) % MODELS.length);
+      const n = (modelIdx + 1) % MODELS.length;
+      setModelIdx(n);
+      setModel(MODELS[n]);
       return;
     }
     if (key.escape) {
@@ -997,10 +1056,23 @@ function App() {
     runCommand(["status"]).then((r) => {
       if (r.ok) {
         const out = r.stdout.toLowerCase();
-        setStatus({
-          index: out.includes("indexed") ? "indexed" : "not indexed",
-          apiKey: out.includes("groq_api_key") || out.includes("api key") ? "set" : "unknown"
-        });
+        setStatus((prev) => ({
+          ...prev,
+          index: out.includes("not indexed") ? "not indexed" : out.includes("index:") ? "indexed" : "unknown"
+        }));
+      }
+    }).catch(() => {
+    });
+    runCommand(["config", "get", "provider"]).then((r) => {
+      const provider = r.ok && r.stdout.trim() ? r.stdout.trim() : "groq";
+      setStatus((prev) => ({ ...prev, provider }));
+      return runCommand(["config", "get", provider + "-api-key"]);
+    }).then((r2) => {
+      if (r2 && r2.ok) {
+        setStatus((prev) => ({
+          ...prev,
+          apiKey: r2.stdout.includes("not set") ? "missing" : "set"
+        }));
       }
     }).catch(() => {
     });
@@ -1035,7 +1107,7 @@ function App() {
   async function handleCommand(input2) {
     const parts = input2.slice(1).trim().split(/\s+/);
     const command = parts[0]?.toLowerCase();
-    const cmdArgs = parts.slice(1);
+    const cmdArgs = parts.slice(1).map((a) => a.replace(/^["']|["']$/g, ""));
     switch (command) {
       case "help":
       case "h":
@@ -1055,6 +1127,7 @@ function App() {
           const idx = MODELS.indexOf(cmdArgs[0]);
           if (idx >= 0) {
             setModelIdx(idx);
+            setModel(MODELS[idx]);
             addMessage("result", "Model switched to: " + MODELS[idx]);
           } else {
             addMessage("error", "Unknown model. Available: " + MODELS.join(", "));
@@ -1092,6 +1165,7 @@ function App() {
       status: "Checking status...",
       ci: "Running all scans...",
       config: "Configuring...",
+      pentest: "Running autonomous pentest...",
       zeroday: "Running zero-day analysis...",
       sbom: "Generating SBOM..."
     };
@@ -1137,7 +1211,10 @@ function App() {
         if (cmd.startsWith("model ")) {
           const m = cmd.slice(6);
           const idx = MODELS.indexOf(m);
-          if (idx >= 0) setModelIdx(idx);
+          if (idx >= 0) {
+            setModelIdx(idx);
+            setModel(MODELS[idx]);
+          }
           return;
         }
         handleSubmit("/" + cmd);

@@ -18,12 +18,16 @@
 - **`cipher-ai report --format html`** — Self-contained browser-ready HTML dashboard (security score, severity bars, findings table with CWE/OWASP/usage, print-to-PDF styles)
 - **Dependency reachability** — `deps` now finds where each vulnerable package is actually imported in source and boosts exploitability for used packages (lockfile-only packages get discounted)
 - **`Finding.usage`** — New serde-backward-compatible field recording where a vulnerable dependency is used in source
+- **Multi-provider AI client** — `cipher-ai config set provider openai|anthropic` + per-provider API keys; `CIPHER_AI_PROVIDER` / `CIPHER_AI_MODEL` / `CIPHER_AI_BASE_URL` overrides; every AI command honors the active provider
+- **Agent tool-calling protocol** — provider-agnostic `agent_turn` contract in `src/llm.rs` (`ToolSchema`, `AgentTurn`, `AgentSummary`, structured `AgentTurnError` + `recovery_message` retry loop) that powers the pentester
+- **`cipher-ai pentest`** — Phase 1 of the autonomous AI security engineer (`src/pentest/`): a provider-agnostic agent loop that maps the codebase (`list_files`, `get_project_map`, `find_entry_points`), investigates with `search_code`, `read_file`, `semantic_search`, `trace_taint`, and consumes scanner output as hypotheses (`get_scanner_findings`), then reports evidence-backed findings with severity + CWE mapping. `--json` / `--output` / `--max-turns` / `--target-dir` flags. Full plan in `docs/PENTESTER-PLAN.md`
 
 ### Changed
 
 - **TUI**: New `/attack --flow`, `/fix --pr`, `/report --format html`, `/pr --diff`, and `/watch` commands in help, palette, and input suggestions
+- **TUI**: `/pentest` commands in help, palette, and input suggestions; command arguments are quote-stripped before dispatch; `pentest` gets a 10-minute command budget (up from the 2-minute default)
 - **`pr` workflow** (`.github/workflows/pr-review.yml`): now runs with `--diff` for focused, line-accurate reviews
-- **README**: Documented the new `--flow`, `--pr`, `--format html`, `--diff`, and `watch` flags
+- **README**: Documented the new `--flow`, `--pr`, `--format html`, `--diff`, `watch`, `config provider`, and `pentest` features
 
 ## [1.0.0] — 2026-07-30
 
