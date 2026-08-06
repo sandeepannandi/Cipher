@@ -293,6 +293,10 @@ enum Commands {
         #[arg(long = "target-dir")]
         target_dir: Option<PathBuf>,
 
+        /// Base URL of a live target — enables live HTTP tools (http_request, analyze_page, login, generate_totp, run_command)
+        #[arg(long = "url")]
+        url: Option<String>,
+
         /// Maximum agent turns before giving up (default: 40)
         #[arg(long = "max-turns", default_value = "40")]
         max_turns: usize,
@@ -498,7 +502,7 @@ async fn main() -> Result<()> {
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, max_turns, model, json, output } => {
+        Commands::Pentest { objective, target_dir, url, max_turns, model, json, output } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -506,6 +510,7 @@ async fn main() -> Result<()> {
             pentest::run_pentest(
                 &project_path,
                 &objective_str,
+                url.as_deref(),
                 max_turns,
                 model.as_deref(),
                 json,

@@ -24,3 +24,10 @@ regex = "1"
 similar = "2"
 clap_complete = "4"
 serde_yaml = "0.9"
+scraper = "0.20"
+hmac = "0.12"
+sha1 = "0.10"
+base32 = "0.5"
+
+[dev-dependencies]
+tiny_http = "0.12"

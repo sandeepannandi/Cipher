@@ -82,6 +82,7 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 | `cipher-ai watch --pr` | Watch + auto-fix new findings and open a GitHub PR (dependabot-style) |
 | `cipher-ai watch --once` | Single watch scan (for cron/CI) |
 | `cipher-ai pentest "hunt for vulns"` | Autonomous AI security engineer — agent maps the codebase, investigates with tools, reports evidence-backed findings |
+| `cipher-ai pentest "exploit the login" --url http://localhost:8080` | **Live mode** — arms the agent with HTTP tools (http_request, analyze_page, login, generate_totp) + Docker-sandboxed run_command against the target |
 | `cipher-ai config` | Show current configuration |
 | `cipher-ai config set groq-api-key <key>` | Set Groq API key in config |
 | `cipher-ai config set openai-api-key <key>` | Set OpenAI API key in config |
@@ -136,7 +137,9 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 
 **`zeroday`** detects novel/unknown vulnerabilities that signature-based scanners miss. Uses 3 layers: (1) **Anomaly Detection** — finds complex functions, dangerous API proximity, missing bounds checks, type confusion, and silent error handling; (2) **Taint Flow Analysis** — tracks untrusted data from sources to dangerous sinks without known signatures; (3) **AI Zero-Day Hunter** — LLM-based novel vulnerability discovery. Supports **terminal**, **JSON**, and **SARIF** output.
 
-**`pentest`** runs the **autonomous AI security engineer**: an agent loop (powered by the provider-agnostic client — Groq/OpenAI/Anthropic) that maps the codebase with `list_files` / `get_project_map` / `find_entry_points`, investigates with `search_code` / `read_file` / `semantic_search`, consumes scanner output as hypotheses via `get_scanner_findings`, and confirms cross-file data flows with `trace_taint`. It reports only evidence-backed findings (file:line references) with severity and CWE mapping. Use `--json` for machine-readable output or `--output file.json` to save. (Later phases add live exploitation, multi-agent orchestration, and pentest reports — see `docs/PENTESTER-PLAN.md`.)
+**`pentest`** runs the **autonomous AI security engineer**: an agent loop (powered by the provider-agnostic client — Groq/OpenAI/Anthropic) that maps the codebase with `list_files` / `get_project_map` / `find_entry_points` (framework-aware recon), investigates with `search_code` / `read_file` / `semantic_search`, consumes scanner output as hypotheses via `get_scanner_findings`, and confirms cross-file data flows with `trace_taint`. It reports only evidence-backed findings (file:line references) with severity and CWE mapping. Use `--json` for machine-readable output or `--output file.json` to save.
+
+With **`--url <target>`** the agent goes **live** ("no exploit, no report"): it gets a shared session layer (cookie jar persists across calls) and five live tools — `http_request` (raw requests with evidence capture), `analyze_page` (HTML forms/links/tech fingerprint), `login` (form login with hidden/CSRF field reuse), `generate_totp` (RFC 6238 MFA codes), and `run_command` (commands execute **inside an ephemeral Docker sandbox** — repo mounted read-only, capabilities dropped; refuses without Docker). Responses are captured as reproducible evidence with sensitive headers/URL params redacted. (Remaining phases — exploit validators, multi-agent orchestration, workspaces/reports — see `docs/PENTESTER-PLAN.md`.)
 
 **`sbom`** generates Software Bill of Materials in **CycloneDX** (default) or **SPDX** formats. Parses all dependency manifests and produces a JSON document listing every dependency with its ecosystem and version.
 
