@@ -327,6 +327,14 @@ enum Commands {
         #[arg(long = "format", default_value = "terminal")]
         format: String,
 
+        /// Only send live requests to this host (repeatable). Subdomains match; out-of-scope hosts are refused before the request leaves the machine
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+
+        /// Recon + plan only: print missions and sweep targets with ZERO live requests and no AI key
+        #[arg(long = "plan-only")]
+        plan_only: bool,
+
         /// Model to use (defaults to config or provider default)
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
@@ -528,7 +536,7 @@ async fn main() -> Result<()> {
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, model, json, output } => {
+        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, model, json, output } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -545,6 +553,8 @@ async fn main() -> Result<()> {
                 config.as_deref().map(|p| p.to_str().unwrap_or_default()),
                 workspace.or(resume),
                 &format,
+                allow_hosts,
+                plan_only,
             )
             .await?;
         }

@@ -68,6 +68,8 @@ const COMMANDS = [
   { cmd: 'pentest --url http://localhost:8080 --resume myapp', desc: 'Resume a workspace run (skips completed missions)' },
   { cmd: 'pentest --url http://localhost:8080 --format md', desc: 'Live pentest → Security-Assessment-Report.md' },
   { cmd: 'pentest --url http://localhost:8080 --format sarif', desc: 'Live pentest → SARIF 2.1.0 (rule-per-bug-class)' },
+  { cmd: 'pentest --url http://localhost:8080 --allow-host localhost', desc: 'Live pentest allowlisted to a host — out-of-scope refused' },
+  { cmd: 'pentest --plan-only',                 desc: 'Dry-run: recon + plan + sweep targets, no requests, no AI key' },
   { cmd: 'ci --pentest http://localhost:8080', desc: 'CI + live guided exploit sweep merged into totals' },
   { cmd: 'zeroday',                               desc: '3-layer zero-day anomaly detection' },
   { cmd: 'zeroday --ai',                           desc: 'Zero-day + AI-powered analysis' },
