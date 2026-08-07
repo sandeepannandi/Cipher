@@ -48,6 +48,7 @@ const COMMANDS = [
   { cmd: 'config set provider anthropic', desc: 'Switch AI provider → Anthropic' },
   { cmd: 'pentest',                               desc: 'Autonomous AI security engineer (agent hunts + reports)' },
   { cmd: 'pentest --json',                        desc: 'Pentest → JSON findings' },
+  { cmd: 'pentest --url http://localhost:8080',   desc: 'Live pentest: HTTP tools + exploit validators' },
   { cmd: 'zeroday',                               desc: '3-layer zero-day anomaly detection' },
   { cmd: 'zeroday --ai',                           desc: 'Zero-day + AI-powered analysis' },
   { cmd: 'zeroday --anomaly-only',                 desc: 'Zero-day: anomaly layer only' },

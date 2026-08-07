@@ -82,7 +82,7 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 | `cipher-ai watch --pr` | Watch + auto-fix new findings and open a GitHub PR (dependabot-style) |
 | `cipher-ai watch --once` | Single watch scan (for cron/CI) |
 | `cipher-ai pentest "hunt for vulns"` | Autonomous AI security engineer — agent maps the codebase, investigates with tools, reports evidence-backed findings |
-| `cipher-ai pentest "exploit the login" --url http://localhost:8080` | **Live mode** — arms the agent with HTTP tools (http_request, analyze_page, login, generate_totp) + Docker-sandboxed run_command against the target |
+| `cipher-ai pentest "exploit the login" --url http://localhost:8080` | **Live mode** — arms the agent with HTTP tools (http_request, analyze_page, login, generate_totp) + Docker-sandboxed run_command + deterministic exploit validators (SQLi/XSS/SSRF/CMDi/IDOR/auth/path traversal) |
 | `cipher-ai config` | Show current configuration |
 | `cipher-ai config set groq-api-key <key>` | Set Groq API key in config |
 | `cipher-ai config set openai-api-key <key>` | Set OpenAI API key in config |
@@ -108,9 +108,9 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 | `/fix --dry-run` | Preview fixes |
 | `/attack` | Analyze attack paths |
 | `/ci` | Run all 5 scans (review + secrets + deps + zeroday + attack) |
-| `/ci --format json` | CI → JSON output |
-| `/pentest` | Autonomous AI security engineer (agent hunts + reports findings) |
-| `/pentest --json` | Pentest → machine-readable JSON |
+| `/ci --format json` | CI → JSON output || `/pentest` | Autonomous AI security engineer (agent hunts + reports findings) |
+  | `/pentest --json` | Pentest → machine-readable JSON |
+  | `/pentest --url http://localhost:8080` | Live pentest: HTTP tools + exploit validators ("no exploit, no report") |
 | `/config` | Show or set configuration |
 | `/zeroday` | 3-layer zero-day anomaly detection |
 | `/zeroday --ai` | Zero-day + AI analysis |
@@ -139,7 +139,7 @@ Type `/help` inside the TUI for commands, or press `Ctrl+K` for the command pale
 
 **`pentest`** runs the **autonomous AI security engineer**: an agent loop (powered by the provider-agnostic client — Groq/OpenAI/Anthropic) that maps the codebase with `list_files` / `get_project_map` / `find_entry_points` (framework-aware recon), investigates with `search_code` / `read_file` / `semantic_search`, consumes scanner output as hypotheses via `get_scanner_findings`, and confirms cross-file data flows with `trace_taint`. It reports only evidence-backed findings (file:line references) with severity and CWE mapping. Use `--json` for machine-readable output or `--output file.json` to save.
 
-With **`--url <target>`** the agent goes **live** ("no exploit, no report"): it gets a shared session layer (cookie jar persists across calls) and five live tools — `http_request` (raw requests with evidence capture), `analyze_page` (HTML forms/links/tech fingerprint), `login` (form login with hidden/CSRF field reuse), `generate_totp` (RFC 6238 MFA codes), and `run_command` (commands execute **inside an ephemeral Docker sandbox** — repo mounted read-only, capabilities dropped; refuses without Docker). Responses are captured as reproducible evidence with sensitive headers/URL params redacted. (Remaining phases — exploit validators, multi-agent orchestration, workspaces/reports — see `docs/PENTESTER-PLAN.md`.)
+With **`--url <target>`** the agent goes **live** ("no exploit, no report"): it gets a shared session layer (cookie jar persists across calls) and six live tools — `http_request` (raw requests with evidence capture), `analyze_page` (HTML forms/links/tech fingerprint), `login` (form login with hidden/CSRF field reuse), `generate_totp` (RFC 6238 MFA codes), `run_command` (commands execute **inside an ephemeral Docker sandbox** — repo mounted read-only, capabilities dropped; refuses without Docker), and `exploit` (deterministic proof-by-exploitation validators for SQLi, reflected XSS, SSRF with out-of-band callback, command injection, path traversal, IDOR, and session-cookie hardening — returning **only proven findings** with reproducible evidence). Responses are captured as reproducible evidence with sensitive headers/URL params redacted. (Remaining phases — multi-agent orchestration, workspaces/reports — see `docs/PENTESTER-PLAN.md`.)
 
 **`sbom`** generates Software Bill of Materials in **CycloneDX** (default) or **SPDX** formats. Parses all dependency manifests and produces a JSON document listing every dependency with its ecosystem and version.
 

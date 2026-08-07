@@ -52,6 +52,8 @@ const COMMANDS = [
   { cmd: '/pentest "can users escalate privileges?"', desc: 'Pentest with a specific objective' },
   { cmd: '/pentest --json',                          desc: 'Pentest → machine-readable JSON' },
   { cmd: '/pentest --max-turns 60',                  desc: 'Pentest with a larger agent budget' },
+  { cmd: '/pentest --url http://localhost:8080',     desc: 'Live mode: HTTP tools + exploit validators (no exploit, no report)' },
+  { cmd: '/pentest "hunt and exploit vulnerabilities" --url http://localhost:8080', desc: 'Live pentest: agent proves exploits against a running target' },
   { cmd: '/zeroday',                                desc: '3-layer zero-day anomaly detection' },
   { cmd: '/zeroday --ai',                            desc: 'Zero-day + AI-powered analysis' },
   { cmd: '/zeroday --anomaly-only',                  desc: 'Zero-day: anomaly layer only' },

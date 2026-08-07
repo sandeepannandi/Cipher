@@ -283,7 +283,9 @@ enum Commands {
     ///
     /// Spawns an AI agent that maps the codebase, investigates with code
     /// tools (search, read, semantic search, taint tracing, scanner feeds),
-    /// and reports evidence-backed findings. Requires an AI API key.
+    /// and reports evidence-backed findings. With --url, the agent also
+    /// attacks a running target using live HTTP tools and deterministic
+    /// exploit validators — "no exploit, no report". Requires an AI API key.
     #[command(visible_alias = "pt")]
     Pentest {
         /// Security objective for the agent to investigate
@@ -293,7 +295,7 @@ enum Commands {
         #[arg(long = "target-dir")]
         target_dir: Option<PathBuf>,
 
-        /// Base URL of a live target — enables live HTTP tools (http_request, analyze_page, login, generate_totp, run_command)
+        /// Base URL of a live target — enables live HTTP tools + deterministic exploit validators (http_request, analyze_page, login, generate_totp, run_command, exploit)
         #[arg(long = "url")]
         url: Option<String>,
 
