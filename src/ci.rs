@@ -1,4 +1,6 @@
 use crate::finding::{dedup_findings, Finding, Severity};
+use crate::pentest::http::HttpSession;
+use crate::pentest::orchestrator::{guided_exploit_pass, proof_to_finding};
 use crate::{attack, deps, output, review, sbom, secrets, zeroday};
 use anyhow::Result;
 use colored::*;
@@ -70,14 +72,20 @@ fn should_fail(
 }
 
 /// Run the `cipher-ai ci` command — runs all scanners and exits with consolidated code.
+///
+/// With `--pentest <url>`, a Phase 7 optional stage runs the deterministic
+/// guided exploit sweep against the live target (no LLM, no API key) and the
+/// proven findings join the totals — `--fail-on` gates them like any scanner.
 pub async fn run_ci(
     project_path: &Path,
     fail_on: Option<&str>,
     use_ai: bool,
     format: &str,
     output_path: Option<&str>,
+    pentest_url: Option<String>,
 ) -> Result<()> {
     let fail_severity = fail_on.and_then(Severity::from_fail_on);
+    let total_steps = if pentest_url.is_some() { 6 } else { 5 };
 
     output::print_header("CipherAI CI Pipeline", Some("Running all security scans"));
 
@@ -85,7 +93,7 @@ pub async fn run_ci(
     let mut merged: Vec<Finding> = Vec::new();
 
     // Step 1: Security review
-    output::print_step(1, 5, "Running security review");
+    output::print_step(1, total_steps, "Running security review");
     let review_result = review::collect_review_findings(project_path, use_ai, None).await?;
     let review_critical = count_exact(&review_result.findings, Severity::Critical);
     let review_high = count_exact(&review_result.findings, Severity::High);
@@ -99,7 +107,7 @@ pub async fn run_ci(
     merged.extend(review_result.findings);
 
     // Step 2: Secrets scan
-    output::print_step(2, 5, "Scanning for secrets and credentials");
+    output::print_step(2, total_steps, "Scanning for secrets and credentials");
     let secrets_result = secrets::collect_secrets_findings(project_path)?;
     let secrets_critical = count_exact(&secrets_result.findings, Severity::Critical);
     let secrets_high = count_exact(&secrets_result.findings, Severity::High);
@@ -113,7 +121,7 @@ pub async fn run_ci(
     merged.extend(secrets_result.findings);
 
     // Step 3: Deps check
-    output::print_step(3, 5, "Checking dependencies for vulnerabilities");
+    output::print_step(3, total_steps, "Checking dependencies for vulnerabilities");
     let deps_result = deps::collect_deps_findings(project_path, false).await?;
     let deps_critical = count_exact(&deps_result.findings, Severity::Critical);
     let deps_high = count_exact(&deps_result.findings, Severity::High);
@@ -127,7 +135,7 @@ pub async fn run_ci(
     merged.extend(deps_result.findings);
 
     // Step 4: Zero-day anomaly scan
-    output::print_step(4, 5, "Scanning for zero-day anomalies");
+    output::print_step(4, total_steps, "Scanning for zero-day anomalies");
     let zeroday_report = zeroday::collect_zeroday_findings(project_path, false, false).await?;
     let zd_findings = zeroday_report.to_finding_report().findings;
     let zd_critical = count_exact(&zd_findings, Severity::Critical);
@@ -142,7 +150,7 @@ pub async fn run_ci(
     merged.extend(zd_findings);
 
     // Step 5: Attack path analysis
-    output::print_step(5, 5, "Analyzing attack paths");
+    output::print_step(5, total_steps, "Analyzing attack paths");
     let attack_count = match attack::collect_attack_summary(project_path).await {
         Ok(count) => {
             output::print_ok("Attack paths", &format!("{} attack chains found", count.to_string().bold()));
@@ -155,6 +163,32 @@ pub async fn run_ci(
             0
         }
     };
+
+    // Step 6 (optional): Live pentest — deterministic guided exploit sweep.
+    // LLM-free and proof-only, so it is safe to run in CI.
+    let mut pentest_count = 0usize;
+    if let Some(target) = &pentest_url {
+        output::print_step(6, total_steps, "Live pentest: guided exploit sweep");
+        let session = HttpSession::local(Some(target.clone()));
+        let sweep = guided_exploit_pass(&session, project_path, Some(target), None, &[]).await;
+        let mut live_findings: Vec<Finding> = sweep
+            .proofs
+            .iter()
+            .map(|g| proof_to_finding(&g.proof, &g.endpoint))
+            .collect();
+        let p_critical = count_exact(&live_findings, Severity::Critical);
+        let p_high = count_exact(&live_findings, Severity::High);
+        output::print_ok("Pentest", &format!(
+            "{} target(s) probed, {} proven finding(s) — {} critical, {} high",
+            sweep.targets.to_string().bold(),
+            live_findings.len().to_string().bold(),
+            p_critical.to_string().red().bold(),
+            p_high.to_string().yellow().bold()
+        ));
+        pentest_count = live_findings.len();
+        steps.push(CiStepResult { step: "pentest", critical: p_critical, high: p_high, total: live_findings.len() });
+        merged.extend(std::mem::take(&mut live_findings));
+    }
 
     // Generate SBOM (informational)
     output::print_info("SBOM", "Generating software bill of materials...");
@@ -175,13 +209,21 @@ pub async fn run_ci(
     let pass_fail = if should_fail && total_findings > 0 { "FAILED" } else { "PASSED" };
     let pass_fail_styled = if should_fail && total_findings > 0 { pass_fail.red().bold().to_string() } else { pass_fail.green().bold().to_string() };
 
-    output::print_summary_box("CI Pipeline Results", &[
-        ("Status", &pass_fail_styled),
-        ("Critical", &total_critical.to_string().red().bold().to_string()),
-        ("High", &total_high.to_string().yellow().bold().to_string()),
-        ("Total Findings", &total_findings.to_string().bold().to_string()),
-        ("Attack Chains", &attack_count.to_string().bold().to_string()),
-    ]);
+    let mut summary_rows = vec![
+        ("Status".to_string(), pass_fail_styled.clone()),
+        ("Critical".to_string(), total_critical.to_string().red().bold().to_string()),
+        ("High".to_string(), total_high.to_string().yellow().bold().to_string()),
+        ("Total Findings".to_string(), total_findings.to_string().bold().to_string()),
+        ("Attack Chains".to_string(), attack_count.to_string().bold().to_string()),
+    ];
+    if pentest_url.is_some() {
+        summary_rows.push(("Pentest Findings".to_string(), pentest_count.to_string()));
+    }
+    let row_refs: Vec<(&str, &str)> = summary_rows
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    output::print_summary_box("CI Pipeline Results", &row_refs);
 
     // Handle JSON output
     if format == "json" {

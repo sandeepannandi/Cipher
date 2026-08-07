@@ -233,6 +233,10 @@ enum Commands {
         /// Write output to a file instead of stdout
         #[arg(short = 'o', long = "output")]
         output: Option<String>,
+
+        /// Optional live-pentest stage: run the deterministic guided exploit sweep against this URL (no LLM) and merge proven findings
+        #[arg(long = "pentest")]
+        pentest_url: Option<String>,
     },
 
     /// Manage configuration settings
@@ -311,6 +315,18 @@ enum Commands {
         #[arg(long = "config")]
         config: Option<PathBuf>,
 
+        /// Named workspace: checkpoint + transcripts under ~/.cipher-ai/workspaces/<name>; resumes an interrupted run
+        #[arg(short = 'w', long = "workspace")]
+        workspace: Option<String>,
+
+        /// Resume the named workspace (alias for --workspace <name>)
+        #[arg(long = "resume")]
+        resume: Option<String>,
+
+        /// Report format: terminal (default), md (Security-Assessment-Report.md), sarif (rule-per-bug-class), or json
+        #[arg(long = "format", default_value = "terminal")]
+        format: String,
+
         /// Model to use (defaults to config or provider default)
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
@@ -319,7 +335,7 @@ enum Commands {
         #[arg(long = "json")]
         json: bool,
 
-        /// Write results JSON to a file
+        /// Write the report (json/md/sarif) to a file
         #[arg(short = 'o', long = "output")]
         output: Option<String>,
     },
@@ -505,14 +521,14 @@ async fn main() -> Result<()> {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             fix::run_fix(&project_path, finding_id.as_deref(), risk_level.as_deref(), target_file.as_deref(), fix_all, list_only, dry_run, auto_apply, verify, open_pr, repo.as_deref(), token.as_deref()).await?;
         }
-        Commands::Ci { fail_on, use_ai, format, output } => {
+        Commands::Ci { fail_on, use_ai, format, output, pentest_url } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            ci::run_ci(&project_path, fail_on.as_deref(), use_ai, &format, output.as_deref()).await?;
+            ci::run_ci(&project_path, fail_on.as_deref(), use_ai, &format, output.as_deref(), pentest_url).await?;
         }
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, model, json, output } => {
+        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, model, json, output } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -527,6 +543,8 @@ async fn main() -> Result<()> {
                 json,
                 output.as_deref(),
                 config.as_deref().map(|p| p.to_str().unwrap_or_default()),
+                workspace.or(resume),
+                &format,
             )
             .await?;
         }
