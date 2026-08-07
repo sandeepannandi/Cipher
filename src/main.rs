@@ -307,6 +307,10 @@ enum Commands {
         #[arg(long = "sub-agents", default_value = "4")]
         sub_agents: usize,
 
+        /// YAML config file: authentication, rules of engagement, focus/avoid scope, vuln_classes, report filters
+        #[arg(long = "config")]
+        config: Option<PathBuf>,
+
         /// Model to use (defaults to config or provider default)
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
@@ -508,7 +512,7 @@ async fn main() -> Result<()> {
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, model, json, output } => {
+        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, model, json, output } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -522,6 +526,7 @@ async fn main() -> Result<()> {
                 model.as_deref(),
                 json,
                 output.as_deref(),
+                config.as_deref().map(|p| p.to_str().unwrap_or_default()),
             )
             .await?;
         }

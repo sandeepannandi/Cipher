@@ -55,6 +55,7 @@ const COMMANDS = [
   { cmd: '/pentest --url http://localhost:8080',     desc: 'Live mode: HTTP tools + exploit validators (no exploit, no report)' },
   { cmd: '/pentest "hunt and exploit vulnerabilities" --url http://localhost:8080', desc: 'Live pentest: agent proves exploits against a running target' },
   { cmd: '/pentest "hunt and exploit vulnerabilities" --url http://localhost:8080 --sub-agents 6', desc: 'Live pentest: parallel specialist sub-agents (default 4)' },
+  { cmd: '/pentest "test the login" --url http://localhost:8080 --config app.yaml', desc: 'Live pentest with YAML config: auth flow, rules of engagement, focus/avoid scope' },
   { cmd: '/zeroday',                                desc: '3-layer zero-day anomaly detection' },
   { cmd: '/zeroday --ai',                            desc: 'Zero-day + AI-powered analysis' },
   { cmd: '/zeroday --anomaly-only',                  desc: 'Zero-day: anomaly layer only' },
