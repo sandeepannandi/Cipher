@@ -58,6 +58,7 @@ const COMMANDS = [
   { cmd: 'pentest --url http://localhost:8080 --allow-host localhost', desc: 'Live pentest allowlisted to a host — out-of-scope refused' },
   { cmd: 'pentest --point-retest <id>', desc: 'Verify a fix: replay the validators that proved a finding' },
   { cmd: 'pentest --blackbox --url http://localhost:8080', desc: 'Black-box: crawl live target + sweep, no AI key' },
+  { cmd: 'pentest --browser --url http://localhost:8080', desc: 'Browser mode: headless Chrome renders JS-heavy/SPA pages' },
   { cmd: 'watch --pentest http://localhost:8080', desc: 'Watch + live exploit sweep each scan' },
   { cmd: 'report --pentest myapp', desc: 'Report merges proven pentest findings from a workspace' },
   { cmd: 'pentest --config app.yaml --check-email-auth', desc: 'Verify the email-OTP mailbox (IMAP login) before a run' },

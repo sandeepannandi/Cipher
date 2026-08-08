@@ -73,6 +73,7 @@ const COMMANDS = [
   { cmd: 'pentest --config app.yaml --check-email-auth', desc: 'Verify the email-OTP mailbox (IMAP login + select) — no AI key' },
   { cmd: 'pentest --point-retest <id>', desc: 'Verify a fix: replay the validators that proved a finding (no AI key)' },
   { cmd: 'pentest --blackbox --url http://localhost:8080', desc: 'Black-box: crawl the live target + sweep — no source, no AI key' },
+  { cmd: 'pentest --browser --url http://localhost:8080', desc: 'Browser mode: headless Chrome renders JS-heavy/SPA pages (render_page + rendered crawl)' },
   { cmd: 'watch --pentest http://localhost:8080', desc: 'Watch + live exploit sweep against a URL each scan (no LLM)' },
   { cmd: 'report --pentest myapp', desc: 'Report merges proven pentest findings from a workspace (or "all")' },
   { cmd: 'ci --pentest http://localhost:8080', desc: 'CI + live guided exploit sweep merged into totals' },

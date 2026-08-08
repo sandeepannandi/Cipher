@@ -67,6 +67,7 @@ const COMMANDS = [
   { cmd: '/pentest --url http://localhost:8080 --config app.yaml', desc: 'email-OTP auth: login_type: email + authentication.email block (imap_host, subject_contains, $otp)' },
   { cmd: '/pentest --point-retest <id>', desc: 'Verify a fix: replay the validators that proved this finding (deterministic, no AI key) — STILL VULNERABLE or FIXED' },
   { cmd: '/pentest --blackbox --url http://localhost:8080', desc: 'Black-box mode: crawl the live target (bounded BFS) + sweep — no source, no AI key' },
+  { cmd: '/pentest --browser --url http://localhost:8080', desc: 'Browser mode: headless Chrome renders JS-heavy/SPA pages — render_page tool + rendered-DOM crawl (install Chrome or set CIPHER_AI_CHROME)' },
   { cmd: '/watch --pentest http://localhost:8080', desc: 'Watch + live exploit sweep against a URL each scan (no LLM)' },
   { cmd: '/report --pentest myapp', desc: 'One report: SAST + SCA + proven pentest findings from workspace (or "all")' },
   { cmd: '/ci --pentest http://localhost:8080', desc: 'CI + live guided exploit sweep (no LLM) merged into totals' },

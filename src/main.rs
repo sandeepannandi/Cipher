@@ -351,6 +351,10 @@ enum Commands {
         #[arg(long = "check-email-auth")]
         check_email_auth: bool,
 
+        /// Browser mode: arm the render_page tool (headless Chrome) so JS-heavy / SPA pages are rendered before analysis; the black-box crawler renders too (M8.6)
+        #[arg(long = "browser")]
+        browser: bool,
+
         /// Model to use (defaults to config or provider default)
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
@@ -556,7 +560,7 @@ async fn main() -> Result<()> {
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, check_email_auth, model, json, output } => {
+        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, check_email_auth, browser, model, json, output } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -600,6 +604,7 @@ async fn main() -> Result<()> {
                 plan_only,
                 point_retest,
                 blackbox,
+                browser,
             )
             .await?;
         }
