@@ -63,6 +63,8 @@ const COMMANDS = [
   { cmd: '/pentest --url http://localhost:8080 --allow-host localhost', desc: 'Live pentest restricted to an allowlist — out-of-scope hosts refused before any request' },
   { cmd: '/pentest --plan-only',                   desc: 'Dry-run: recon + missions + sweep targets, ZERO live requests and no AI key' },
   { cmd: '/pentest --url http://localhost:8080 --config app.yaml', desc: 'Live pentest + rate limiting from config (rate_limit: max_per_minute/delay_ms)' },
+  { cmd: '/pentest --config app.yaml --check-email-auth',       desc: 'Verify the email-OTP mailbox (IMAP login + select) — no AI key, no requests' },
+  { cmd: '/pentest --url http://localhost:8080 --config app.yaml', desc: 'email-OTP auth: login_type: email + authentication.email block (imap_host, subject_contains, $otp)' },
   { cmd: '/pentest --point-retest <id>', desc: 'Verify a fix: replay the validators that proved this finding (deterministic, no AI key) — STILL VULNERABLE or FIXED' },
   { cmd: '/pentest --blackbox --url http://localhost:8080', desc: 'Black-box mode: crawl the live target (bounded BFS) + sweep — no source, no AI key' },
   { cmd: '/watch --pentest http://localhost:8080', desc: 'Watch + live exploit sweep against a URL each scan (no LLM)' },

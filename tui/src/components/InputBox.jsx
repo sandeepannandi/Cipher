@@ -60,6 +60,7 @@ const COMMANDS = [
   { cmd: 'pentest --blackbox --url http://localhost:8080', desc: 'Black-box: crawl live target + sweep, no AI key' },
   { cmd: 'watch --pentest http://localhost:8080', desc: 'Watch + live exploit sweep each scan' },
   { cmd: 'report --pentest myapp', desc: 'Report merges proven pentest findings from a workspace' },
+  { cmd: 'pentest --config app.yaml --check-email-auth', desc: 'Verify the email-OTP mailbox (IMAP login) before a run' },
   { cmd: 'ci --pentest http://localhost:8080', desc: 'CI + live guided exploit sweep (no LLM)' },
   { cmd: 'zeroday',                               desc: '3-layer zero-day anomaly detection' },
   { cmd: 'zeroday --ai',                           desc: 'Zero-day + AI-powered analysis' },

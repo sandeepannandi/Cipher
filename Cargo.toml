@@ -28,6 +28,9 @@ scraper = "0.20"
 hmac = "0.12"
 sha1 = "0.10"
 base32 = "0.5"
+# Phase 10 (M8.5): email-OTP / magic-link auth — IMAP reader (pure-Rust TLS).
+imap = { version = "2", default-features = false, features = ["tls"] }
+native-tls = "0.2"
 
 [dev-dependencies]
 tiny_http = "0.12"

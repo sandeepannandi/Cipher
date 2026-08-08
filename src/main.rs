@@ -347,6 +347,10 @@ enum Commands {
         #[arg(long = "blackbox")]
         blackbox: bool,
 
+        /// Verify the config's email-OTP mailbox (IMAP login + mailbox select) and exit — no AI key, no requests (M8.5)
+        #[arg(long = "check-email-auth")]
+        check_email_auth: bool,
+
         /// Model to use (defaults to config or provider default)
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
@@ -552,10 +556,33 @@ async fn main() -> Result<()> {
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, model, json, output } => {
+        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, check_email_auth, model, json, output } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+            // M8.5: verify the email-OTP mailbox before a long run — connect,
+            // login, select the mailbox, report message count, then exit.
+            if check_email_auth {
+                let Some(cfg_path) = config.as_deref() else {
+                    anyhow::bail!("--check-email-auth requires --config <app.yaml> with an authentication.email block");
+                };
+                let cfg = pentest::config::load_config(cfg_path)?;
+                let Some(email) = cfg
+                    .authentication
+                    .as_ref()
+                    .and_then(|a| a.email.as_ref())
+                else {
+                    anyhow::bail!(
+                        "config '{}' has no authentication.email block",
+                        cfg_path.display()
+                    );
+                };
+                let detail = pentest::email::check_connection(email).await?;
+                println!("  {}", detail);
+                return Ok(());
+            }
+
             let objective_str = objective.join(" ");
             pentest::run_pentest(
                 &project_path,

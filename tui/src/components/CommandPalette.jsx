@@ -70,6 +70,7 @@ const COMMANDS = [
   { cmd: 'pentest --url http://localhost:8080 --format sarif', desc: 'Live pentest → SARIF 2.1.0 (rule-per-bug-class)' },
   { cmd: 'pentest --url http://localhost:8080 --allow-host localhost', desc: 'Live pentest allowlisted to a host — out-of-scope refused' },
   { cmd: 'pentest --plan-only',                 desc: 'Dry-run: recon + plan + sweep targets, no requests, no AI key' },
+  { cmd: 'pentest --config app.yaml --check-email-auth', desc: 'Verify the email-OTP mailbox (IMAP login + select) — no AI key' },
   { cmd: 'pentest --point-retest <id>', desc: 'Verify a fix: replay the validators that proved a finding (no AI key)' },
   { cmd: 'pentest --blackbox --url http://localhost:8080', desc: 'Black-box: crawl the live target + sweep — no source, no AI key' },
   { cmd: 'watch --pentest http://localhost:8080', desc: 'Watch + live exploit sweep against a URL each scan (no LLM)' },
