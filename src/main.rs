@@ -351,7 +351,7 @@ enum Commands {
         #[arg(long = "check-email-auth")]
         check_email_auth: bool,
 
-        /// Browser mode: arm the render_page tool (headless Chrome) so JS-heavy / SPA pages are rendered before analysis; the black-box crawler renders too (M8.6)
+        /// Browser mode (M8.6 + M8.7): arm the render_page + browser_action tools (headless Chrome over the CDP debug pipe) so JS-heavy / SPA pages are rendered and DRIVEN — fill forms, click, submit, capture cookies into the shared jar, and prove DOM XSS / clickjacking in a real engine. The black-box crawler renders too. No new dependencies: Chrome's --remote-debugging-pipe speaks raw JSON.
         #[arg(long = "browser")]
         browser: bool,
 
