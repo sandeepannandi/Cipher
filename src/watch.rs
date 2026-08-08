@@ -9,6 +9,7 @@
 // nightly CI cron) accumulate history across invocations.
 
 use crate::finding::{Finding, Severity};
+use crate::pentest::{http, orchestrator};
 use crate::{fix, output, pr};
 use anyhow::Result;
 use colored::*;
@@ -28,13 +29,18 @@ struct WatchState {
 
 /// A stable fingerprint of a finding for change detection.
 /// Two scans of the same issue produce the same fingerprint.
+///
+/// Phase 9 (M8.2): `usage` (endpoint for pentest findings) is included so a
+/// live-proven endpoint finding is tracked across scans even though it has no
+/// file:line anchor.
 fn fingerprint(f: &Finding) -> String {
     format!(
-        "{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}",
         f.file_path.as_deref().unwrap_or(""),
         f.line_number.unwrap_or(0),
         f.title.to_lowercase(),
-        f.severity
+        f.severity,
+        f.usage.as_deref().unwrap_or("").to_lowercase()
     )
 }
 
@@ -72,6 +78,9 @@ fn save_state(path: &Path, state: &WatchState) -> Result<()> {
 /// - With `open_pr`, automatically fixes new findings (at/above `risk_level`)
 ///   and opens a GitHub PR containing the fixes.
 /// - With `once`, runs a single scan and exits (for cron/CI).
+/// - With `--pentest <url>`, each scan also runs the deterministic live
+///   exploit sweep against that URL and merges proven findings (M8.2).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_watch(
     project_path: &Path,
     interval_minutes: u64,
@@ -80,6 +89,7 @@ pub async fn run_watch(
     repo: Option<&str>,
     token: Option<&str>,
     once: bool,
+    pentest_url: Option<&str>,
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
     let state_path = canonical_path.join(STATE_FILE);
@@ -104,7 +114,7 @@ pub async fn run_watch(
     loop {
         // Step 1: scan
         output::print_step(1, 3, "Running security scans (review + secrets + deps + zeroday + attack)");
-        let (findings, _attack_count) = match pr::collect_pr_findings(&canonical_path).await {
+        let (mut findings, _attack_count) = match pr::collect_pr_findings(&canonical_path).await {
             Ok(v) => v,
             Err(e) => {
                 output::print_fail("Scans", &e.to_string());
@@ -115,6 +125,34 @@ pub async fn run_watch(
                 continue;
             }
         };
+
+        // Phase 9 (M8.2): optional live pentest stage — the deterministic
+        // guided exploit sweep against `--pentest <url>` (no LLM), merged
+        // into the same scan + fingerprint so a NEW live-proven finding
+        // triggers the same alert/fix-PR machinery.
+        if let Some(target) = pentest_url {
+            let session = http::HttpSession::local(Some(target.to_string()));
+            if let Some(host) = http::host_of(target) {
+                session.set_allowed_hosts(vec![host]);
+            }
+            let sweep = orchestrator::guided_exploit_pass(
+                &session,
+                &canonical_path,
+                Some(target),
+                None,
+                &[],
+            )
+            .await;
+            eprintln!(
+                "  {} Live pentest: swept {} target(s), proved {} finding(s).",
+                "[PENTEST]".magenta().bold(),
+                sweep.targets.to_string().cyan(),
+                sweep.proofs.len().to_string().cyan()
+            );
+            for g in &sweep.proofs {
+                findings.push(orchestrator::proof_to_finding(&g.proof, &g.endpoint));
+            }
+        }
 
         let critical = findings.iter().filter(|f| f.severity == Severity::Critical).count();
         let high = findings.iter().filter(|f| f.severity == Severity::High).count();

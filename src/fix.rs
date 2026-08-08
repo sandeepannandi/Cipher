@@ -1,5 +1,6 @@
-use crate::finding::{Finding, Severity};
+use crate::finding::{dedup_findings, Finding, Severity};
 use crate::groq::GroqClient;
+use crate::pentest::workspace::list_workspaces;
 use crate::{deps, review, secrets};
 use anyhow::{Context, Result};
 use colored::*;
@@ -576,14 +577,33 @@ async fn collect_fixable_findings(project_path: &Path) -> Result<Vec<Finding>> {
         all.extend(report.findings);
     }
 
-    // Sort by risk score (highest first)
-    all.sort_by(|a, b| {
-        b.risk_score()
-            .partial_cmp(&a.risk_score())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // M8.1: proven pentest findings from workspaces (evidence-backed, often
+    // code-anchored — auto-fix closes the find -> prove -> fix -> verify loop).
+    all.extend(collect_pentest_findings());
+
+    // Dedupe across scanners (review/secrets/pentest can overlap on a line),
+    // then sort by risk score (highest first).
+    let all = dedup_findings(all);
 
     Ok(all)
+}
+
+/// Collect proven pentest findings from every workspace under the workspace
+/// root (`~/.cipher-ai/workspaces/`). Each finding is the unified `Finding`
+/// model stored in `session.json`; code-anchored ones (with `file_path` /
+/// `line_number`) are auto-fixable, endpoint-only ones are listed for
+/// reference and point-re-tested via `cipher-ai pentest --point-retest`.
+fn collect_pentest_findings() -> Vec<Finding> {
+    let Ok(workspaces) = list_workspaces() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for ws in workspaces {
+        if let Ok(Some(state)) = ws.load_session() {
+            out.extend(state.findings);
+        }
+    }
+    out
 }
 
 /// Filter findings by user-provided criteria.

@@ -142,6 +142,10 @@ enum Commands {
         /// Write output to a file instead of stdout
         #[arg(short = 'o', long = "output")]
         output: Option<String>,
+
+        /// Merge proven live-pentest findings into the report from a workspace: <name> or "all" (M8.4 — one deduped SAST + SCA + pentest report)
+        #[arg(long = "pentest")]
+        pentest_workspace: Option<String>,
     },
 
     /// Analyze attack paths by connecting findings into realistic attack chains
@@ -335,6 +339,14 @@ enum Commands {
         #[arg(long = "plan-only")]
         plan_only: bool,
 
+        /// Replay the exploit validators that proved this finding (by id) against the live target to verify a fix — no AI key, deterministic. Uses -w/--workspace, or scans all workspaces
+        #[arg(long = "point-retest")]
+        point_retest: Option<String>,
+
+        /// Black-box mode: crawl the live --url target (bounded BFS) and sweep every discovery with the deterministic validators — no source, no AI key (M8.3)
+        #[arg(long = "blackbox")]
+        blackbox: bool,
+
         /// Model to use (defaults to config or provider default)
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
@@ -444,6 +456,10 @@ enum Commands {
         /// Run a single scan and exit (for cron/CI)
         #[arg(long = "once")]
         once: bool,
+
+        /// Also run the deterministic live exploit sweep against this URL each scan and merge proven findings (no LLM) (M8.2)
+        #[arg(long = "pentest")]
+        pentest_url: Option<String>,
     },
 
     /// Generate shell completions
@@ -517,9 +533,9 @@ async fn main() -> Result<()> {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             deps::run_deps(&project_path, online, fail_on.as_deref()).await?;
         }
-        Commands::Report { report_type, format, output } => {
+        Commands::Report { report_type, format, output, pentest_workspace } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            report::run_report(&project_path, &report_type, &format, output.as_deref()).await?;
+            report::run_report(&project_path, &report_type, &format, output.as_deref(), pentest_workspace.as_deref()).await?;
         }
         Commands::Attack { chain, depth, json, no_ai, flow } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -536,7 +552,7 @@ async fn main() -> Result<()> {
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, model, json, output } => {
+        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, model, json, output } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -555,6 +571,8 @@ async fn main() -> Result<()> {
                 &format,
                 allow_hosts,
                 plan_only,
+                point_retest,
+                blackbox,
             )
             .await?;
         }
@@ -571,9 +589,9 @@ async fn main() -> Result<()> {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             pr::run_pr(&project_path, repo.as_deref(), pr_number, token.as_deref(), dry_run, diff).await?;
         }
-        Commands::Watch { interval_minutes, risk_level, open_pr, repo, token, once } => {
+        Commands::Watch { interval_minutes, risk_level, open_pr, repo, token, once, pentest_url } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            watch::run_watch(&project_path, interval_minutes, Some(risk_level.as_str()), open_pr, repo.as_deref(), token.as_deref(), once).await?;
+            watch::run_watch(&project_path, interval_minutes, Some(risk_level.as_str()), open_pr, repo.as_deref(), token.as_deref(), once, pentest_url.as_deref()).await?;
         }
         Commands::Zeroday { use_ai, model, format, output, anomaly_only, no_flow } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());

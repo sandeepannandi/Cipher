@@ -17,6 +17,8 @@ pub struct AggregatedReport {
     pub deps: Vec<Finding>,
     /// Findings from secret/credential scanning
     pub secrets: Vec<Finding>,
+    /// Findings proven by a live pentest (M8.4, `report --pentest`)
+    pub pentest: Vec<Finding>,
     /// Project path
     pub project_path: String,
     /// Timestamp
@@ -29,6 +31,7 @@ impl AggregatedReport {
             review: Vec::new(),
             deps: Vec::new(),
             secrets: Vec::new(),
+            pentest: Vec::new(),
             project_path: project_path.into(),
             created_at: Utc::now().to_rfc3339(),
         }
@@ -70,6 +73,7 @@ impl AggregatedReport {
             .iter()
             .chain(self.deps.iter())
             .chain(self.secrets.iter())
+            .chain(self.pentest.iter())
             .collect();
         all.sort_by(|a, b| {
             b.risk_score()
@@ -86,14 +90,12 @@ impl AggregatedReport {
             }
         }
         kept
-    }
-
-    /// Compute an overall security score 0–100.
-    ///
-    /// Penalty is per-finding: severity weight (critical 25 / high 10 / medium 4 /
-    /// low 1) scaled by exploitability and business impact — so a critical bug in a
-    /// payment path with high reachability hurts much more than an unreachable low
-    /// in a test file.
+    }    /// Compute an overall security score 0–100.
+///
+/// Penalty is per-finding: severity weight (critical 25 / high 10 / medium 4 /
+/// low 1) scaled by exploitability and business impact — so a critical bug in a
+/// payment path with high reachability hurts much more than an unreachable low
+/// in a test file.
     pub fn security_score(&self) -> f64 {
         let total = self.total_findings();
         if total == 0 {
@@ -172,11 +174,36 @@ pub(crate) fn compute_business_impact(f: &Finding) -> f64 {
 }
 
 /// Run the `cipher-ai report` command
+/// Load proven findings from pentest workspaces (`report --pentest <name>` /
+/// `--pentest all`), so one report shows SAST + SCA + live-pentest results.
+/// Endpoint-only findings (no file anchor) are included as-is — they carry
+/// their `usage: endpoint: …` and exploit evidence in the description.
+fn collect_pentest_findings(filter: &str) -> Vec<Finding> {
+    let mut out = Vec::new();
+    if let Ok(workspaces) = crate::pentest::workspace::list_workspaces() {
+        for ws in workspaces {
+            if filter != "all" && ws.name != filter {
+                continue;
+            }
+            if let Ok(Some(state)) = ws.load_session() {
+                out.extend(state.findings);
+            }
+        }
+    }
+    out
+}
+
+/// Run the `cipher-ai report` command
+///
+/// With `--pentest <name|all>`, proven findings from pentest workspace(s)
+/// (`~/.cipher-ai/workspaces/<name>/session.json`) are merged into the same
+/// report — one deduped view of SAST + SCA + live-pentest results (M8.4).
 pub async fn run_report(
     project_path: &Path,
     report_type: &str,
     format: &str,
     output_file: Option<&str>,
+    pentest_workspace: Option<&str>,
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
     println!(
@@ -201,6 +228,21 @@ pub async fn run_report(
     agg.deps = deps_report.findings;
     agg.secrets = secrets_report.findings;
 
+    // Phase 9 (M8.4): merge proven live-pentest findings from a workspace
+    // (`--pentest <name>` or `--pentest all`) into the same report.
+    if let Some(filter) = pentest_workspace {
+        let collected = collect_pentest_findings(filter);
+        if !collected.is_empty() {
+            println!(
+                "  {} Merging {} proven pentest finding(s) from workspace '{}'.",
+                "[PENTEST]".magenta().bold(),
+                collected.len().to_string().bold(),
+                filter
+            );
+        }
+        agg.pentest = collected;
+    }
+
     // Annotate findings with a business-impact estimate so scoring and output
     // reflect severity x impact (a payment-path secret ranks above a test-only one).
     for f in agg
@@ -208,6 +250,7 @@ pub async fn run_report(
         .iter_mut()
         .chain(agg.deps.iter_mut())
         .chain(agg.secrets.iter_mut())
+        .chain(agg.pentest.iter_mut())
     {
         f.business_impact = compute_business_impact(f);
     }
@@ -799,6 +842,16 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
             .to_string()
             .bold()
     );
+    println!(
+        "    {} Live Pentest:     {}",
+        "[TARGET]".cyan(),
+        deduped
+            .iter()
+            .filter(|f| f.source == "pentest")
+            .count()
+            .to_string()
+            .bold()
+    );
     println!();
 
     if total == 0 {
@@ -893,6 +946,35 @@ mod tests {
         // Both point at the same credential line — should count once
         assert_eq!(report.total_findings(), 1);
         assert_eq!(report.all_sorted().len(), 1);
+    }
+
+    #[test]
+    fn test_total_findings_includes_pentest_source() {
+        let mut report = AggregatedReport::new("/proj");
+        let pentest_f = mk("SQL injection (error-based)", "pentest", Severity::Critical)
+            .with_usage("endpoint: GET /search");
+        report.pentest.push(pentest_f);
+        assert_eq!(report.total_findings(), 1, "pentest findings count once");
+        assert_eq!(report.count_by_severity(Severity::Critical), 1);
+        assert_eq!(report.all_sorted()[0].source, "pentest");
+        assert!(
+            report.security_score() < 100.0,
+            "pentest findings must penalize the score"
+        );
+    }
+
+    #[test]
+    fn test_dedup_collapses_review_and_pentest_same_issue() {
+        let mut report = AggregatedReport::new("/proj");
+        // The same SQLi found by the static review (file-anchored) and proven
+        // live by the pentest (endpoint-anchored) must count ONCE.
+        let mut review_f = mk("SQL Injection", "security-review", Severity::High);
+        review_f = review_f.at("/proj/app.py", 12);
+        let mut pentest_f = mk("SQL Injection", "pentest", Severity::Critical);
+        pentest_f = pentest_f.at("/proj/app.py", 12).with_usage("endpoint: GET /search");
+        report.review.push(review_f);
+        report.pentest.push(pentest_f);
+        assert_eq!(report.total_findings(), 1, "same file:line collapses across scanners");
     }
 
     #[test]
