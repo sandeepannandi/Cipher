@@ -574,6 +574,10 @@ pub fn cwe_for_title(title: &str, finding_type: FindingType) -> Option<String> {
         "CWE-22"
     } else if t.contains("template injection") {
         "CWE-1336"
+    } else if t.contains("nosql") {
+        "CWE-943"
+    } else if t.contains("xxe") || t.contains("xml external entity") {
+        "CWE-611"
     } else if t.contains("xss") {
         "CWE-79"
     } else if t.contains("ssrf") {
