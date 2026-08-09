@@ -60,6 +60,8 @@ const COMMANDS = [
   { cmd: 'pentest "can users escalate privileges?"', desc: 'Pentest with a specific objective' },
   { cmd: 'pentest --json',                        desc: 'Pentest → machine-readable JSON' },
   { cmd: 'pentest --max-turns 60',                desc: 'Pentest with a larger agent budget' },
+  { cmd: 'pentest --max-tokens 2000000',          desc: 'Pentest with an LLM token budget — forced wrap-up when spent (M9.1)' },
+  { cmd: 'pentest --max-cost 5.0',                desc: 'Pentest with a USD cost gate — refuses oversized runs (M9.1)' },
   { cmd: 'pentest --url http://localhost:8080',   desc: 'Live mode: login, TOTP, exploit validators' },
   { cmd: 'pentest "hunt and exploit vulnerabilities" --url http://localhost:8080', desc: 'Live pentest: prove exploits against a running target' },
   { cmd: 'pentest "hunt and exploit vulnerabilities" --url http://localhost:8080 --sub-agents 6', desc: 'Live pentest: parallel specialist sub-agents' },

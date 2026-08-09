@@ -359,6 +359,14 @@ enum Commands {
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
 
+        /// Maximum total LLM tokens budget for the whole run (M9.1 adaptive budget; default 2,000,000) — when the budget is spent, sub-agents force a wrap-up summary instead of hard-failing
+        #[arg(long = "max-tokens", default_value = "2000000")]
+        max_tokens: usize,
+
+        /// Refuse to start when the estimated run cost (USD) exceeds this amount (M9.1 cost gate; config budget.max_cost can also set it)
+        #[arg(long = "max-cost")]
+        max_cost: Option<f64>,
+
         /// Output results as JSON
         #[arg(long = "json")]
         json: bool,
@@ -560,7 +568,7 @@ async fn main() -> Result<()> {
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, check_email_auth, browser, model, json, output } => {
+        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, check_email_auth, browser, model, max_tokens, max_cost, json, output } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -605,6 +613,8 @@ async fn main() -> Result<()> {
                 point_retest,
                 blackbox,
                 browser,
+                max_tokens,
+                max_cost,
             )
             .await?;
         }
