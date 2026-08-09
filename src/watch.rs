@@ -152,6 +152,9 @@ pub async fn run_watch(
             for g in &sweep.proofs {
                 findings.push(orchestrator::proof_to_finding(&g.proof, &g.endpoint));
             }
+            // M9.2: anchor live-proven findings to source handlers so watch
+            // fingerprints track code locations instead of bare endpoints.
+            orchestrator::anchor_findings(&canonical_path, &mut findings);
         }
 
         let critical = findings.iter().filter(|f| f.severity == Severity::Critical).count();

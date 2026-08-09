@@ -1,6 +1,6 @@
 use crate::finding::{dedup_findings, Finding, Severity};
 use crate::pentest::http::HttpSession;
-use crate::pentest::orchestrator::{guided_exploit_pass, proof_to_finding};
+use crate::pentest::orchestrator::{anchor_findings, guided_exploit_pass, proof_to_finding};
 use crate::{attack, deps, output, review, sbom, secrets, zeroday};
 use anyhow::Result;
 use colored::*;
@@ -176,6 +176,9 @@ pub async fn run_ci(
             .iter()
             .map(|g| proof_to_finding(&g.proof, &g.endpoint))
             .collect();
+        // M9.2: anchor live-proven findings to source handlers (SARIF + fixes
+        // point at real code locations).
+        anchor_findings(project_path, &mut live_findings);
         let p_critical = count_exact(&live_findings, Severity::Critical);
         let p_high = count_exact(&live_findings, Severity::High);
         output::print_ok("Pentest", &format!(
