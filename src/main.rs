@@ -351,9 +351,13 @@ enum Commands {
         #[arg(long = "check-email-auth")]
         check_email_auth: bool,
 
-        /// Browser mode (M8.6 + M8.7): arm the render_page + browser_action tools (headless Chrome over the CDP debug pipe) so JS-heavy / SPA pages are rendered and DRIVEN — fill forms, click, submit, capture cookies into the shared jar, and prove DOM XSS / clickjacking in a real engine. The black-box crawler renders too. No new dependencies: Chrome's --remote-debugging-pipe speaks raw JSON.
+        /// Browser mode (M8.6 + M8.7 + M9.3.2): arm the render_page + browser_action tools (headless Chrome over the CDP debug pipe) so JS-heavy / SPA pages are rendered and DRIVEN — fill forms, click, submit, capture cookies into the shared jar, prove DOM XSS / clickjacking in a real engine, and run the deterministic browser fuzz pass: every discovered form (incl. JS-only ones) is submitted with XSS payloads and marker execution proves stored/reflected XSS. The black-box crawler renders too. No new dependencies: Chrome's debug port speaks raw JSON.
         #[arg(long = "browser")]
         browser: bool,
+
+        /// OpenAPI 3 / Swagger 2 spec (JSON or YAML) to import as the API attack surface (M9.3.1): schema-derived sweep targets, type-aware params, and mass-assignment field lists from request-body properties. Without a file, live --url runs auto-discover openapi.json/swagger.json and introspect /graphql
+        #[arg(long = "openapi")]
+        openapi: Option<PathBuf>,
 
         /// Model to use (defaults to config or provider default)
         #[arg(short = 'm', long = "model")]
@@ -568,7 +572,7 @@ async fn main() -> Result<()> {
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, check_email_auth, browser, model, max_tokens, max_cost, json, output } => {
+        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, check_email_auth, browser, openapi, model, max_tokens, max_cost, json, output } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -596,6 +600,17 @@ async fn main() -> Result<()> {
             }
 
             let objective_str = objective.join(" ");
+            // M9.3.1: a non-UTF-8 spec path must error loudly, not silently
+            // degrade to "no spec" (which would run the sweep un-schema'd).
+            let openapi_path = openapi;
+            let openapi = match &openapi_path {
+                Some(p) => Some(
+                    p.to_str().ok_or_else(|| {
+                        anyhow::anyhow!("--openapi path is not valid UTF-8: {}", p.display())
+                    })?,
+                ),
+                None => None,
+            };
             pentest::run_pentest(
                 &project_path,
                 &objective_str,
@@ -613,6 +628,7 @@ async fn main() -> Result<()> {
                 point_retest,
                 blackbox,
                 browser,
+                openapi,
                 max_tokens,
                 max_cost,
             )
