@@ -54,7 +54,7 @@ const COMMANDS = [
   { cmd: '/pentest --max-turns 60',                  desc: 'Pentest with a larger agent budget' },
   { cmd: '/pentest --max-tokens 2000000',             desc: 'Pentest with an LLM token budget (default 2M) — sub-agents force a wrap-up summary instead of hard-failing when it runs out (M9.1)' },
   { cmd: '/pentest --max-cost 5.0',                   desc: 'Pentest with a USD cost gate — refuses to start if the estimated run cost exceeds it (M9.1)' },
-  { cmd: '/pentest --url http://localhost:8080',     desc: 'Live mode: HTTP tools + exploit validators (no exploit, no report)' },
+  { cmd: '/pentest --url http://localhost:8080',     desc: 'Live mode: HTTP tools + exploit validators (no exploit, no report) — M9.4 attack chaining links unlock proofs (mass-assignment user creation, JWT impersonation) to auth-blocked re-sweeps and reports “Attack Paths”' },
   { cmd: '/pentest "hunt and exploit vulnerabilities" --url http://localhost:8080', desc: 'Live pentest: agent proves exploits against a running target' },
   { cmd: '/pentest "hunt and exploit vulnerabilities" --url http://localhost:8080 --sub-agents 6', desc: 'Live pentest: parallel specialist sub-agents (default 4)' },
   { cmd: '/pentest "test the login" --url http://localhost:8080 --config app.yaml', desc: 'Live pentest with YAML config: auth flow, rules of engagement, focus/avoid scope' },

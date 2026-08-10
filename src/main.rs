@@ -303,7 +303,7 @@ enum Commands {
         #[arg(long = "target-dir")]
         target_dir: Option<PathBuf>,
 
-        /// Base URL of a live target — enables live HTTP tools + deterministic exploit validators (http_request, analyze_page, login, generate_totp, run_command, exploit)
+        /// Base URL of a live target — enables live HTTP tools + deterministic exploit validators (http_request, analyze_page, login, generate_totp, run_command, exploit), plus M9.4 attack chaining: proofs that unlock a primitive (mass-assignment user creation, JWT impersonation, …) trigger a bounded re-sweep of auth-blocked endpoints and continuation sub-agents, and the report gains an "Attack Paths" section
         #[arg(long = "url")]
         url: Option<String>,
 

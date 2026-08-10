@@ -50,7 +50,7 @@ const COMMANDS = [
   { cmd: 'pentest --json',                        desc: 'Pentest → JSON findings' },
   { cmd: 'pentest --max-tokens 2000000',          desc: 'Pentest with an LLM token budget (forced wrap-up, M9.1)' },
   { cmd: 'pentest --max-cost 5.0',                desc: 'Pentest with a USD cost gate (M9.1)' },
-  { cmd: 'pentest --url http://localhost:8080',   desc: 'Live pentest: HTTP tools + exploit validators' },
+  { cmd: 'pentest --url http://localhost:8080',   desc: 'Live pentest: HTTP tools + exploit validators + M9.4 attack chaining (unlock proof → auth-blocked re-sweep → Attack Paths)' },
   { cmd: 'pentest "hunt and exploit vulnerabilities" --url http://localhost:8080 --sub-agents 6', desc: 'Live pentest: parallel specialist agents' },
   { cmd: 'pentest "test the login" --url http://localhost:8080 --config app.yaml', desc: 'Live pentest with YAML config: auth, ROE, scope rules' },
   { cmd: 'pentest --url http://localhost:8080 -w myapp', desc: 'Live pentest in a named workspace (checkpoints + resume)' },
