@@ -1124,31 +1124,65 @@ mod tests {
         .with_remediation("Use parameterized queries.")
         .with_usage("endpoint: GET /search");
 
-        let expected = serde_json::json!({
-            "id": finding.id,
-            "finding_type": "injection",
-            "title": "SQL Injection",
-            "description": "User input reaches a SQL query.",
-            "severity": "High",
-            "confidence": "High",
-            "file_path": "src/app.py",
-            "line_number": 42,
-            "code_snippet": null,
-            "remediation": "Use parameterized queries.",
-            "owasp_category": null,
-            "cwe_id": "CWE-89",
-            "cve_id": null,
-            "exploitability": 0.5,
-            "business_impact": 0.5,
-            "remediation_effort": "Hours",
-            "created_at": finding.created_at,
-            "source": "review",
-            "usage": "endpoint: GET /search"
-        });
+        let mut expected = serde_json::Map::new();
+        expected.insert("id".to_string(), serde_json::Value::String(finding.id.clone()));
+        expected.insert(
+            "finding_type".to_string(),
+            serde_json::Value::String("Injection".to_string()),
+        );
+        expected.insert(
+            "title".to_string(),
+            serde_json::Value::String("SQL Injection".to_string()),
+        );
+        expected.insert(
+            "description".to_string(),
+            serde_json::Value::String("User input reaches a SQL query.".to_string()),
+        );
+        expected.insert(
+            "severity".to_string(),
+            serde_json::Value::String("High".to_string()),
+        );
+        expected.insert(
+            "confidence".to_string(),
+            serde_json::Value::String("High".to_string()),
+        );
+        expected.insert(
+            "file_path".to_string(),
+            serde_json::Value::String("src/app.py".to_string()),
+        );
+        expected.insert("line_number".to_string(), serde_json::Value::Number(42.into()));
+        expected.insert("code_snippet".to_string(), serde_json::Value::Null);
+        expected.insert(
+            "remediation".to_string(),
+            serde_json::Value::String("Use parameterized queries.".to_string()),
+        );
+        expected.insert("owasp_category".to_string(), serde_json::Value::Null);
+        expected.insert(
+            "cwe_id".to_string(),
+            serde_json::Value::String("CWE-89".to_string()),
+        );
+        expected.insert("cve_id".to_string(), serde_json::Value::Null);
+        expected.insert("exploitability".to_string(), serde_json::Value::from(0.5));
+        expected.insert("business_impact".to_string(), serde_json::Value::from(0.5));
+        expected.insert(
+            "remediation_effort".to_string(),
+            serde_json::Value::String("Hours".to_string()),
+        );
+        expected.insert(
+            "created_at".to_string(),
+            serde_json::Value::String(finding.created_at.to_string()),
+        );
+        expected.insert("source".to_string(), serde_json::Value::String("review".to_string()));
+        expected.insert(
+            "usage".to_string(),
+            serde_json::Value::String("endpoint: GET /search".to_string()),
+        );
+
+        let expected = serde_json::Value::Object(expected);
 
         assert_eq!(
-            serde_json::to_string(&finding).unwrap(),
-            serde_json::to_string(&expected).unwrap()
+            serde_json::to_value(&finding).unwrap(),
+            expected,
         );
         let round_trip: Finding =
             serde_json::from_str(&serde_json::to_string(&finding).unwrap()).unwrap();
