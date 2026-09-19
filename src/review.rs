@@ -1,5 +1,6 @@
 use crate::finding::{
-    Confidence, Finding, FindingReport, FindingType, OwaspCategory, RemediationEffort, Severity,
+    stable_fingerprint, stable_rule_id, Confidence, Finding, FindingReport, FindingType,
+    OwaspCategory, RemediationEffort, Severity,
 };
 use crate::groq::GroqClient;
 use crate::indexer;
@@ -1049,6 +1050,17 @@ struct SarifResult {
     level: String,
     message: SarifMessage,
     locations: Vec<SarifLocation>,
+    #[serde(
+        rename = "partialFingerprints",
+        skip_serializing_if = "Option::is_none"
+    )]
+    partial_fingerprints: Option<SarifFingerprint>,
+}
+
+#[derive(Serialize)]
+struct SarifFingerprint {
+    #[serde(rename = "primaryLocationLineHash")]
+    primary_location_line_hash: String,
 }
 
 #[derive(Serialize)]
@@ -1090,6 +1102,40 @@ struct SarifSnippet {
 
 /// Generate a SARIF 2.1.0 JSON string from a FindingReport
 pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> String {
+    // Keep the rule metadata in sync with the result rule IDs.
+    let mut rule_ids: Vec<String> = Vec::new();
+    let mut rules: Vec<SarifRule> = Vec::new();
+    for f in &report.findings {
+        let id = stable_rule_id(f);
+        if rule_ids.iter().any(|existing| existing == &id) {
+            continue;
+        }
+        rule_ids.push(id.clone());
+        let name = match id.as_str() {
+            "cipher/sql-injection" => "SQL Injection",
+            "cipher/command-injection" => "Command Injection",
+            "cipher/path-traversal" => "Path Traversal",
+            "cipher/ssrf" => "Server-Side Request Forgery",
+            "cipher/idor" => "Insecure Direct Object Reference",
+            "cipher/secrets" => "Secret Exposure",
+            "cipher/auth" => "Authentication & Session Hardening",
+            "cipher/authz" => "Authorization / Access Control",
+            "cipher/crypto" => "Cryptographic Weakness",
+            "cipher/injection" => "Injection",
+            "cipher/misconfig" => "Security Misconfiguration",
+            "cipher/dependency" => "Dependency Vulnerability",
+            "cipher/business-logic" => "Business Logic",
+            _ => "Security Finding",
+        };
+        rules.push(SarifRule {
+            id: id.clone(),
+            short_description: SarifMessage {
+                text: name.to_string(),
+            },
+            properties: None,
+        });
+    }
+
     let results: Vec<SarifResult> = report
         .findings
         .iter()
@@ -1112,14 +1158,13 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
                 .map(|s| SarifSnippet { text: s.clone() });
 
             let region = f.line_number.map(|ln| SarifRegion {
-                start_line: ln,
+                start_line: ln.max(1),
                 snippet,
             });
 
+            let rule_id = stable_rule_id(f);
             SarifResult {
-                // Stable rule ID: prefer the CWE identifier so findings map into
-                // existing triage workflows (GitHub code scanning, DefectDojo, etc.)
-                rule_id: f.cwe_id.clone().unwrap_or_else(|| f.title.clone()),
+                rule_id: rule_id.clone(),
                 level: sarif_level(f.severity).to_string(),
                 message: SarifMessage {
                     text: format!(
@@ -1137,6 +1182,9 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
                         region,
                     },
                 }],
+                partial_fingerprints: Some(SarifFingerprint {
+                    primary_location_line_hash: stable_fingerprint(f),
+                }),
             }
         })
         .collect();
@@ -1171,6 +1219,21 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
         #[serde(rename = "informationUri")]
         information_uri: String,
         version: String,
+        rules: Vec<SarifRule>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifRule {
+        id: String,
+        #[serde(rename = "shortDescription")]
+        short_description: SarifMessage,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        properties: Option<SarifRuleProps>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifRuleProps {
+        tags: Vec<String>,
     }
 
     #[derive(Serialize)]
@@ -1193,6 +1256,7 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
                     name: "CipherAI".to_string(),
                     information_uri: "https://github.com/sandeepannandi/Cipher".to_string(),
                     version: env!("CARGO_PKG_VERSION").to_string(),
+                    rules,
                 },
             },
             results,
