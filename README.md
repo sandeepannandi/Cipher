@@ -4,7 +4,7 @@
 
 **AI security analysis for your codebase — from your terminal.**
 
-[![Rust](https://img.shields.io/badge/Rust-1.85+-orange?logo=rust&logoColor=white)]()
+[![Rust](https://img.shields.io/badge/Rust-1.88+-orange?logo=rust&logoColor=white)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
 [![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen)]()
 

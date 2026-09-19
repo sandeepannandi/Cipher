@@ -2,6 +2,7 @@
 name = "cipher-ai"
 version = "1.0.0"
 edition = "2021"
+rust-version = "1.88"
 description = "Cipher — AI-powered security analysis for your codebase. Index, search, and ask security questions using Groq AI."
 
 [dependencies]
@@ -31,7 +32,7 @@ sha2 = "0.10"
 base32 = "0.5"
 # Phase 10 (M8.5): email-OTP / magic-link auth — IMAP reader (pure-Rust TLS).
 imap = { version = "2", default-features = false, features = ["tls"] }
-native-tls = "0.2"
+native-tls = { version = "0.2", features = ["vendored"] }
 
 [dev-dependencies]
 tiny_http = "0.12"

@@ -1,0 +1,345 @@
+{
+  "schema_version": 1,
+  "suite": "cipher-pattern-baseline",
+  "cipher": "./target/release/cipher-ai",
+  "summary": {
+    "TP": 12,
+    "FP": 0,
+    "FN": 0,
+    "TN": 8,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "evidence_complete_rate": 1.0,
+    "actionable_fix_rate": 1.0,
+    "runtime_ms_total": 267.62,
+    "runtime_ms_median": 12.89
+  },
+  "cases": [
+    {
+      "id": "PY-001",
+      "file": "python/weak_md5.py",
+      "language": "python",
+      "expected_title": "Weak Hash Algorithm \u2014 MD5",
+      "cwe": "CWE-328",
+      "expected": true,
+      "fix_terms": [
+        "SHA-256"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Weak Hash Algorithm \u2014 MD5"
+      ],
+      "runtime_ms": 12.97,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "PY-002",
+      "file": "python/hardcoded_password.py",
+      "language": "python",
+      "expected_title": "Hardcoded Credentials",
+      "cwe": "CWE-798",
+      "expected": true,
+      "fix_terms": [
+        "environment"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Hardcoded Credentials"
+      ],
+      "runtime_ms": 12.18,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "PY-003",
+      "file": "python/unsafe_pickle.py",
+      "language": "python",
+      "expected_title": "Insecure Deserialization",
+      "cwe": "CWE-502",
+      "expected": true,
+      "fix_terms": [
+        "safe deserialization"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Insecure Deserialization"
+      ],
+      "runtime_ms": 12.4,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "PY-004",
+      "file": "python/debug_enabled.py",
+      "language": "python",
+      "expected_title": "Debug Mode Enabled",
+      "cwe": "CWE-489",
+      "expected": true,
+      "fix_terms": [
+        "Disable"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Debug Mode Enabled"
+      ],
+      "runtime_ms": 12.21,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "PY-005",
+      "file": "python/tls_disabled.py",
+      "language": "python",
+      "expected_title": "Disabled SSL/TLS Verification",
+      "cwe": "CWE-295",
+      "expected": true,
+      "fix_terms": [
+        "Enable"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Disabled SSL/TLS Verification"
+      ],
+      "runtime_ms": 12.23,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "JS-001",
+      "file": "javascript/jwt_secret.js",
+      "language": "javascript",
+      "expected_title": "JWT Secret Hardcoded",
+      "cwe": "CWE-798",
+      "expected": true,
+      "fix_terms": [
+        "environment"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "JWT Secret Hardcoded",
+        "Hardcoded Credentials"
+      ],
+      "runtime_ms": 12.32,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "JS-002",
+      "file": "javascript/sensitive_log.js",
+      "language": "javascript",
+      "expected_title": "Sensitive Data in Logging",
+      "cwe": "CWE-532",
+      "expected": true,
+      "fix_terms": [
+        "redaction"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Sensitive Data in Logging"
+      ],
+      "runtime_ms": 12.89,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "JS-003",
+      "file": "javascript/path_concat.js",
+      "language": "javascript",
+      "expected_title": "Path Traversal",
+      "cwe": "CWE-22",
+      "expected": true,
+      "fix_terms": [
+        "Validate"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Path Traversal"
+      ],
+      "runtime_ms": 12.93,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "RS-001",
+      "file": "rust/weak_sha1.rs",
+      "language": "rust",
+      "expected_title": "Weak Hash Algorithm \u2014 SHA1",
+      "cwe": "CWE-328",
+      "expected": true,
+      "fix_terms": [
+        "SHA-256"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Weak Hash Algorithm \u2014 SHA1"
+      ],
+      "runtime_ms": 12.2,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "RS-002",
+      "file": "rust/hardcoded_key.rs",
+      "language": "rust",
+      "expected_title": "Hardcoded Cryptographic Key",
+      "cwe": "CWE-321",
+      "expected": true,
+      "fix_terms": [
+        "environment"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Hardcoded Cryptographic Key"
+      ],
+      "runtime_ms": 17.23,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "RS-003",
+      "file": "rust/command_injection.rs",
+      "language": "rust",
+      "expected_title": "Command Injection",
+      "cwe": "CWE-78",
+      "expected": true,
+      "fix_terms": [
+        "Avoid shell"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Command Injection"
+      ],
+      "runtime_ms": 12.62,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "RS-004",
+      "file": "rust/idor.rs",
+      "language": "rust",
+      "expected_title": "Insecure Direct Object Reference (IDOR)",
+      "cwe": "CWE-639",
+      "expected": true,
+      "fix_terms": [
+        "permission"
+      ],
+      "outcome": "TP",
+      "reported_titles": [
+        "Insecure Direct Object Reference (IDOR)"
+      ],
+      "runtime_ms": 13.47,
+      "evidence_complete": true,
+      "fix_quality": "actionable",
+      "exit_code": 0
+    },
+    {
+      "id": "NEG-PY-001",
+      "file": "python/safe_hash.py",
+      "language": "python",
+      "expected": false,
+      "outcome": "TN",
+      "reported_titles": [],
+      "runtime_ms": 17.4,
+      "evidence_complete": false,
+      "fix_quality": "not_applicable",
+      "exit_code": 0
+    },
+    {
+      "id": "NEG-PY-002",
+      "file": "python/safe_password_env.py",
+      "language": "python",
+      "expected": false,
+      "outcome": "TN",
+      "reported_titles": [],
+      "runtime_ms": 18.32,
+      "evidence_complete": false,
+      "fix_quality": "not_applicable",
+      "exit_code": 0
+    },
+    {
+      "id": "NEG-PY-003",
+      "file": "python/safe_yaml.py",
+      "language": "python",
+      "expected": false,
+      "outcome": "TN",
+      "reported_titles": [],
+      "runtime_ms": 13.15,
+      "evidence_complete": false,
+      "fix_quality": "not_applicable",
+      "exit_code": 0
+    },
+    {
+      "id": "NEG-JS-001",
+      "file": "javascript/safe_log.js",
+      "language": "javascript",
+      "expected": false,
+      "outcome": "TN",
+      "reported_titles": [],
+      "runtime_ms": 12.22,
+      "evidence_complete": false,
+      "fix_quality": "not_applicable",
+      "exit_code": 0
+    },
+    {
+      "id": "NEG-JS-002",
+      "file": "javascript/safe_path.js",
+      "language": "javascript",
+      "expected": false,
+      "outcome": "TN",
+      "reported_titles": [],
+      "runtime_ms": 13.04,
+      "evidence_complete": false,
+      "fix_quality": "not_applicable",
+      "exit_code": 0
+    },
+    {
+      "id": "NEG-JS-003",
+      "file": "javascript/secure_cookie.js",
+      "language": "javascript",
+      "expected": false,
+      "outcome": "TN",
+      "reported_titles": [],
+      "runtime_ms": 12.47,
+      "evidence_complete": false,
+      "fix_quality": "not_applicable",
+      "exit_code": 0
+    },
+    {
+      "id": "NEG-RS-001",
+      "file": "rust/safe_tls.rs",
+      "language": "rust",
+      "expected": false,
+      "outcome": "TN",
+      "reported_titles": [],
+      "runtime_ms": 12.23,
+      "evidence_complete": false,
+      "fix_quality": "not_applicable",
+      "exit_code": 0
+    },
+    {
+      "id": "NEG-RS-002",
+      "file": "rust/safe_key_env.rs",
+      "language": "rust",
+      "expected": false,
+      "outcome": "TN",
+      "reported_titles": [],
+      "runtime_ms": 13.14,
+      "evidence_complete": false,
+      "fix_quality": "not_applicable",
+      "exit_code": 0
+    }
+  ]
+}

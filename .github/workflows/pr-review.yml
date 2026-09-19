@@ -20,11 +20,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build cipher-ai
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo build --release --locked --target x86_64-unknown-linux-gnu
 
       - name: Post security review comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: ./target/release/cipher-ai pr --diff --path .
+        run: ./target/x86_64-unknown-linux-gnu/release/cipher-ai pr --diff --path .

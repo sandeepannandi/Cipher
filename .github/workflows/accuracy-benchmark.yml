@@ -1,0 +1,32 @@
+name: Accuracy benchmark
+
+on:
+  pull_request:
+    paths:
+      - "src/review.rs"
+      - "src/finding.rs"
+      - "src/scan.rs"
+      - "benchmarks/accuracy/**"
+      - ".github/workflows/accuracy-benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Cipher
+        run: cargo build --release --locked
+      - name: Run accuracy baseline
+        run: python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai --output /tmp/cipher-accuracy.json
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipher-accuracy-result
+          path: /tmp/cipher-accuracy.json
+          if-no-files-found: error

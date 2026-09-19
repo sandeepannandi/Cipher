@@ -26,3 +26,6 @@ Desktop.ini
 
 # Generated files
 Cargo.lock
+
+# Keep the application dependency graph reproducible
+!Cargo.lock
