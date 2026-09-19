@@ -159,8 +159,6 @@ pub fn ecosystem_to_purl_type(eco: &str) -> &str {
     }
 }
 
-
-
 /// Generate a CycloneDX 1.5 JSON SBOM
 fn generate_cyclonedx(deps: &[deps::Dependency], project_name: &str) -> String {
     let now = chrono::Utc::now().to_rfc3339();
@@ -267,9 +265,7 @@ fn generate_spdx(deps: &[deps::Dependency], project_name: &str) -> String {
         spdx_id: "SPDXRef-DOCUMENT".to_string(),
         name: format!("{}/{}", project_name, "sbom"),
         creation_info: SpdxCreationInfo {
-            creators: vec![
-                format!("Tool: CipherAI-{}", env!("CARGO_PKG_VERSION")),
-            ],
+            creators: vec![format!("Tool: CipherAI-{}", env!("CARGO_PKG_VERSION"))],
             created: now,
         },
         document_namespace: namespace,
@@ -283,11 +279,7 @@ fn generate_spdx(deps: &[deps::Dependency], project_name: &str) -> String {
 // ── External API ────────────────────────────────────────────────────
 
 /// Run the `cipher-ai sbom` command
-pub async fn run_sbom(
-    project_path: &Path,
-    format: &str,
-    output: Option<&str>,
-) -> Result<()> {
+pub async fn run_sbom(project_path: &Path, format: &str, output: Option<&str>) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
     let project_name = canonical_path
         .file_name()

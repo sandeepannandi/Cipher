@@ -132,7 +132,11 @@ pub fn run_config_set(key: &str, value: &str) -> Result<()> {
                 println!("  Setting anyway — model may not work.");
             }
             config.default_model = Some(value.to_string());
-            println!("  {} Default model set to: {}", "[OK]".green().bold(), value);
+            println!(
+                "  {} Default model set to: {}",
+                "[OK]".green().bold(),
+                value
+            );
         }
         _ => {
             anyhow::bail!(
@@ -165,18 +169,14 @@ pub fn run_config_get(key: &str) -> Result<()> {
         "anthropic-api-key" => {
             print_key_status("ANTHROPIC_API_KEY", config.anthropic_api_key.as_ref());
         }
-        "provider" => {
-            match std::env::var("CIPHER_AI_PROVIDER").ok().or(config.provider) {
-                Some(v) => println!("{}", v),
-                None => println!("groq"),
-            }
-        }
-        "default-model" | "model" => {
-            match &config.default_model {
-                Some(v) => println!("{}", v),
-                None => println!("{}", DEFAULT_MODELS[0]),
-            }
-        }
+        "provider" => match std::env::var("CIPHER_AI_PROVIDER").ok().or(config.provider) {
+            Some(v) => println!("{}", v),
+            None => println!("groq"),
+        },
+        "default-model" | "model" => match &config.default_model {
+            Some(v) => println!("{}", v),
+            None => println!("{}", DEFAULT_MODELS[0]),
+        },
         _ => {
             anyhow::bail!(
                 "Unknown config key: {}. Valid keys: groq-api-key, openai-api-key, anthropic-api-key, provider, default-model",
@@ -210,43 +210,73 @@ pub fn run_config_show() -> Result<()> {
         .unwrap_or_else(|| "groq".to_string());
 
     let groq_key = std::env::var("GROQ_API_KEY").ok().or(config.groq_api_key);
-    let openai_key = std::env::var("OPENAI_API_KEY").ok().or(config.openai_api_key);
-    let anthropic_key = std::env::var("ANTHROPIC_API_KEY").ok().or(config.anthropic_api_key);
+    let openai_key = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .or(config.openai_api_key);
+    let anthropic_key = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .or(config.anthropic_api_key);
 
     println!();
     println!("{}", "Configuration".bold());
     println!("  {}", "-".repeat(40).dimmed());
-    println!(
-        "  {} {}",
-        "AI Provider:".bold(),
-        provider.cyan().bold()
-    );
+    println!("  {} {}", "AI Provider:".bold(), provider.cyan().bold());
     if std::env::var("CIPHER_AI_PROVIDER").is_ok() {
-        println!("        {} overridden by CIPHER_AI_PROVIDER env var", "(i)".blue().dimmed());
+        println!(
+            "        {} overridden by CIPHER_AI_PROVIDER env var",
+            "(i)".blue().dimmed()
+        );
     }
     println!(
         "  {} {}",
         "Default Model:".bold(),
-        config.default_model.as_deref().unwrap_or(DEFAULT_MODELS[0]).cyan()
+        config
+            .default_model
+            .as_deref()
+            .unwrap_or(DEFAULT_MODELS[0])
+            .cyan()
     );
     if std::env::var("CIPHER_AI_MODEL").is_ok() {
-        println!("        {} overridden by CIPHER_AI_MODEL env var", "(i)".blue().dimmed());
+        println!(
+            "        {} overridden by CIPHER_AI_MODEL env var",
+            "(i)".blue().dimmed()
+        );
     }
     if let Ok(base) = std::env::var("CIPHER_AI_BASE_URL") {
-        println!("        {} base URL: {}", "[GW]".cyan().dimmed(), base.dimmed());
+        println!(
+            "        {} base URL: {}",
+            "[GW]".cyan().dimmed(),
+            base.dimmed()
+        );
     }
     println!();
     println!("  {} {}", "API Keys:".bold(), "".dimmed());
-    println!("{}", render_key_line("Groq", "GROQ_API_KEY", groq_key.is_some()));
-    println!("{}", render_key_line("OpenAI", "OPENAI_API_KEY", openai_key.is_some()));
-    println!("{}", render_key_line("Anthropic", "ANTHROPIC_API_KEY", anthropic_key.is_some()));
+    println!(
+        "{}",
+        render_key_line("Groq", "GROQ_API_KEY", groq_key.is_some())
+    );
+    println!(
+        "{}",
+        render_key_line("OpenAI", "OPENAI_API_KEY", openai_key.is_some())
+    );
+    println!(
+        "{}",
+        render_key_line("Anthropic", "ANTHROPIC_API_KEY", anthropic_key.is_some())
+    );
     println!(
         "  {} {}",
         "Config File:".bold(),
-        config_path().unwrap_or_default().display().to_string().dimmed()
+        config_path()
+            .unwrap_or_default()
+            .display()
+            .to_string()
+            .dimmed()
     );
     println!();
-    println!("  {} Use 'cipher-ai config set <key> <value>' to change settings.", "[IDEA]".bold());
+    println!(
+        "  {} Use 'cipher-ai config set <key> <value>' to change settings.",
+        "[IDEA]".bold()
+    );
     println!("  {} Supported keys: groq-api-key, openai-api-key, anthropic-api-key, provider, default-model", "     ".bold());
     Ok(())
 }

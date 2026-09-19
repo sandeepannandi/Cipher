@@ -95,9 +95,15 @@ pub async fn run_watch(
     let state_path = canonical_path.join(STATE_FILE);
     let interval = std::time::Duration::from_secs(interval_minutes.max(1) * 60);
 
-    output::print_header("Security Watch", Some(&canonical_path.display().to_string()));
+    output::print_header(
+        "Security Watch",
+        Some(&canonical_path.display().to_string()),
+    );
     if once {
-        println!("  {} Single scan mode (--once) — for cron/CI", "[MODE]".cyan());
+        println!(
+            "  {} Single scan mode (--once) — for cron/CI",
+            "[MODE]".cyan()
+        );
     } else {
         println!(
             "  {} Monitoring every {} minute(s) — Ctrl+C to stop",
@@ -113,7 +119,11 @@ pub async fn run_watch(
 
     loop {
         // Step 1: scan
-        output::print_step(1, 3, "Running security scans (review + secrets + deps + zeroday + attack)");
+        output::print_step(
+            1,
+            3,
+            "Running security scans (review + secrets + deps + zeroday + attack)",
+        );
         let (mut findings, _attack_count) = match pr::collect_pr_findings(&canonical_path).await {
             Ok(v) => v,
             Err(e) => {
@@ -157,17 +167,29 @@ pub async fn run_watch(
             orchestrator::anchor_findings(&canonical_path, &mut findings);
         }
 
-        let critical = findings.iter().filter(|f| f.severity == Severity::Critical).count();
-        let high = findings.iter().filter(|f| f.severity == Severity::High).count();
-        let medium = findings.iter().filter(|f| f.severity == Severity::Medium).count();
+        let critical = findings
+            .iter()
+            .filter(|f| f.severity == Severity::Critical)
+            .count();
+        let high = findings
+            .iter()
+            .filter(|f| f.severity == Severity::High)
+            .count();
+        let medium = findings
+            .iter()
+            .filter(|f| f.severity == Severity::Medium)
+            .count();
 
-        output::print_ok("Scans", &format!(
-            "{} critical, {} high, {} medium, {} total",
-            critical.to_string().red().bold(),
-            high.to_string().yellow().bold(),
-            medium.to_string().cyan(),
-            findings.len().to_string().bold()
-        ));
+        output::print_ok(
+            "Scans",
+            &format!(
+                "{} critical, {} high, {} medium, {} total",
+                critical.to_string().red().bold(),
+                high.to_string().yellow().bold(),
+                medium.to_string().cyan(),
+                findings.len().to_string().bold()
+            ),
+        );
 
         let mut fingerprints: Vec<String> = findings.iter().map(fingerprint).collect();
         fingerprints.sort();
@@ -199,7 +221,10 @@ pub async fn run_watch(
                 println!("    {} {}", "+".red().bold(), fp.dimmed());
             }
             if new_fps.len() > 20 {
-                println!("    ... and {} more", (new_fps.len() - 20).to_string().dimmed());
+                println!(
+                    "    ... and {} more",
+                    (new_fps.len() - 20).to_string().dimmed()
+                );
             }
         }
         println!();
@@ -302,7 +327,11 @@ mod tests {
     #[test]
     fn test_new_fingerprints_detects_added() {
         let prev = vec!["a:1:x".to_string(), "b:2:y".to_string()];
-        let current = vec!["a:1:x".to_string(), "b:2:y".to_string(), "c:3:z".to_string()];
+        let current = vec![
+            "a:1:x".to_string(),
+            "b:2:y".to_string(),
+            "c:3:z".to_string(),
+        ];
         let new = new_fingerprints(&prev, &current);
         assert_eq!(new, vec!["c:3:z".to_string()]);
     }

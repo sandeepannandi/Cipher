@@ -60,8 +60,6 @@ impl AttackChainType {
             AttackChainType::InformationDisclosure => 0.5,
         }
     }
-
-
 }
 
 /// An attack chain connecting multiple findings into a realistic attack scenario
@@ -121,7 +119,11 @@ pub async fn run_attack(
     );
 
     // Step 2: Discover attack chains using pattern matching
-    println!("  {} Analyzing attack paths (depth: {})...", "[*]".cyan(), depth);
+    println!(
+        "  {} Analyzing attack paths (depth: {})...",
+        "[*]".cyan(),
+        depth
+    );
     let mut chains = discover_chains(&all_findings, depth);
 
     // Step 3: Filter by chain type if requested
@@ -129,7 +131,9 @@ pub async fn run_attack(
         let filter_lower = filter.to_lowercase();
         chains.retain(|c| {
             c.chain_type.name().to_lowercase().contains(&filter_lower)
-                || format!("{:?}", c.chain_type).to_lowercase().contains(&filter_lower)
+                || format!("{:?}", c.chain_type)
+                    .to_lowercase()
+                    .contains(&filter_lower)
         });
     }
 
@@ -154,7 +158,10 @@ pub async fn run_attack(
     // untrusted data genuinely flows between them, attach the path steps as
     // evidence and boost the chain's risk score.
     if use_flow {
-        println!("  {} Attaching real data-flow evidence to chains...", "[FLOW]".cyan());
+        println!(
+            "  {} Attaching real data-flow evidence to chains...",
+            "[FLOW]".cyan()
+        );
         // Trace at most the top 8 chains (each trace walks the codebase once).
         let flow_count = chains.len().min(8);
         for chain in chains.iter_mut().take(flow_count) {
@@ -163,7 +170,8 @@ pub async fn run_attack(
             let (Some(entry_file), Some(impact_file)) = (entry_file, impact_file) else {
                 continue;
             };
-            let paths = trace::trace_between_files(&canonical_path, &entry_file, &impact_file, depth);
+            let paths =
+                trace::trace_between_files(&canonical_path, &entry_file, &impact_file, depth);
             if let Some(top) = paths.first() {
                 chain.evidence = top.steps.clone();
                 // A real data-flow path between the files makes the chain
@@ -299,8 +307,15 @@ fn build_chain_rules() -> Vec<ChainRule> {
         ChainRule {
             chain_type: AttackChainType::PrivilegeEscalation,
             entry_keywords: &["password", "credential", "jwt_secret", "jwt", "hardcoded"],
-            target_keywords: &["idor", "access control", "authorization", "mass assignment", "autobinding"],
-            description: "Exposed credentials + missing authorization checks = privilege escalation",
+            target_keywords: &[
+                "idor",
+                "access control",
+                "authorization",
+                "mass assignment",
+                "autobinding",
+            ],
+            description:
+                "Exposed credentials + missing authorization checks = privilege escalation",
         },
         ChainRule {
             chain_type: AttackChainType::DataExfiltration,
@@ -311,7 +326,12 @@ fn build_chain_rules() -> Vec<ChainRule> {
         ChainRule {
             chain_type: AttackChainType::RemoteCodeExecution,
             entry_keywords: &["command injection", "shell_exec", "exec", "popen", "eval"],
-            target_keywords: &["insecure deserialization", "no auth", "authentication", "authorization"],
+            target_keywords: &[
+                "insecure deserialization",
+                "no auth",
+                "authentication",
+                "authorization",
+            ],
             description: "Command execution + missing security controls = remote code execution",
         },
         ChainRule {
@@ -323,7 +343,13 @@ fn build_chain_rules() -> Vec<ChainRule> {
         ChainRule {
             chain_type: AttackChainType::CryptographicBreach,
             entry_keywords: &["md5", "sha1", "des", "ecb", "weak hash", "weak encryption"],
-            target_keywords: &["encryption_key", "secret_key", "cipher_key", "aes_key", "hardcoded key"],
+            target_keywords: &[
+                "encryption_key",
+                "secret_key",
+                "cipher_key",
+                "aes_key",
+                "hardcoded key",
+            ],
             description: "Weak cryptography + exposed keys = cryptographic breach",
         },
         ChainRule {
@@ -335,12 +361,24 @@ fn build_chain_rules() -> Vec<ChainRule> {
         ChainRule {
             chain_type: AttackChainType::SupplyChainAttack,
             entry_keywords: &["vulnerable dependency", "cve", "dependency"],
-            target_keywords: &["mass assignment", "autobinding", "insecure deserialization", "update_attributes"],
+            target_keywords: &[
+                "mass assignment",
+                "autobinding",
+                "insecure deserialization",
+                "update_attributes",
+            ],
             description: "Vulnerable dependencies + insecure data patterns = supply chain attack",
         },
         ChainRule {
             chain_type: AttackChainType::CredentialTheft,
-            entry_keywords: &["github", "token", "secret", "api_key", "aws_access", "private key"],
+            entry_keywords: &[
+                "github",
+                "token",
+                "secret",
+                "api_key",
+                "aws_access",
+                "private key",
+            ],
             target_keywords: &["ssrf", "debug", "path traversal", "open redirect"],
             description: "Exposed credentials + server-side access = credential theft",
         },
@@ -453,10 +491,11 @@ fn discover_chains(findings: &[Finding], depth: usize) -> Vec<AttackChain> {
     // Merge findings for chains of the same type in the same file
     let mut merged: Vec<AttackChain> = Vec::new();
     for chain in chains {
-        if let Some(existing) = merged
-            .iter_mut()
-            .find(|c: &&mut AttackChain| c.chain_type == chain.chain_type && c.entry_point == chain.entry_point && c.impact == chain.impact)
-        {
+        if let Some(existing) = merged.iter_mut().find(|c: &&mut AttackChain| {
+            c.chain_type == chain.chain_type
+                && c.entry_point == chain.entry_point
+                && c.impact == chain.impact
+        }) {
             // Merge unique findings
             for f in chain.findings {
                 if !existing.findings.iter().any(|ef| ef.id == f.id) {
@@ -528,10 +567,7 @@ fn collect_intermediates<'a>(
 }
 
 /// Enrich chain descriptions using AI
-async fn enrich_chains_ai(
-    chains: &mut [AttackChain],
-    _project_path: &Path,
-) -> Result<()> {
+async fn enrich_chains_ai(chains: &mut [AttackChain], _project_path: &Path) -> Result<()> {
     let client = match GroqClient::from_env() {
         Ok(c) => c,
         Err(_) => {
@@ -555,7 +591,9 @@ async fn enrich_chains_ai(
                     f.severity,
                     f.title,
                     f.file_path.as_deref().unwrap_or("<unknown>"),
-                    f.line_number.map(|l| l.to_string()).unwrap_or_else(|| "?".to_string())
+                    f.line_number
+                        .map(|l| l.to_string())
+                        .unwrap_or_else(|| "?".to_string())
                 )
             })
             .collect();
@@ -605,13 +643,19 @@ fn parse_ai_enrichment(response: &str) -> Result<(String, String, String)> {
         impact: Option<String>,
     }
 
-    let parsed: Enrichment = serde_json::from_str(json_str)
-        .map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+    let parsed: Enrichment =
+        serde_json::from_str(json_str).map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
 
     Ok((
-        parsed.scenario.unwrap_or_else(|| "Attack scenario".to_string()),
-        parsed.entry_point.unwrap_or_else(|| "Unknown entry".to_string()),
-        parsed.impact.unwrap_or_else(|| "Unknown impact".to_string()),
+        parsed
+            .scenario
+            .unwrap_or_else(|| "Attack scenario".to_string()),
+        parsed
+            .entry_point
+            .unwrap_or_else(|| "Unknown entry".to_string()),
+        parsed
+            .impact
+            .unwrap_or_else(|| "Unknown impact".to_string()),
     ))
 }
 
@@ -661,9 +705,19 @@ fn display_chains(chains: &[AttackChain]) {
         ];
         for (idx, (label, value)) in step_labels.iter().enumerate() {
             if idx == 0 {
-                println!("      {} {}  [TARGET] {}", "+-".cyan(), label.bold(), value.yellow());
+                println!(
+                    "      {} {}  [TARGET] {}",
+                    "+-".cyan(),
+                    label.bold(),
+                    value.yellow()
+                );
             } else if idx == step_labels.len() - 1 {
-                println!("      {} {}  [!] {}", "+->".cyan(), label.bold(), value.red().bold());
+                println!(
+                    "      {} {}  [!] {}",
+                    "+->".cyan(),
+                    label.bold(),
+                    value.red().bold()
+                );
             } else {
                 println!("      {} {}  ⚡ {}", "+->".cyan(), label.bold(), value);
             }
@@ -704,7 +758,10 @@ fn display_chains(chains: &[AttackChain]) {
         // Real data-flow evidence (--flow)
         if !chain.evidence.is_empty() {
             println!();
-            println!("    {} Real data-flow evidence (trace):", "[FLOW]".bold().cyan());
+            println!(
+                "    {} Real data-flow evidence (trace):",
+                "[FLOW]".bold().cyan()
+            );
             for step in chain.evidence.iter().take(8) {
                 let file_short = step.file.rsplit('/').next().unwrap_or(&step.file);
                 let action = match step.action.as_str() {

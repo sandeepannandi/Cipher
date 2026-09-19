@@ -1,4 +1,6 @@
-use crate::finding::{Confidence, Finding, FindingReport, FindingType, RemediationEffort, Severity};
+use crate::finding::{
+    Confidence, Finding, FindingReport, FindingType, RemediationEffort, Severity,
+};
 use crate::output;
 use crate::scan;
 use anyhow::{Context, Result};
@@ -32,83 +34,161 @@ fn build_patterns() -> Vec<SecretPattern> {
     }
 
     // API Keys & Tokens
-    add_pattern!("AWS Access Key ID", Severity::High,
-        r"(?i)(?<![a-zA-Z0-9])(AKIA[0-9A-Z]{16})(?![a-zA-Z0-9])");
+    add_pattern!(
+        "AWS Access Key ID",
+        Severity::High,
+        r"(?i)(?<![a-zA-Z0-9])(AKIA[0-9A-Z]{16})(?![a-zA-Z0-9])"
+    );
 
-    add_pattern!("AWS Secret Access Key", Severity::Critical,
-        r"(?i)(?<![a-zA-Z0-9/+=])([a-zA-Z0-9/+=]{40})(?![a-zA-Z0-9/+=])");
+    add_pattern!(
+        "AWS Secret Access Key",
+        Severity::Critical,
+        r"(?i)(?<![a-zA-Z0-9/+=])([a-zA-Z0-9/+=]{40})(?![a-zA-Z0-9/+=])"
+    );
 
-    add_pattern!("Google API Key", Severity::High,
-        r"(?i)(?<![a-zA-Z0-9])(AIza[0-9A-Za-z\-_]{35})(?![a-zA-Z0-9])");
+    add_pattern!(
+        "Google API Key",
+        Severity::High,
+        r"(?i)(?<![a-zA-Z0-9])(AIza[0-9A-Za-z\-_]{35})(?![a-zA-Z0-9])"
+    );
 
-    add_pattern!("Google OAuth Key", Severity::High,
-        r"(?i)(?<![a-zA-Z0-9])([0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com)");
+    add_pattern!(
+        "Google OAuth Key",
+        Severity::High,
+        r"(?i)(?<![a-zA-Z0-9])([0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com)"
+    );
 
-    add_pattern!("GitHub Personal Access Token", Severity::Critical,
-        r"(?i)(ghp_[0-9a-zA-Z]{36}|gho_[0-9a-zA-Z]{36}|ghu_[0-9a-zA-Z]{36}|ghs_[0-9a-zA-Z]{36}|ghr_[0-9a-zA-Z]{36})");
+    add_pattern!(
+        "GitHub Personal Access Token",
+        Severity::Critical,
+        r"(?i)(ghp_[0-9a-zA-Z]{36}|gho_[0-9a-zA-Z]{36}|ghu_[0-9a-zA-Z]{36}|ghs_[0-9a-zA-Z]{36}|ghr_[0-9a-zA-Z]{36})"
+    );
 
-    add_pattern!("GitHub OAuth Token", Severity::Critical,
-        r"(?i)(gho_[0-9a-zA-Z]{36})");
+    add_pattern!(
+        "GitHub OAuth Token",
+        Severity::Critical,
+        r"(?i)(gho_[0-9a-zA-Z]{36})"
+    );
 
-    add_pattern!("GitHub App Token", Severity::Critical,
-        r"(?i)(ghs_[0-9a-zA-Z]{36})");
+    add_pattern!(
+        "GitHub App Token",
+        Severity::Critical,
+        r"(?i)(ghs_[0-9a-zA-Z]{36})"
+    );
 
-    add_pattern!("GitLab Personal Access Token", Severity::Critical,
-        r"(?i)(glpat-[0-9a-zA-Z\-_]{20,})");
+    add_pattern!(
+        "GitLab Personal Access Token",
+        Severity::Critical,
+        r"(?i)(glpat-[0-9a-zA-Z\-_]{20,})"
+    );
 
-    add_pattern!("GitLab CI/CD Token", Severity::High,
-        r"(?i)(glcbt-[0-9a-zA-Z\-_]{20,})");
+    add_pattern!(
+        "GitLab CI/CD Token",
+        Severity::High,
+        r"(?i)(glcbt-[0-9a-zA-Z\-_]{20,})"
+    );
 
-    add_pattern!("Slack Token", Severity::Critical,
-        r"(?i)(xox[baprs]-[0-9a-zA-Z\-_]{10,})");
+    add_pattern!(
+        "Slack Token",
+        Severity::Critical,
+        r"(?i)(xox[baprs]-[0-9a-zA-Z\-_]{10,})"
+    );
 
-    add_pattern!("Discord Bot Token", Severity::Critical,
-        r"(?i)([MN][A-Za-z0-9\-_]{23,25}\.[A-Za-z0-9\-_]{6}\.[A-Za-z0-9\-_]{27})");
+    add_pattern!(
+        "Discord Bot Token",
+        Severity::Critical,
+        r"(?i)([MN][A-Za-z0-9\-_]{23,25}\.[A-Za-z0-9\-_]{6}\.[A-Za-z0-9\-_]{27})"
+    );
 
-    add_pattern!("Stripe Live API Key", Severity::Critical,
-        r"(?i)(sk_live_[0-9a-zA-Z]{24,})");
+    add_pattern!(
+        "Stripe Live API Key",
+        Severity::Critical,
+        r"(?i)(sk_live_[0-9a-zA-Z]{24,})"
+    );
 
-    add_pattern!("Stripe Test API Key", Severity::Low,
-        r"(?i)(sk_test_[0-9a-zA-Z]{24,})");
+    add_pattern!(
+        "Stripe Test API Key",
+        Severity::Low,
+        r"(?i)(sk_test_[0-9a-zA-Z]{24,})"
+    );
 
-    add_pattern!("Stripe Publishable Key", Severity::Low,
-        r"(?i)(pk_test_|pk_live_)[0-9a-zA-Z]{24,}");
+    add_pattern!(
+        "Stripe Publishable Key",
+        Severity::Low,
+        r"(?i)(pk_test_|pk_live_)[0-9a-zA-Z]{24,}"
+    );
 
-    add_pattern!("JWT Token", Severity::Medium,
-        r"(?i)(eyJ[A-Za-z0-9\-_=]+\.eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_+/=]+)");
+    add_pattern!(
+        "JWT Token",
+        Severity::Medium,
+        r"(?i)(eyJ[A-Za-z0-9\-_=]+\.eyJ[A-Za-z0-9\-_=]+\.[A-Za-z0-9\-_+/=]+)"
+    );
 
-    add_pattern!("Azure Storage Key", Severity::High,
-        r"(?i)(DefaultEndpointsProtocol=https;AccountName=[a-zA-Z0-9]+;AccountKey=[a-zA-Z0-9+/=]{40,})");
+    add_pattern!(
+        "Azure Storage Key",
+        Severity::High,
+        r"(?i)(DefaultEndpointsProtocol=https;AccountName=[a-zA-Z0-9]+;AccountKey=[a-zA-Z0-9+/=]{40,})"
+    );
 
-    add_pattern!("Azure Connection String", Severity::High,
-        r"(?i)(Server=[a-zA-Z0-9.\-]+;Database=[a-zA-Z0-9]+;User\s*Id=[a-zA-Z0-9@.\-]+;Password=[^;]+)");
+    add_pattern!(
+        "Azure Connection String",
+        Severity::High,
+        r"(?i)(Server=[a-zA-Z0-9.\-]+;Database=[a-zA-Z0-9]+;User\s*Id=[a-zA-Z0-9@.\-]+;Password=[^;]+)"
+    );
 
-    add_pattern!("Heroku API Key", Severity::High,
-        r"(?i)([hH][eE][rR][oO][kK][uU].*[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})");
+    add_pattern!(
+        "Heroku API Key",
+        Severity::High,
+        r"(?i)([hH][eE][rR][oO][kK][uU].*[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})"
+    );
 
-    add_pattern!("Generic Private Key", Severity::High,
-        r"-----BEGIN\s?(RSA|DSA|EC|OPENSSH|PGP|PRIVATE)\s?KEY-----");
+    add_pattern!(
+        "Generic Private Key",
+        Severity::High,
+        r"-----BEGIN\s?(RSA|DSA|EC|OPENSSH|PGP|PRIVATE)\s?KEY-----"
+    );
 
-    add_pattern!("Password in Code", Severity::Medium,
-        r#"(?i)(password|passwd|pwd)\s*[=:]\s*['"][^'"]{4,}['"]"#);
+    add_pattern!(
+        "Password in Code",
+        Severity::Medium,
+        r#"(?i)(password|passwd|pwd)\s*[=:]\s*['"][^'"]{4,}['"]"#
+    );
 
-    add_pattern!("Secret in Code", Severity::Medium,
-        r#"(?i)(secret|token|api[_-]?key|auth[_-]?key)\s*[=:]\s*['"][^'"]{8,}['"]"#);
+    add_pattern!(
+        "Secret in Code",
+        Severity::Medium,
+        r#"(?i)(secret|token|api[_-]?key|auth[_-]?key)\s*[=:]\s*['"][^'"]{8,}['"]"#
+    );
 
-    add_pattern!("Database Connection String", Severity::High,
-        r"(?i)(postgresql|mysql|mongodb|redis|rediss)://[a-zA-Z0-9]+:[^@]+@");
+    add_pattern!(
+        "Database Connection String",
+        Severity::High,
+        r"(?i)(postgresql|mysql|mongodb|redis|rediss)://[a-zA-Z0-9]+:[^@]+@"
+    );
 
-    add_pattern!("npm Auth Token", Severity::High,
-        r"(?i)(//registry\.npmjs\.org/:_authToken=)[a-zA-Z0-9\-_]+");
+    add_pattern!(
+        "npm Auth Token",
+        Severity::High,
+        r"(?i)(//registry\.npmjs\.org/:_authToken=)[a-zA-Z0-9\-_]+"
+    );
 
-    add_pattern!("Slack Webhook URL", Severity::High,
-        r"https://hooks\.slack\.com/services/[A-Za-z0-9]+/[A-Za-z0-9]+/[A-Za-z0-9]+");
+    add_pattern!(
+        "Slack Webhook URL",
+        Severity::High,
+        r"https://hooks\.slack\.com/services/[A-Za-z0-9]+/[A-Za-z0-9]+/[A-Za-z0-9]+"
+    );
 
-    add_pattern!("Google Service Account", Severity::Critical,
-        r#"(?i)"type":\s*"service_account""#);
+    add_pattern!(
+        "Google Service Account",
+        Severity::Critical,
+        r#"(?i)"type":\s*"service_account""#
+    );
 
-    add_pattern!("AWS Secret Key Pattern", Severity::Critical,
-        r#"(?i)(aws_secret_access_key|aws_secret_key)\s*[=:]\s*['"][a-zA-Z0-9/+=]{40}['"]"#);
+    add_pattern!(
+        "AWS Secret Key Pattern",
+        Severity::Critical,
+        r#"(?i)(aws_secret_access_key|aws_secret_key)\s*[=:]\s*['"][a-zA-Z0-9/+=]{40}['"]"#
+    );
 
     patterns
 }
@@ -184,7 +264,6 @@ fn scan_file(path: &Path, patterns: &[SecretPattern]) -> Vec<Finding> {
 
 /// Check if a path should be excluded
 
-
 /// Collect secret findings without displaying them (for report generation)
 pub(crate) fn collect_secrets_findings(scan_path: &Path) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(scan_path)
@@ -222,15 +301,14 @@ pub(crate) fn collect_secrets_findings(scan_path: &Path) -> Result<FindingReport
 }
 
 /// Run the `cipher-ai secrets` command
-pub async fn run_secrets(
-    scan_path: &Path,
-    format: &str,
-    fail_on: Option<&str>,
-) -> Result<()> {
+pub async fn run_secrets(scan_path: &Path, format: &str, fail_on: Option<&str>) -> Result<()> {
     let canonical_path = std::fs::canonicalize(scan_path)
         .with_context(|| format!("Cannot access path: {}", scan_path.display()))?;
 
-    output::print_header("Secrets Scan", Some(&format!("Scanning {}", canonical_path.display())));
+    output::print_header(
+        "Secrets Scan",
+        Some(&format!("Scanning {}", canonical_path.display())),
+    );
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(
@@ -246,16 +324,29 @@ pub async fn run_secrets(
     pb.finish_and_clear();
 
     // Group by severity for display
-    let critical_count = report.findings.iter().filter(|f| f.severity == Severity::Critical).count();
-    let high_count = report.findings.iter().filter(|f| f.severity == Severity::High).count();
-    let medium_count = report.findings.iter().filter(|f| f.severity == Severity::Medium).count();
-    let low_count = report.findings.iter().filter(|f| f.severity == Severity::Low).count();
+    let critical_count = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == Severity::Critical)
+        .count();
+    let high_count = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == Severity::High)
+        .count();
+    let medium_count = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == Severity::Medium)
+        .count();
+    let low_count = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == Severity::Low)
+        .count();
 
     println!();
-    println!(
-        "{} Scanned project directory",
-        "[STATS]".bright_blue()
-    );
+    println!("{} Scanned project directory", "[STATS]".bright_blue());
     println!(
         "  {} {} CRITICAL  {} {} HIGH  {} {} MEDIUM  {} {} LOW",
         "*".red().bold(),
@@ -270,7 +361,10 @@ pub async fn run_secrets(
 
     if report.is_empty() {
         println!();
-        println!("{} No secrets found! Your codebase looks clean.", "[OK]".green().bold());
+        println!(
+            "{} No secrets found! Your codebase looks clean.",
+            "[OK]".green().bold()
+        );
         return Ok(());
     }
 
@@ -289,8 +383,17 @@ pub async fn run_secrets(
     } else if format == "compact" {
         for finding in &report.findings {
             let fp = finding.file_path.as_deref().unwrap_or("<unknown>");
-            let ln = finding.line_number.map(|l| l.to_string()).unwrap_or_default();
-            println!("{} {}:{} {}", finding.severity.badge(), fp, ln, finding.title.dimmed());
+            let ln = finding
+                .line_number
+                .map(|l| l.to_string())
+                .unwrap_or_default();
+            println!(
+                "{} {}:{} {}",
+                finding.severity.badge(),
+                fp,
+                ln,
+                finding.title.dimmed()
+            );
         }
     } else {
         // "pretty" format (default)
@@ -299,8 +402,16 @@ pub async fn run_secrets(
             println!("  {} {}", "[FOLDER]".cyan(), file_path.bold());
             for finding in findings {
                 let badge = finding.severity.badge();
-                let line_str = finding.line_number.map(|l| format!("Line {}", l)).unwrap_or_default();
-                println!("    {} {}  {}", badge, line_str.yellow(), finding.title.bold());
+                let line_str = finding
+                    .line_number
+                    .map(|l| format!("Line {}", l))
+                    .unwrap_or_default();
+                println!(
+                    "    {} {}  {}",
+                    badge,
+                    line_str.yellow(),
+                    finding.title.bold()
+                );
                 if let Some(ref snippet) = finding.code_snippet {
                     let shown = snippet.trim();
                     if shown.len() > 100 {
@@ -340,5 +451,3 @@ pub async fn run_secrets(
 
     Ok(())
 }
-
-

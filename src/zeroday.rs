@@ -22,39 +22,97 @@ const BRANCH_THRESHOLD: usize = 6;
 
 /// Known input sources (variables/functions that bring untrusted data)
 const TAINT_SOURCES: &[&str] = &[
-    "request", "req", "params", "body", "query", "input",
-    "$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_SERVER",
-    "ctx.request", "self.request", "this.request",
-    "args", "kwargs", "argv", "stdin",
-    "get_query_params", "get_json_args", "form_data",
-    "request.data", "request.json", "request.form",
-    "req.body", "req.query", "req.params",
-    "getInput", "getParameter", "getQueryString",
-    "HttpServletRequest", "HttpRequest",
+    "request",
+    "req",
+    "params",
+    "body",
+    "query",
+    "input",
+    "$_GET",
+    "$_POST",
+    "$_REQUEST",
+    "$_COOKIE",
+    "$_SERVER",
+    "ctx.request",
+    "self.request",
+    "this.request",
+    "args",
+    "kwargs",
+    "argv",
+    "stdin",
+    "get_query_params",
+    "get_json_args",
+    "form_data",
+    "request.data",
+    "request.json",
+    "request.form",
+    "req.body",
+    "req.query",
+    "req.params",
+    "getInput",
+    "getParameter",
+    "getQueryString",
+    "HttpServletRequest",
+    "HttpRequest",
 ];
 
 /// Known dangerous sinks (functions that execute/query/write to system)
 const TAINT_SINKS: &[&str] = &[
-    "exec", "system", "popen", "eval", "assert",
-    "query", "execute", "raw_query", "rawQuery",
-    "open", "write", "delete", "chmod", "unlink",
-    "fs.writeFile", "fs.writeFileSync", "fs.appendFile",
-    "os.system", "subprocess.call", "subprocess.Popen",
-    "shell_exec", "passthru", "proc_open",
-    "runtime.exec", "ProcessBuilder",
-    "cmd.exe", "/bin/sh", "/bin/bash",
+    "exec",
+    "system",
+    "popen",
+    "eval",
+    "assert",
+    "query",
+    "execute",
+    "raw_query",
+    "rawQuery",
+    "open",
+    "write",
+    "delete",
+    "chmod",
+    "unlink",
+    "fs.writeFile",
+    "fs.writeFileSync",
+    "fs.appendFile",
+    "os.system",
+    "subprocess.call",
+    "subprocess.Popen",
+    "shell_exec",
+    "passthru",
+    "proc_open",
+    "runtime.exec",
+    "ProcessBuilder",
+    "cmd.exe",
+    "/bin/sh",
+    "/bin/bash",
 ];
 
 /// Known sanitization/validation functions (breaks taint propagation)
 const SANITIZERS: &[&str] = &[
-    "sanitize", "validate", "escape", "filter",
-    "htmlspecialchars", "htmlentities", "strip_tags",
-    "escapeHtml", "escapeShellArg", "escapeshellarg",
-    "encodeURI", "encodeURIComponent",
-    "parseInt", "parseFloat", "Number",
-    "intval", "floatval", "filter_var",
-    "is_numeric", "ctype_digit", "preg_match",
-    "str_replace", "preg_replace",
+    "sanitize",
+    "validate",
+    "escape",
+    "filter",
+    "htmlspecialchars",
+    "htmlentities",
+    "strip_tags",
+    "escapeHtml",
+    "escapeShellArg",
+    "escapeshellarg",
+    "encodeURI",
+    "encodeURIComponent",
+    "parseInt",
+    "parseFloat",
+    "Number",
+    "intval",
+    "floatval",
+    "filter_var",
+    "is_numeric",
+    "ctype_digit",
+    "preg_match",
+    "str_replace",
+    "preg_replace",
 ];
 
 // ── Anomaly Types ───────────────────────────────────────────────────
@@ -181,7 +239,9 @@ impl ZerodayFinding {
 
         // Tag with appropriate OWASP category
         match anomaly_type {
-            AnomalyType::DangerousApiProximity | AnomalyType::TaintedPath | AnomalyType::UntrustedToSink => {
+            AnomalyType::DangerousApiProximity
+            | AnomalyType::TaintedPath
+            | AnomalyType::UntrustedToSink => {
                 finding = finding.with_owasp(OwaspCategory::A03Injection);
             }
             AnomalyType::MissingBoundaryCheck => {
@@ -316,10 +376,22 @@ impl ZerodayReport {
             .chain(self.ai_findings.iter())
             .collect::<Vec<_>>();
 
-        let critical = all.iter().filter(|f| f.finding.severity == Severity::Critical).count();
-        let high = all.iter().filter(|f| f.finding.severity == Severity::High).count();
-        let medium = all.iter().filter(|f| f.finding.severity == Severity::Medium).count();
-        let low = all.iter().filter(|f| f.finding.severity == Severity::Low).count();
+        let critical = all
+            .iter()
+            .filter(|f| f.finding.severity == Severity::Critical)
+            .count();
+        let high = all
+            .iter()
+            .filter(|f| f.finding.severity == Severity::High)
+            .count();
+        let medium = all
+            .iter()
+            .filter(|f| f.finding.severity == Severity::Medium)
+            .count();
+        let low = all
+            .iter()
+            .filter(|f| f.finding.severity == Severity::Low)
+            .count();
 
         println!(
             "  {} {}  {} {}  {} {}  {} {}  ({} total)",
@@ -368,7 +440,12 @@ fn print_zeroday_finding(zf: &ZerodayFinding) {
             .line_number
             .map(|l| format!(":{}", l))
             .unwrap_or_default();
-        println!("    {} {}{}", "File:".bold().dimmed(), fp.yellow(), line_info);
+        println!(
+            "    {} {}{}",
+            "File:".bold().dimmed(),
+            fp.yellow(),
+            line_info
+        );
     }
     if let Some(ref code) = zf.finding.code_snippet {
         for line in code.lines().take(3) {
@@ -647,8 +724,8 @@ fn detect_missing_boundary_checks(ctx: &FileContext) -> Vec<ZerodayFinding> {
         // Look for unchecked array access patterns
         let has_unchecked_access = {
             let unchecked = [
-                "array[", "list[", "vector[", "arr[", "data[", "items[",
-                "results[", "records[", "rows[",
+                "array[", "list[", "vector[", "arr[", "data[", "items[", "results[", "records[",
+                "rows[",
             ];
             unchecked.iter().any(|p| lower.contains(p))
         };
@@ -742,9 +819,7 @@ fn detect_type_confusion(ctx: &FileContext) -> Vec<ZerodayFinding> {
                     return false;
                 }
                 let nl = ctx.lines[j].trim().to_lowercase();
-                TAINT_SOURCES
-                    .iter()
-                    .any(|s| nl.contains(&s.to_lowercase()))
+                TAINT_SOURCES.iter().any(|s| nl.contains(&s.to_lowercase()))
             });
 
             if has_data_nearby {
@@ -837,7 +912,10 @@ fn detect_suspicious_error_handling(ctx: &FileContext) -> Vec<ZerodayFinding> {
                             // End of catch block
                             // Check if it was empty/too small
                             let block_lines = line_num - catch_start;
-                            if block_lines <= 2 && !lower.contains("log") && !lower.contains("error") {
+                            if block_lines <= 2
+                                && !lower.contains("log")
+                                && !lower.contains("error")
+                            {
                                 findings.push(ZerodayFinding::new(
                                     AnomalyType::SuspiciousErrorHandling,
                                     "Bare/silent catch block — errors swallowed",
@@ -942,25 +1020,27 @@ fn detect_taint_flow(ctx: &FileContext) -> Vec<ZerodayFinding> {
         for tainted_var in tainted_vars.keys() {
             let var_lower = tainted_var.to_lowercase();
             for sink in TAINT_SINKS {
-                if lower.contains(sink) && (lower.contains(&var_lower) || trimmed.contains(&var_lower)) {
+                if lower.contains(sink)
+                    && (lower.contains(&var_lower) || trimmed.contains(&var_lower))
+                {
                     // Check if there's sanitization nearby
                     // Look up when this variable was defined
                     if let Some(&def_line) = tainted_vars.get(tainted_var) {
-                    let start = if i >= 3 { i - 3 } else { 0 };
-                    let has_sanitizer = (start..=i).any(|j| {
-                        let prev_lower = ctx.lines[j].trim().to_lowercase();
-                        SANITIZERS.iter().any(|s| prev_lower.contains(s))
-                    });
+                        let start = if i >= 3 { i - 3 } else { 0 };
+                        let has_sanitizer = (start..=i).any(|j| {
+                            let prev_lower = ctx.lines[j].trim().to_lowercase();
+                            SANITIZERS.iter().any(|s| prev_lower.contains(s))
+                        });
 
-                    if !has_sanitizer {
-                        let snippet = get_snippet_range(&ctx.lines, def_line, line_num);
-                        let risk = if sink == &"exec" || sink == &"system" || sink == &"eval" {
-                            Severity::Critical
-                        } else {
-                            Severity::High
-                        };
+                        if !has_sanitizer {
+                            let snippet = get_snippet_range(&ctx.lines, def_line, line_num);
+                            let risk = if sink == &"exec" || sink == &"system" || sink == &"eval" {
+                                Severity::Critical
+                            } else {
+                                Severity::High
+                            };
 
-                        findings.push(ZerodayFinding::new(
+                            findings.push(ZerodayFinding::new(
                             AnomalyType::UntrustedToSink,
                             &format!(
                                 "Untrusted data '{}' reaches dangerous sink: {}",
@@ -985,7 +1065,7 @@ fn detect_taint_flow(ctx: &FileContext) -> Vec<ZerodayFinding> {
                                 tainted_var, sink
                             ),
                         ));
-                    }
+                        }
                     }
                     break;
                 }
@@ -996,13 +1076,20 @@ fn detect_taint_flow(ctx: &FileContext) -> Vec<ZerodayFinding> {
         let has_path_source = TAINT_SOURCES
             .iter()
             .any(|s| lower.contains(&s.to_lowercase()));
-        let has_path_sink = ["open(", "fopen(", "readfile(", "file_get_contents", "fs::read", "File::open"]
-            .iter()
-            .any(|s| lower.contains(s));
+        let has_path_sink = [
+            "open(",
+            "fopen(",
+            "readfile(",
+            "file_get_contents",
+            "fs::read",
+            "File::open",
+        ]
+        .iter()
+        .any(|s| lower.contains(s));
 
         if has_path_source && has_path_sink {
-            let has_sanitizer_nearby = (if i >= 5 { i - 5 } else { 0 }..std::cmp::min(i + 2, ctx.lines.len()))
-                .any(|j| {
+            let has_sanitizer_nearby =
+                (if i >= 5 { i - 5 } else { 0 }..std::cmp::min(i + 2, ctx.lines.len())).any(|j| {
                     let pl = ctx.lines[j].trim().to_lowercase();
                     pl.contains("..")
                         || pl.contains("basename")
@@ -1080,7 +1167,10 @@ async fn run_ai_zeroday(
         if reviewed_chunks.len() >= 50 {
             break;
         }
-        progress.set_message(format!("AI analyzing: {}...", &query[..std::cmp::min(query.len(), 40)]));
+        progress.set_message(format!(
+            "AI analyzing: {}...",
+            &query[..std::cmp::min(query.len(), 40)]
+        ));
 
         let results = indexer::search_index(&index, query, 3);
         for chunk in results {
@@ -1188,7 +1278,9 @@ fn parse_ai_zeroday_findings(response: &str, project_path: &Path) -> Result<Vec<
     let mut findings = Vec::new();
 
     for af in ai_response.findings {
-        let title = af.title.unwrap_or_else(|| "Unknown zero-day vulnerability".to_string());
+        let title = af
+            .title
+            .unwrap_or_else(|| "Unknown zero-day vulnerability".to_string());
         let description = af.description.unwrap_or_default();
         let severity = parse_zeroday_severity(&af.severity.unwrap_or_default());
         let confidence = parse_zeroday_confidence(&af.confidence.unwrap_or_default());
@@ -1201,7 +1293,10 @@ fn parse_ai_zeroday_findings(response: &str, project_path: &Path) -> Result<Vec<
         let (file_path, line_number) = match af.file_path {
             Some(fp) => {
                 let full_path = project_path.join(&fp);
-                (full_path.to_string_lossy().to_string(), af.line_number.unwrap_or(0))
+                (
+                    full_path.to_string_lossy().to_string(),
+                    af.line_number.unwrap_or(0),
+                )
             }
             None => continue,
         };
@@ -1215,7 +1310,9 @@ fn parse_ai_zeroday_findings(response: &str, project_path: &Path) -> Result<Vec<
             &file_path,
             line_number,
             "",
-            af.remediation.as_deref().unwrap_or("Review and fix manually"),
+            af.remediation
+                .as_deref()
+                .unwrap_or("Review and fix manually"),
         ));
     }
 
@@ -1253,7 +1350,8 @@ pub fn is_function_signature(line: &str, ext: &str) -> bool {
     }
     // Java/C#/Kotlin/C++
     let sig_keywords = ["public ", "private ", "protected ", "internal "];
-    if sig_keywords.iter().any(|k| lower.contains(k)) && lower.contains('(') && lower.contains(')') {
+    if sig_keywords.iter().any(|k| lower.contains(k)) && lower.contains('(') && lower.contains(')')
+    {
         return true;
     }
     // PHP
@@ -1297,8 +1395,7 @@ pub fn extract_assigned_var(line: &str) -> Option<String> {
 
     // Pattern: let/mut/var/const x = ...
     // Put longer patterns first so "let mut " is checked before "let "
-    for keyword in &["let mut ", "let ", "var ", "const ", "val ", "final "]
-    {
+    for keyword in &["let mut ", "let ", "var ", "const ", "val ", "final "] {
         if trimmed.to_lowercase().starts_with(keyword) {
             let after = &trimmed[keyword.len()..].trim();
             if let Some(eq) = after.find('=') {
@@ -1450,7 +1547,8 @@ pub async fn collect_zeroday_findings(
                     if !ext.is_empty() && is_supported_ext(&ext) {
                         match std::fs::read_to_string(path) {
                             Ok(content) => {
-                                let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+                                let lines: Vec<String> =
+                                    content.lines().map(|l| l.to_string()).collect();
                                 let ctx = FileContext {
                                     path: path.to_string_lossy().to_string(),
                                     lines,
@@ -1477,8 +1575,16 @@ pub async fn collect_zeroday_findings(
         }
     }
 
-    report.anomalies.sort_by(|a, b| b.risk_score.partial_cmp(&a.risk_score).unwrap_or(std::cmp::Ordering::Equal));
-    report.flow_findings.sort_by(|a, b| b.risk_score.partial_cmp(&a.risk_score).unwrap_or(std::cmp::Ordering::Equal));
+    report.anomalies.sort_by(|a, b| {
+        b.risk_score
+            .partial_cmp(&a.risk_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    report.flow_findings.sort_by(|a, b| {
+        b.risk_score
+            .partial_cmp(&a.risk_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Ok(report)
 }
@@ -1500,13 +1606,27 @@ pub async fn run_zeroday(
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
-    output::print_header("Zero-Day Vulnerability Analysis", Some("3-layer novel vulnerability detection"));
-    output::print_info("Layers", &format!(
-        "{}{}{}",
-        "Anomaly Detection".bold(),
-        if !no_flow { " + Taint Flow Analysis".to_string() } else { String::new() },
-        if use_ai { " + AI Zero-Day Hunter".to_string() } else { String::new() },
-    ));
+    output::print_header(
+        "Zero-Day Vulnerability Analysis",
+        Some("3-layer novel vulnerability detection"),
+    );
+    output::print_info(
+        "Layers",
+        &format!(
+            "{}{}{}",
+            "Anomaly Detection".bold(),
+            if !no_flow {
+                " + Taint Flow Analysis".to_string()
+            } else {
+                String::new()
+            },
+            if use_ai {
+                " + AI Zero-Day Hunter".to_string()
+            } else {
+                String::new()
+            },
+        ),
+    );
 
     // Use the shared collection function
     let mut report = collect_zeroday_findings(project_path, anomaly_only, no_flow).await?;
@@ -1526,16 +1646,20 @@ pub async fn run_zeroday(
             Ok(ai_findings) => {
                 report.ai_findings = ai_findings;
                 if !report.ai_findings.is_empty() {
-                    output::print_ok("AI Hunter", &format!(
-                        "found {} novel zero-day candidates",
-                        report.ai_findings.len().to_string().bold()
-                    ));
+                    output::print_ok(
+                        "AI Hunter",
+                        &format!(
+                            "found {} novel zero-day candidates",
+                            report.ai_findings.len().to_string().bold()
+                        ),
+                    );
                 }
             }
             Err(e) => {
-                output::print_warn("AI Hunter", &format!(
-                    "analysis failed: {} (continuing with static analysis)", e
-                ));
+                output::print_warn(
+                    "AI Hunter",
+                    &format!("analysis failed: {} (continuing with static analysis)", e),
+                );
             }
         }
     }
@@ -1551,11 +1675,14 @@ pub async fn run_zeroday(
 
         if let Some(out_path) = output {
             std::fs::write(out_path, &output_str)?;
-            output::print_ok("Output", &format!(
-                "{} written to {}",
-                format.to_uppercase().yellow().bold(),
-                out_path.yellow()
-            ));
+            output::print_ok(
+                "Output",
+                &format!(
+                    "{} written to {}",
+                    format.to_uppercase().yellow().bold(),
+                    out_path.yellow()
+                ),
+            );
         } else {
             println!("{}", output_str);
         }
@@ -1583,8 +1710,28 @@ pub async fn run_zeroday(
 fn is_supported_ext(ext: &str) -> bool {
     matches!(
         ext,
-        "rs" | "js" | "jsx" | "ts" | "tsx" | "py" | "go" | "rb" | "java" | "kt"
-            | "swift" | "c" | "cpp" | "h" | "hpp" | "cs" | "php" | "sh" | "bash"
-            | "vue" | "svelte" | "dart" | "scala" | "lua"
+        "rs" | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "py"
+            | "go"
+            | "rb"
+            | "java"
+            | "kt"
+            | "swift"
+            | "c"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "cs"
+            | "php"
+            | "sh"
+            | "bash"
+            | "vue"
+            | "svelte"
+            | "dart"
+            | "scala"
+            | "lua"
     )
 }
