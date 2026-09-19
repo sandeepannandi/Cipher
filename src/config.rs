@@ -199,6 +199,110 @@ fn render_key_line(name: &str, env_var: &str, is_set: bool) -> String {
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoctorKeyStatus {
+    pub provider: String,
+    pub key: String,
+    pub env_var: String,
+    pub configured: bool,
+    pub value: Option<String>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoctorReport {
+    pub provider: String,
+    pub config_path: String,
+    pub active_key_status: DoctorKeyStatus,
+    pub provider_key_status: Vec<DoctorKeyStatus>,
+    pub action: String,
+    pub suggestion: String,
+}
+
+pub fn doctor_report() -> Result<DoctorReport> {
+    let config = load_config().unwrap_or_default();
+    let provider = std::env::var("CIPHER_AI_PROVIDER")
+        .ok()
+        .or(config.provider.clone())
+        .unwrap_or_else(|| "groq".to_string());
+
+    let active_provider =
+        crate::llm::AiProvider::parse(&provider).unwrap_or(crate::llm::AiProvider::Groq);
+
+    let provider_key_status: Vec<DoctorKeyStatus> = crate::llm::AiProvider::all()
+        .iter()
+        .map(|p| {
+            let env_present = std::env::var(p.env_var())
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .is_some();
+            let config_present = match p {
+                crate::llm::AiProvider::Groq => config.groq_api_key.as_ref().is_some(),
+                crate::llm::AiProvider::OpenAI => config.openai_api_key.as_ref().is_some(),
+                crate::llm::AiProvider::Anthropic => config.anthropic_api_key.as_ref().is_some(),
+            };
+            let configured = env_present || config_present;
+            let source = if env_present {
+                "env".to_string()
+            } else if config_present {
+                "config".to_string()
+            } else {
+                "missing".to_string()
+            };
+            DoctorKeyStatus {
+                provider: p.as_str().to_string(),
+                key: p.env_var().to_string(),
+                env_var: p.env_var().to_string(),
+                configured,
+                value: None,
+                source,
+            }
+        })
+        .collect();
+
+    let active_key_status = provider_key_status
+        .iter()
+        .find(|status| status.provider == active_provider.as_str())
+        .cloned()
+        .unwrap_or(DoctorKeyStatus {
+            provider: active_provider.as_str().to_string(),
+            key: active_provider.env_var().to_string(),
+            env_var: active_provider.env_var().to_string(),
+            configured: false,
+            value: None,
+            source: "missing".to_string(),
+        });
+
+    let action = if active_key_status.configured {
+        "ready".to_string()
+    } else {
+        "needs-setup".to_string()
+    };
+
+    let config_path = config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "<unknown>".to_string());
+    let mut suggestion = format!(
+        "Run 'cipher-ai config set {} <key>' or export {}=your_key_here",
+        active_provider.config_key(),
+        active_provider.env_var()
+    );
+    if config_path == "<unknown>" {
+        suggestion = "Export HOME or USERPROFILE to a valid writable directory, then retry 'cipher-ai doctor'.".to_string();
+    } else if active_key_status.configured {
+        suggestion = "No action required for the active provider.".to_string();
+    }
+
+    Ok(DoctorReport {
+        provider,
+        config_path,
+        active_key_status,
+        provider_key_status,
+        action,
+        suggestion,
+    })
+}
+
 pub fn run_config_show() -> Result<()> {
     let config = load_config()?;
 
@@ -279,6 +383,51 @@ pub fn run_config_show() -> Result<()> {
     Ok(())
 }
 
+pub fn run_doctor(format: &str) -> Result<()> {
+    let report = doctor_report()?;
+    if format.eq_ignore_ascii_case("json") {
+        let json = serde_json::to_string_pretty(&report)?;
+        if !report.active_key_status.configured {
+            println!("{json}");
+            return Err(anyhow::anyhow!(report.suggestion.clone()));
+        }
+        println!("{json}");
+        return Ok(());
+    }
+
+    println!("{}", "CipherAI doctor".bold());
+    println!("  {} {}", "Provider:".bold(), report.provider.cyan());
+    println!("  {} {}", "Config:".bold(), report.config_path.dimmed());
+    println!("  {} {}", "Status:".bold(), report.action.green());
+
+    println!("  {}", "Key status:".bold());
+    for status in &report.provider_key_status {
+        let state = if status.configured {
+            "configured".green()
+        } else {
+            "missing".red()
+        };
+        println!(
+            "    - {} ({}): {} [{}]",
+            status.provider, status.env_var, state, status.source
+        );
+    }
+
+    let active = &report.active_key_status;
+    if !active.configured {
+        eprintln!(
+            "\n{} {}",
+            "Missing active key for {}".red().bold(),
+            active.provider
+        );
+        eprintln!("  {}", report.suggestion.yellow());
+        return Err(anyhow::anyhow!(report.suggestion.clone()));
+    }
+
+    println!("  {} {}", "Guidance:".bold(), report.suggestion.green());
+    Ok(())
+}
+
 pub fn run_config(action: Option<&str>, key: Option<&str>, value: Option<&str>) -> Result<()> {
     match action {
         Some("set") => {
@@ -291,5 +440,79 @@ pub fn run_config(action: Option<&str>, key: Option<&str>, value: Option<&str>) 
             run_config_get(k)
         }
         _ => run_config_show(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_doctor_report_masks_secret_status() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("CIPHER_AI_PROVIDER", "openai");
+        std::env::remove_var("GROQ_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+
+        let report = doctor_report().unwrap();
+        assert_eq!(report.provider, "openai");
+        assert_eq!(report.active_key_status.key, "OPENAI_API_KEY");
+        assert_eq!(report.active_key_status.env_var, "OPENAI_API_KEY");
+        assert!(!report.active_key_status.configured);
+        assert!(report.provider_key_status.iter().all(|s| s.value.is_none()));
+    }
+
+    #[test]
+    fn test_doctor_report_handles_missing_home_actionably() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
+        std::env::remove_var("HOME");
+        std::env::remove_var("USERPROFILE");
+
+        let report = doctor_report().unwrap();
+        assert_eq!(report.config_path, "<unknown>");
+        assert!(
+            report.suggestion.to_ascii_lowercase().contains("home")
+                || report
+                    .suggestion
+                    .to_ascii_lowercase()
+                    .contains("userprofile")
+        );
+
+        match previous_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_userprofile {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+    }
+
+    #[test]
+    fn test_config_path_missing_home_returns_error() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
+        std::env::remove_var("HOME");
+        std::env::remove_var("USERPROFILE");
+
+        let result = config_path();
+
+        match previous_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_userprofile {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+
+        assert!(result.is_err());
     }
 }

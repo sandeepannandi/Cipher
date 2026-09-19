@@ -259,6 +259,13 @@ enum Commands {
         value: Option<String>,
     },
 
+    /// Check provider setup, config path, and missing-key guidance without printing secrets
+    Doctor {
+        /// Output format: terminal (default) or json
+        #[arg(long = "format", default_value = "terminal")]
+        format: String,
+    },
+
     /// Detect zero-day (novel/unknown) vulnerabilities using 3-layer analysis
     ///
     /// Layer 1: Anomaly Detection — finds suspicious code patterns
@@ -674,6 +681,9 @@ async fn main() -> Result<()> {
         }
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
+        }
+        Commands::Doctor { format } => {
+            config::run_doctor(&format)?;
         }
         Commands::Pentest {
             objective,

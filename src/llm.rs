@@ -511,7 +511,7 @@ struct AnthropicContent {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /// Resolve the active provider: CIPHER_AI_PROVIDER > config provider > groq.
-fn resolve_provider() -> Result<AiProvider> {
+pub fn resolve_provider() -> Result<AiProvider> {
     let raw = std::env::var(ENV_PROVIDER)
         .ok()
         .or_else(crate::config::stored_provider)
@@ -531,7 +531,7 @@ fn resolve_provider() -> Result<AiProvider> {
 
 /// Resolve the API key for a provider: env var first, then the persisted
 /// config-file key for that provider.
-fn resolve_api_key(provider: AiProvider) -> Option<String> {
+pub fn resolve_api_key(provider: AiProvider) -> Option<String> {
     let from_env = std::env::var(provider.env_var()).ok();
     let from_config: Option<String> = match provider {
         AiProvider::Groq => crate::config::stored_api_key(),
@@ -542,9 +542,9 @@ fn resolve_api_key(provider: AiProvider) -> Option<String> {
 }
 
 /// Build the actionable "missing key" error for a provider.
-fn missing_key_message(provider: AiProvider) -> String {
+pub fn missing_key_message(provider: AiProvider) -> String {
     format!(
-        "{} not found. Set it via:\n  export {}=your_key_here\n  or add it to a .env file in your project root.\n  or persist it with: cipher-ai config set {} <key>",
+        "{} not found. Set it with:\n  export {}=your_key_here\n  or persist it with: cipher-ai config set {} <key>\n  or add it to a .env file in your project root.",
         provider.env_var(),
         provider.env_var(),
         provider.config_key()
