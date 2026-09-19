@@ -464,29 +464,23 @@ pub(crate) async fn collect_review_findings(
             break;
         }
 
-        match result {
-            Ok(entry) => {
-                let path = entry.path();
-                if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
-                    let ext = file_extension(path);
-                    if !ext.is_empty() && is_supported_extension(&ext) {
-                        let findings = scan_file_for_vulns(path, &patterns);
-                        report.extend(findings);
-                        file_count += 1;
-                    }
+        if let Ok(entry) = result {
+            let path = entry.path();
+            if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
+                let ext = file_extension(path);
+                if !ext.is_empty() && is_supported_extension(&ext) {
+                    let findings = scan_file_for_vulns(path, &patterns);
+                    report.extend(findings);
+                    file_count += 1;
                 }
             }
-            Err(_) => {}
         }
     }
 
     // AI-powered deep analysis
     if use_ai {
-        match run_ai_review(&canonical_path, model).await {
-            Ok(ai_findings) => {
-                report.extend(ai_findings);
-            }
-            Err(_) => {}
+        if let Ok(ai_findings) = run_ai_review(&canonical_path, model).await {
+            report.extend(ai_findings);
         }
     }
 
@@ -622,7 +616,7 @@ pub async fn run_review(
                 out_path.yellow()
             );
         } else {
-            println!("{}", output_str);
+            println!("{output_str}");
         }
         return Ok(report);
     }
@@ -637,9 +631,9 @@ pub async fn run_review(
     println!("  {}", "-".repeat(50).dimmed());
 
     let filter_info = match (min_severity, min_confidence) {
-        (Some(s), Some(c)) => format!(" (filtered: >={} severity, >={} confidence)", s, c),
-        (Some(s), None) => format!(" (filtered: >={} severity)", s),
-        (None, Some(c)) => format!(" (filtered: >={} confidence)", c),
+        (Some(s), Some(c)) => format!(" (filtered: >={s} severity, >={c} confidence)"),
+        (Some(s), None) => format!(" (filtered: >={s} severity)"),
+        (None, Some(c)) => format!(" (filtered: >={c} confidence)"),
         (None, None) => String::new(),
     };
 
@@ -659,7 +653,7 @@ pub async fn run_review(
             filter_info
         )
     };
-    println!("{}", showing_info);
+    println!("{showing_info}");
 
     // Build a mini report for display
     let mut display_report =
@@ -722,7 +716,7 @@ pub async fn run_review(
                 "      • {} in {} {}",
                 f.title.bold(),
                 fp.yellow(),
-                f.line_number.map(|l| format!(":{}", l)).unwrap_or_default()
+                f.line_number.map(|l| format!(":{l}")).unwrap_or_default()
             );
         }
         if critical_high.len() > 5 {
@@ -886,7 +880,7 @@ If no vulnerabilities found, return {{"findings": []}}."#
     let response = client
         .chat(system_prompt, &user_prompt, model)
         .await
-        .map_err(|e| anyhow::anyhow!("AI analysis failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("AI analysis failed: {e}"))?;
 
     match parse_ai_findings(&response, project_path) {
         Ok(findings) => {
@@ -960,11 +954,11 @@ fn parse_ai_findings(response: &str, project_path: &Path) -> Result<Vec<Finding>
             struct FindingsOnly {
                 findings: Vec<AiFinding>,
             }
-            match serde_json::from_str::<FindingsOnly>(&format!("{{\"findings\":{}}}", json_str)) {
+            match serde_json::from_str::<FindingsOnly>(&format!("{{\"findings\":{json_str}}}")) {
                 Ok(r) => AiResponse {
                     findings: r.findings,
                 },
-                Err(e) => anyhow::bail!("JSON parse error: {}", e),
+                Err(e) => anyhow::bail!("JSON parse error: {e}"),
             }
         }
     };
@@ -1271,13 +1265,13 @@ fn parse_cwe(s: &str) -> Option<String> {
         if num.is_empty() {
             return None;
         }
-        Some(format!("CWE-{}", num))
+        Some(format!("CWE-{num}"))
     } else {
         let num: String = upper.chars().take_while(|c| c.is_ascii_digit()).collect();
         if num.is_empty() {
             return None;
         }
-        Some(format!("CWE-{}", num))
+        Some(format!("CWE-{num}"))
     }
 }
 

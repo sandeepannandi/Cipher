@@ -154,7 +154,7 @@ Focus on actionable insights and reference specific lines of code.
     println!(
         "{} {}",
         "[AI]".bright_green(),
-        format!("Thinking with {}...", model_name).bold()
+        format!("Thinking with {model_name}...").bold()
     );
 
     // Query the LLM

@@ -714,7 +714,7 @@ async fn main() -> Result<()> {
                     );
                 };
                 let detail = pentest::email::check_connection(email).await?;
-                println!("  {}", detail);
+                println!("  {detail}");
                 return Ok(());
             }
 

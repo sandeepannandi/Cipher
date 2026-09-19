@@ -412,7 +412,7 @@ impl Finding {
             self.severity.badge(),
             self.file_path.as_deref().unwrap_or("<unknown>").yellow(),
             self.line_number
-                .map(|l| format!(":{}", l))
+                .map(|l| format!(":{l}"))
                 .unwrap_or_default(),
             self.title.bold()
         )
@@ -532,7 +532,7 @@ impl FindingReport {
             if let Some(ref file) = finding.file_path {
                 let line_info = finding
                     .line_number
-                    .map(|l| format!(":{}", l))
+                    .map(|l| format!(":{l}"))
                     .unwrap_or_default();
                 println!(
                     "    {} {}{}",

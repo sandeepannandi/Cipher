@@ -299,9 +299,7 @@ fn is_pure_closing(line: &str) -> bool {
     if !t.starts_with('}') {
         return false;
     }
-    t.trim_start_matches(|c| c == '}' || c == ')' || c == ',' || c == ';')
-        .trim()
-        .is_empty()
+    t.trim_start_matches(['}', ')', ',', ';']).trim().is_empty()
 }
 
 fn indent_of(line: &str) -> usize {
@@ -501,7 +499,7 @@ impl<'a> Tracer<'a> {
                         line: *line_num,
                         function: func.name.clone(),
                         action: "source".to_string(),
-                        detail: format!("untrusted input enters '{}'", var),
+                        detail: format!("untrusted input enters '{var}'"),
                     });
                 }
                 continue;
@@ -550,11 +548,11 @@ impl<'a> Tracer<'a> {
                         line: *line_num,
                         function: func.name.clone(),
                         action: "sink".to_string(),
-                        detail: format!("tainted data reaches '{}'", sink),
+                        detail: format!("tainted data reaches '{sink}'"),
                     });
                     result.push(TaintPath {
                         id: String::new(), // assigned at dedup time
-                        title: format!("user input reaches {}", sink),
+                        title: format!("user input reaches {sink}"),
                         description: format!(
                             "Untrusted data flows to '{}' at {}:{}. No sanitization was detected on this path.",
                             sink, func.file, line_num
@@ -1200,7 +1198,7 @@ fn display_paths(paths: &[TaintPath]) {
         println!();
         println!("    {} Description:", "[NOTE]".bold());
         for line in path.description.lines() {
-            println!("      {}", line);
+            println!("      {line}");
         }
         println!();
     }
@@ -1221,7 +1219,7 @@ fn display_paths_json(paths: &[TaintPath], query: &str) {
         paths,
     };
     match serde_json::to_string_pretty(&output) {
-        Ok(json) => println!("{}", json),
+        Ok(json) => println!("{json}"),
         Err(e) => eprintln!("{} JSON serialization failed: {}", "[ERR]".red(), e),
     }
 }

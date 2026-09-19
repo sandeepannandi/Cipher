@@ -25,7 +25,7 @@ const RT: &str = "┤";
 ///   └────────────────────────────────────────────────────────────┘
 pub fn print_header(title: &str, subtitle: Option<&str>) {
     let full = if let Some(sub) = subtitle {
-        format!("{} — {}", title, sub)
+        format!("{title} — {sub}")
     } else {
         title.to_string()
     };
@@ -59,7 +59,7 @@ pub fn print_section(name: &str) {
 /// Print a closing footer
 pub fn print_footer() {
     let sep = H.repeat(50);
-    println!("  {}", format!("{}{}{}", BL, sep, BR).dimmed());
+    println!("  {}", format!("{BL}{sep}{BR}").dimmed());
     println!();
 }
 
@@ -67,7 +67,7 @@ pub fn print_footer() {
 
 /// Print a numbered step header: [1/5] Running security review...
 pub fn print_step(current: usize, total: usize, label: &str) {
-    let tag = format!("[{}/{}]", current, total);
+    let tag = format!("[{current}/{total}]");
     println!("  {} {}...", tag.bright_cyan().bold(), label.bold());
 }
 
@@ -76,7 +76,7 @@ pub fn print_ok(tag: &str, detail: &str) {
     println!(
         "  {} {} {}",
         "✓".green().bold(),
-        format!("{}:", tag).bold(),
+        format!("{tag}:").bold(),
         detail,
     );
 }
@@ -86,7 +86,7 @@ pub fn print_warn(tag: &str, detail: &str) {
     println!(
         "  {} {} {}",
         "⚠".yellow().bold(),
-        format!("{}:", tag).bold(),
+        format!("{tag}:").bold(),
         detail,
     );
 }
@@ -96,7 +96,7 @@ pub fn print_fail(tag: &str, detail: &str) {
     println!(
         "  {} {} {}",
         "✗".red().bold(),
-        format!("{}:", tag).bold(),
+        format!("{tag}:").bold(),
         detail,
     );
 }
@@ -106,7 +106,7 @@ pub fn print_info(tag: &str, msg: &str) {
     println!(
         "  {} {} {}",
         "●".cyan().bold(),
-        format!("{}:", tag).bold(),
+        format!("{tag}:").bold(),
         msg,
     );
 }
@@ -132,7 +132,7 @@ pub fn print_summary_box(title: &str, rows: &[(&str, &str)]) {
         .max()
         .unwrap_or(20)
         .max(10);
-    let title_line = format!(" {} ", title);
+    let title_line = format!(" {title} ");
     let box_w = (left_w + 30).max(title_line.len() + 4);
 
     println!();
@@ -221,24 +221,24 @@ pub fn print_findings_table(
 
     let bar = format!(
         "{}{}{}{}",
-        "█".repeat(bar_critical).red().to_string(),
-        "█".repeat(bar_high).yellow().to_string(),
-        "█".repeat(bar_med).cyan().to_string(),
-        "█".repeat(bar_low).dimmed().to_string(),
+        "█".repeat(bar_critical).red(),
+        "█".repeat(bar_high).yellow(),
+        "█".repeat(bar_med).cyan(),
+        "█".repeat(bar_low).dimmed(),
     );
 
     println!("  {}", header.bold().white());
     println!(
         "    {} {}   {} {}   {} {}   {} {}  ({})",
         "CRITICAL".red().bold(),
-        format!("{:>4}", critical).red().bold(),
+        format!("{critical:>4}").red().bold(),
         "HIGH".yellow().bold(),
-        format!("{:>4}", high).yellow().bold(),
+        format!("{high:>4}").yellow().bold(),
         "MEDIUM".cyan(),
-        format!("{:>4}", medium).cyan(),
+        format!("{medium:>4}").cyan(),
         "LOW".dimmed(),
-        format!("{:>4}", low).dimmed(),
-        format!("{} total", total).bold(),
+        format!("{low:>4}").dimmed(),
+        format!("{total} total").bold(),
     );
     if !bar.trim().is_empty() {
         println!("    {} {}", bar.dimmed(), "risk distribution".dimmed());

@@ -257,7 +257,7 @@ pub async fn run_watch(
             .await
             {
                 Ok(()) => output::print_ok("Fix PR", "fix session complete"),
-                Err(e) => output::print_warn("Fix PR", &format!("auto-fix failed ({})", e)),
+                Err(e) => output::print_warn("Fix PR", &format!("auto-fix failed ({e})")),
             }
             println!();
         } else if open_pr && !baseline && new_fps.is_empty() {
@@ -271,7 +271,7 @@ pub async fn run_watch(
             fingerprints,
         };
         if let Err(e) = save_state(&state_path, &state) {
-            output::print_warn("State", &format!("could not save watch state ({})", e));
+            output::print_warn("State", &format!("could not save watch state ({e})"));
         }
         prev = state;
         baseline = false;

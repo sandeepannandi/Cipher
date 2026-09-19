@@ -150,9 +150,8 @@ pub async fn run_fix(
 
     if verify {
         println!(
-            "  {} {}",
-            "[VERIFY]".cyan().bold(),
-            "Each fix will be compile-checked; fixes that break the build are reverted."
+            "  {} Each fix will be compile-checked; fixes that break the build are reverted.",
+            "[VERIFY]".cyan().bold()
         );
     }
 
@@ -197,7 +196,7 @@ pub async fn run_fix(
         let file_path = finding.file_path.as_deref().unwrap_or("");
         let line_info = finding
             .line_number
-            .map(|l| format!(":{}", l))
+            .map(|l| format!(":{l}"))
             .unwrap_or_default();
 
         println!(
@@ -221,7 +220,7 @@ pub async fn run_fix(
                 // Show explanation
                 println!("  {} {}", "[NOTE]".bold(), "What changed:".bold());
                 for line in fix_plan.explanation.trim().lines() {
-                    println!("    {}", line);
+                    println!("    {line}");
                 }
                 println!();
 
@@ -504,7 +503,7 @@ fn run_git(project_path: &Path, args: &[&str]) -> Result<()> {
         .args(args)
         .current_dir(project_path)
         .output()
-        .map_err(|e| anyhow::anyhow!("failed to run git: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("failed to run git: {e}"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         anyhow::bail!("git {} failed: {}", args.join(" "), stderr.trim());
@@ -592,8 +591,7 @@ fn render_fix_pr_body(applied: &[AppliedFix], base: &str, branch: &str) -> Strin
 
     md.push_str("\n---\n");
     md.push_str(&format!(
-        "_Branch: `{}` · Base: `{}` · Review and merge if the changes look correct._\n",
-        branch, base
+        "_Branch: `{branch}` · Base: `{base}` · Review and merge if the changes look correct._\n"
     ));
     md
 }
@@ -747,7 +745,7 @@ fn print_fixable_findings(findings: &[&Finding], _project_path: &Path) {
             .as_deref()
             .unwrap_or("<unknown>")
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or("<unknown>");
         let line = finding
             .line_number
@@ -756,7 +754,7 @@ fn print_fixable_findings(findings: &[&Finding], _project_path: &Path) {
         let location = if line.is_empty() {
             fp.to_string()
         } else {
-            format!("{}:{}", fp, line)
+            format!("{fp}:{line}")
         };
 
         let risk_str = format!("{:.0}/10", finding.risk_score());
@@ -848,7 +846,7 @@ fn verify_compiles(project_path: &Path) -> Result<bool> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| anyhow::anyhow!("failed to start {}: {}", program, e))?;
+        .map_err(|e| anyhow::anyhow!("failed to start {program}: {e}"))?;
 
     // Enforce a timeout so a hung build can't stall the fix session.
     let deadline = Instant::now() + Duration::from_secs(120);
@@ -858,11 +856,11 @@ fn verify_compiles(project_path: &Path) -> Result<bool> {
             Ok(None) => {
                 if Instant::now() > deadline {
                     let _ = child.kill();
-                    anyhow::bail!("{} check timed out after 120s", program);
+                    anyhow::bail!("{program} check timed out after 120s");
                 }
                 std::thread::sleep(Duration::from_millis(250));
             }
-            Err(e) => anyhow::bail!("failed to wait for {}: {}", program, e),
+            Err(e) => anyhow::bail!("failed to wait for {program}: {e}"),
         }
     }
 }
@@ -904,7 +902,7 @@ fn resolve_finding_path(stored: &str, project_path: &Path) -> PathBuf {
             if path.is_file() && !crate::scan::should_exclude(path) {
                 if let Ok(rel) = path.strip_prefix(project_path) {
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    if normalized_stored.ends_with(&format!("/{}", rel_str)) {
+                    if normalized_stored.ends_with(&format!("/{rel_str}")) {
                         return path.to_path_buf();
                     }
                 }
@@ -938,11 +936,7 @@ async fn generate_fix(
     // Determine which lines to extract for context
     let target_line = finding.line_number.unwrap_or(1).saturating_sub(1); // 0-indexed
 
-    let context_start = if target_line >= 10 {
-        target_line - 10
-    } else {
-        0
-    };
+    let context_start = target_line.saturating_sub(10);
     let context_end = (target_line + 11).min(total_lines);
 
     let original_lines: Vec<&str> = all_lines[context_start..context_end].to_vec();
@@ -955,12 +949,12 @@ async fn generate_fix(
     let mut numbered_context = String::new();
     for (i, line) in original_lines.iter().enumerate() {
         let line_num = context_start + i + 1;
-        let marker = if finding.line_number.map_or(false, |l| line_num == l) {
+        let marker = if finding.line_number == Some(line_num) {
             " >>>"
         } else {
             "    "
         };
-        numbered_context.push_str(&format!("{:4}{} {}\n", line_num, marker, line));
+        numbered_context.push_str(&format!("{line_num:4}{marker} {line}\n"));
     }
 
     // Build the AI prompt
@@ -1042,7 +1036,7 @@ Generate a secure fix. Return JSON with "fixed_code" (the complete replacement, 
     let response = client
         .chat(system_prompt, &user_prompt, None)
         .await
-        .map_err(|e| anyhow::anyhow!("AI fix generation failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("AI fix generation failed: {e}"))?;
 
     spinner.finish_and_clear();
 
@@ -1059,9 +1053,7 @@ Generate a secure fix. Return JSON with "fixed_code" (the complete replacement, 
         || fixed_lines_count > original_lines_count + 4
     {
         anyhow::bail!(
-            "AI returned {} lines but expected ~{} lines. The patch is unsafe — refusing to apply.\n  Try running the command again, or fix the vulnerability manually.",
-            fixed_lines_count,
-            original_lines_count,
+            "AI returned {fixed_lines_count} lines but expected ~{original_lines_count} lines. The patch is unsafe — refusing to apply.\n  Try running the command again, or fix the vulnerability manually.",
         );
     }
 
@@ -1098,7 +1090,7 @@ fn parse_fix_response(response: &str) -> Result<(String, String, Option<String>)
     }
 
     let parsed: FixResponse = serde_json::from_str(json_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse AI fix response: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to parse AI fix response: {e}"))?;
 
     let fixed_code = parsed.fixed_code.unwrap_or_default();
     let explanation = parsed
@@ -1165,9 +1157,9 @@ fn display_diff(fix: &FixPlan) {
         has_changes = has_changes || change.tag() != ChangeTag::Equal;
 
         if change.value().ends_with('\n') {
-            print!("    {} {}", sign, style);
+            print!("    {sign} {style}");
         } else {
-            println!("    {} {}", sign, style);
+            println!("    {sign} {style}");
         }
     }
 
@@ -1384,7 +1376,7 @@ mod tests {
         std::fs::write(src.join("main.rs"), "fn main() {}").unwrap();
 
         // Stored path from an old checkout — should resolve inside the project
-        let stored = format!("C:/old/checkout/src/main.rs");
+        let stored = "C:/old/checkout/src/main.rs".to_string();
         let resolved = resolve_finding_path(&stored, &dir);
         assert_eq!(resolved, src.join("main.rs"));
         let _ = std::fs::remove_dir_all(&dir);

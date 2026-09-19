@@ -314,7 +314,7 @@ fn write_or_print(content: &str, output_file: Option<&str>) -> Result<()> {
             path.yellow().bold()
         );
     } else {
-        println!("{}", content);
+        println!("{content}");
     }
     Ok(())
 }
@@ -384,7 +384,7 @@ fn generate_executive_md(report: &AggregatedReport) -> String {
     md.push_str("**Tool:** CipherAI — AI-Powered Security Analysis\n\n");
 
     md.push_str("## Overall Security Score\n\n");
-    md.push_str(&format!("{} **{:.0}/100**\n\n", score_badge, score));
+    md.push_str(&format!("{score_badge} **{score:.0}/100**\n\n"));
 
     if score >= 80.0 {
         md.push_str("Your project has a **good** security posture. Minor issues to address.\n\n");
@@ -437,7 +437,7 @@ fn generate_executive_md(report: &AggregatedReport) -> String {
                 fp,
                 finding
                     .line_number
-                    .map(|l| format!(":{}", l))
+                    .map(|l| format!(":{l}"))
                     .unwrap_or_default()
             ));
         }
@@ -452,8 +452,7 @@ fn generate_executive_md(report: &AggregatedReport) -> String {
         report.count_by_severity(Severity::Critical) + report.count_by_severity(Severity::High);
     if critical_high > 0 {
         md.push_str(&format!(
-            "- [RED] **{} critical/high severity issues** should be fixed immediately.\n",
-            critical_high
+            "- [RED] **{critical_high} critical/high severity issues** should be fixed immediately.\n"
         ));
     }
     if report.count_by_type(FindingType::Secret) > 0 {
@@ -533,21 +532,21 @@ fn generate_developer_md(report: &AggregatedReport) -> String {
         md.push_str(&format!("| Confidence | {} |\n", finding.confidence));
         md.push_str(&format!("| Type | {} |\n", finding.finding_type));
         if let Some(ref owasp) = finding.owasp_category {
-            md.push_str(&format!("| OWASP | {} |\n", owasp));
+            md.push_str(&format!("| OWASP | {owasp} |\n"));
         }
         if let Some(ref cwe) = finding.cwe_id {
-            md.push_str(&format!("| CWE | {} |\n", cwe));
+            md.push_str(&format!("| CWE | {cwe} |\n"));
         }
         if let Some(ref cve) = finding.cve_id {
-            md.push_str(&format!("| CVE | {} |\n", cve));
+            md.push_str(&format!("| CVE | {cve} |\n"));
         }
         if let Some(ref fp) = finding.file_path {
             let line = finding
                 .line_number
-                .map(|l| format!(":{}", l))
+                .map(|l| format!(":{l}"))
                 .unwrap_or_default();
-            md.push_str(&format!("| File | `{}` |\n", fp));
-            md.push_str(&format!("| Line | {} |\n", line));
+            md.push_str(&format!("| File | `{fp}` |\n"));
+            md.push_str(&format!("| Line | {line} |\n"));
         }
         md.push_str(&format!(
             "| Exploitability | {:.0}% |\n",
@@ -561,7 +560,7 @@ fn generate_developer_md(report: &AggregatedReport) -> String {
             "| Remediation Effort | {} |\n",
             finding.remediation_effort
         ));
-        md.push_str("\n");
+        md.push('\n');
 
         md.push_str("**Description:**\n\n");
         md.push_str(&format!("{}\n\n", finding.description));
@@ -574,7 +573,7 @@ fn generate_developer_md(report: &AggregatedReport) -> String {
 
         if let Some(ref rem) = finding.remediation {
             md.push_str("**Remediation:**\n\n");
-            md.push_str(&format!("{}\n\n", rem));
+            md.push_str(&format!("{rem}\n\n"));
         }
 
         md.push_str("---\n\n");
@@ -599,8 +598,8 @@ fn generate_ci_md(report: &AggregatedReport) -> String {
         "[ERR] FAIL"
     };
 
-    md.push_str(&format!("**Status:** {}  \n", status));
-    md.push_str(&format!("**Score:** {:.0}/100  \n", score));
+    md.push_str(&format!("**Status:** {status}  \n"));
+    md.push_str(&format!("**Score:** {score:.0}/100  \n"));
     md.push_str(&format!("**Findings:** {}  \n", report.total_findings()));
     md.push_str(&format!(
         "**Critical:** {} | **High:** {} | **Medium:** {} | **Low:** {}  \n\n",
@@ -843,7 +842,7 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     println!(
         "  {} {}",
         "Security Score:".bold(),
-        format!("{:.0}/100", score).color(score_color).bold()
+        format!("{score:.0}/100").color(score_color).bold()
     );
     println!(
         "  {} {}",
@@ -942,14 +941,14 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
         let fp = finding.file_path.as_deref().unwrap_or("<unknown>");
         let line = finding
             .line_number
-            .map(|l| format!(":{}", l))
+            .map(|l| format!(":{l}"))
             .unwrap_or_default();
         println!(
             "    {}  {}  {}  {}  [{:.0}/10]  impact:{:.0}%",
             finding.severity.badge(),
             finding.finding_type.icon(),
-            format!("{}", finding.title).bold(),
-            format!("{}{}", fp, line).yellow().dimmed(),
+            finding.title.to_string().bold(),
+            format!("{fp}{line}").yellow().dimmed(),
             finding.risk_score(),
             finding.business_impact * 100.0
         );
@@ -1008,7 +1007,7 @@ mod tests {
         // Distinct locations so dedup doesn't collapse them into one finding
         for i in 0..10 {
             let f = mk("SQL Injection", "security-review", Severity::Critical)
-                .at(format!("/proj/f{}.py", i), 1);
+                .at(format!("/proj/f{i}.py"), 1);
             report.review.push(f);
         }
         assert_eq!(report.security_score(), 0.0);
