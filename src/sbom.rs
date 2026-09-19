@@ -243,9 +243,9 @@ fn generate_spdx(deps: &[deps::Dependency], project_name: &str) -> String {
                 spdx_id: format!("SPDXRef-Package-{}", i + 1),
                 name: d.name.clone(),
                 version_info: d.version.clone(),
-                supplier: Some(format!("NOASSERTION")),
+                supplier: Some("NOASSERTION".to_string()),
                 package_file_name: None,
-                download_location: format!("NOASSERTION"),
+                download_location: "NOASSERTION".to_string(),
                 files_analyzed: false,
                 license_concluded: "NOASSERTION".to_string(),
                 license_declared: None,
@@ -377,7 +377,7 @@ pub async fn run_sbom(project_path: &Path, format: &str, output: Option<&str>) -
             all_deps.len().to_string().bold()
         );
     } else {
-        println!("{}", output_str);
+        println!("{output_str}");
     }
 
     Ok(())

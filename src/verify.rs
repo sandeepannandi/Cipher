@@ -103,7 +103,7 @@ fn build_verify_prompt(chunk: &[Finding]) -> String {
                 let lines: Vec<&str> = c.lines().collect();
                 let snippet: String = lines.iter().take(5).cloned().collect::<Vec<_>>().join("\n");
                 if lines.len() > 5 {
-                    format!("{}\n...", snippet)
+                    format!("{snippet}\n...")
                 } else {
                     snippet
                 }

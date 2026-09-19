@@ -140,8 +140,7 @@ pub fn run_config_set(key: &str, value: &str) -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "Unknown config key: {}. Valid keys: groq-api-key, openai-api-key, anthropic-api-key, provider, default-model",
-                key
+                "Unknown config key: {key}. Valid keys: groq-api-key, openai-api-key, anthropic-api-key, provider, default-model"
             );
         }
     }
@@ -151,8 +150,8 @@ pub fn run_config_set(key: &str, value: &str) -> Result<()> {
 
 fn print_key_status(env_var: &str, stored: Option<&String>) {
     match (std::env::var(env_var).ok(), stored) {
-        (Some(_), _) => println!("(set via {} env var)", env_var),
-        (None, Some(v)) => println!("{}", v),
+        (Some(_), _) => println!("(set via {env_var} env var)"),
+        (None, Some(v)) => println!("{v}"),
         (None, None) => println!("(not set)"),
     }
 }
@@ -170,17 +169,16 @@ pub fn run_config_get(key: &str) -> Result<()> {
             print_key_status("ANTHROPIC_API_KEY", config.anthropic_api_key.as_ref());
         }
         "provider" => match std::env::var("CIPHER_AI_PROVIDER").ok().or(config.provider) {
-            Some(v) => println!("{}", v),
+            Some(v) => println!("{v}"),
             None => println!("groq"),
         },
         "default-model" | "model" => match &config.default_model {
-            Some(v) => println!("{}", v),
+            Some(v) => println!("{v}"),
             None => println!("{}", DEFAULT_MODELS[0]),
         },
         _ => {
             anyhow::bail!(
-                "Unknown config key: {}. Valid keys: groq-api-key, openai-api-key, anthropic-api-key, provider, default-model",
-                key
+                "Unknown config key: {key}. Valid keys: groq-api-key, openai-api-key, anthropic-api-key, provider, default-model"
             );
         }
     }
@@ -191,13 +189,13 @@ pub fn run_config_get(key: &str) -> Result<()> {
 fn render_key_line(name: &str, env_var: &str, is_set: bool) -> String {
     format!(
         "  {} {}\n        {}",
-        format!("{}:", name).bold(),
+        format!("{name}:").bold(),
         if is_set {
             "set [OK]".green().to_string()
         } else {
             "not set [WARN]".red().to_string()
         },
-        format!("(env: {})", env_var).dimmed()
+        format!("(env: {env_var})").dimmed()
     )
 }
 

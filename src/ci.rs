@@ -334,7 +334,7 @@ pub async fn run_ci(
             std::fs::write(out_path, &json_str)?;
             output::print_ok("Output", &format!("JSON written to {}", out_path.yellow()));
         } else {
-            println!("{}", json_str);
+            println!("{json_str}");
         }
         if should_fail && total_findings > 0 {
             std::process::exit(1);

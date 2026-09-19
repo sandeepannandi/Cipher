@@ -213,7 +213,7 @@ impl ZerodayFinding {
 
         let mut finding = Finding::new(
             finding_type,
-            format!("[ZERO-DAY] {}", title),
+            format!("[ZERO-DAY] {title}"),
             description,
             severity,
             confidence,
@@ -438,7 +438,7 @@ fn print_zeroday_finding(zf: &ZerodayFinding) {
         let line_info = zf
             .finding
             .line_number
-            .map(|l| format!(":{}", l))
+            .map(|l| format!(":{l}"))
             .unwrap_or_default();
         println!(
             "    {} {}{}",
@@ -539,13 +539,12 @@ fn detect_complex_functions(ctx: &FileContext) -> Vec<ZerodayFinding> {
 
                             findings.push(ZerodayFinding::new(
                                 AnomalyType::FunctionComplexity,
-                                &format!("Overly complex function: '{}' ({} lines)", name, lines_in_func),
+                                &format!("Overly complex function: '{name}' ({lines_in_func} lines)"),
                                 &format!(
-                                    "Function '{}' spans {} lines (threshold: {}). \
+                                    "Function '{name}' spans {lines_in_func} lines (threshold: {COMPLEXITY_THRESHOLD}). \
                                      Complex functions are prone to logic errors, missing edge cases, \
                                      and hard-to-spot vulnerabilities. Consider refactoring into smaller \
-                                     focused functions.",
-                                    name, lines_in_func, COMPLEXITY_THRESHOLD
+                                     focused functions."
                                 ),
                                 Severity::Medium,
                                 Confidence::Medium,
@@ -553,9 +552,8 @@ fn detect_complex_functions(ctx: &FileContext) -> Vec<ZerodayFinding> {
                                 start_line,
                                 &snippet,
                                 &format!(
-                                    "Break '{}' into smaller functions (< {} lines each). \
-                                     Extract separate concerns into named helper functions.",
-                                    name, COMPLEXITY_THRESHOLD
+                                    "Break '{name}' into smaller functions (< {COMPLEXITY_THRESHOLD} lines each). \
+                                     Extract separate concerns into named helper functions."
                                 ),
                             ));
                         }
@@ -586,14 +584,12 @@ fn detect_complex_functions(ctx: &FileContext) -> Vec<ZerodayFinding> {
                             findings.push(ZerodayFinding::new(
                                 AnomalyType::FunctionComplexity,
                                 &format!(
-                                    "High cyclomatic complexity in '{}' ({} branches)",
-                                    name, branch_count
+                                    "High cyclomatic complexity in '{name}' ({branch_count} branches)"
                                 ),
                                 &format!(
-                                    "Function '{}' has {} conditional branches (threshold: {}). \
+                                    "Function '{name}' has {branch_count} conditional branches (threshold: {BRANCH_THRESHOLD}). \
                                      High complexity correlates with hidden bugs and security \
-                                     vulnerabilities. Attackers exploit edge cases in complex logic.",
-                                    name, branch_count, BRANCH_THRESHOLD
+                                     vulnerabilities. Attackers exploit edge cases in complex logic."
                                 ),
                                 Severity::Medium,
                                 Confidence::Low,
@@ -666,11 +662,7 @@ fn detect_dangerous_proximity(ctx: &FileContext) -> Vec<ZerodayFinding> {
     // If both sources and sinks exist within 5 lines of each other, flag it
     for &src_line in &source_lines {
         for &sink_line in &sink_lines {
-            let distance = if src_line > sink_line {
-                src_line - sink_line
-            } else {
-                sink_line - src_line
-            };
+            let distance = src_line.abs_diff(sink_line);
 
             if distance <= 5 && distance > 0 {
                 let snippet = if src_line < sink_line {
@@ -686,10 +678,9 @@ fn detect_dangerous_proximity(ctx: &FileContext) -> Vec<ZerodayFinding> {
                     AnomalyType::DangerousApiProximity,
                     "Dangerous API called near user-controlled data",
                     &format!(
-                        "User input (line {}) is within {} lines of a dangerous API call (line {}). \
+                        "User input (line {src_line}) is within {distance} lines of a dangerous API call (line {sink_line}). \
                          This pattern often leads to injection vulnerabilities that signature-based \
-                         scanners miss because the data flow isn't direct concatenation.",
-                        src_line, distance, sink_line
+                         scanners miss because the data flow isn't direct concatenation."
                     ),
                     Severity::High,
                     Confidence::Medium,
@@ -735,7 +726,7 @@ fn detect_missing_boundary_checks(ctx: &FileContext) -> Vec<ZerodayFinding> {
         }
 
         // Check if there's a length/bounds check nearby (within previous 4 lines)
-        let start = if i >= 4 { i - 4 } else { 0 };
+        let start = i.saturating_sub(4);
         let has_bounds_check = (start..i).any(|j| {
             let prev_lower = ctx.lines[j].trim().to_lowercase();
             prev_lower.contains(".len()")
@@ -756,10 +747,9 @@ fn detect_missing_boundary_checks(ctx: &FileContext) -> Vec<ZerodayFinding> {
                 AnomalyType::MissingBoundaryCheck,
                 "Array/list access without bounds check",
                 &format!(
-                    "Line {} accesses an array/list/vector index without a preceeding bounds \
+                    "Line {line_num} accesses an array/list/vector index without a preceeding bounds \
                      or length check. This can cause panics, out-of-bounds reads, or memory \
-                     safety issues — especially with untrusted input.",
-                    line_num
+                     safety issues — especially with untrusted input."
                 ),
                 Severity::High,
                 Confidence::Low,
@@ -795,9 +785,8 @@ fn detect_type_confusion(ctx: &FileContext) -> Vec<ZerodayFinding> {
                 AnomalyType::TypeConfusionRisk,
                 "Unsafe type transmute detected",
                 &format!(
-                    "Line {} uses transmute() which reinterprets bytes of one type as another. \
-                     This is a leading cause of undefined behavior and memory safety vulnerabilities.",
-                    line_num
+                    "Line {line_num} uses transmute() which reinterprets bytes of one type as another. \
+                     This is a leading cause of undefined behavior and memory safety vulnerabilities."
                 ),
                 Severity::High,
                 Confidence::High,
@@ -812,7 +801,7 @@ fn detect_type_confusion(ctx: &FileContext) -> Vec<ZerodayFinding> {
         // Pattern 2: Unsafe pointer dereference near data
         if lower.contains("*const ") || lower.contains("*mut ") || lower.contains("as *mut") {
             // Check if near any data handling
-            let start = if i >= 3 { i - 3 } else { 0 };
+            let start = i.saturating_sub(3);
             let end = std::cmp::min(i + 3, ctx.lines.len());
             let has_data_nearby = (start..end).any(|j| {
                 if j == i {
@@ -827,10 +816,9 @@ fn detect_type_confusion(ctx: &FileContext) -> Vec<ZerodayFinding> {
                     AnomalyType::TypeConfusionRisk,
                     "Unsafe pointer near data handling",
                     &format!(
-                        "Line {} uses unsafe pointer operations near data handling. \
+                        "Line {line_num} uses unsafe pointer operations near data handling. \
                          This combination can lead to type confusion, use-after-free, \
-                         and memory corruption vulnerabilities.",
-                        line_num
+                         and memory corruption vulnerabilities."
                     ),
                     Severity::Critical,
                     Confidence::Medium,
@@ -844,25 +832,24 @@ fn detect_type_confusion(ctx: &FileContext) -> Vec<ZerodayFinding> {
         }
 
         // Pattern 3: 'any' type casts (TypeScript/JS)
-        if ctx.ext == "ts" || ctx.ext == "tsx" || ctx.ext == "js" || ctx.ext == "jsx" {
-            if lower.contains("as any") || lower.contains("@ts-ignore") {
-                findings.push(ZerodayFinding::new(
-                    AnomalyType::TypeConfusionRisk,
-                    "Type-safety bypass: 'any' cast or @ts-ignore",
-                    &format!(
-                        "Line {} bypasses type checking with 'as any' or @ts-ignore. \
-                         This hides potential type confusion bugs from the compiler.",
-                        line_num
-                    ),
-                    Severity::Medium,
-                    Confidence::Medium,
-                    &ctx.path,
-                    line_num,
-                    trimmed,
-                    "Use proper type definitions instead of 'any'. If you must use it, \
+        if (ctx.ext == "ts" || ctx.ext == "tsx" || ctx.ext == "js" || ctx.ext == "jsx")
+            && (lower.contains("as any") || lower.contains("@ts-ignore"))
+        {
+            findings.push(ZerodayFinding::new(
+                AnomalyType::TypeConfusionRisk,
+                "Type-safety bypass: 'any' cast or @ts-ignore",
+                &format!(
+                    "Line {line_num} bypasses type checking with 'as any' or @ts-ignore. \
+                         This hides potential type confusion bugs from the compiler."
+                ),
+                Severity::Medium,
+                Confidence::Medium,
+                &ctx.path,
+                line_num,
+                trimmed,
+                "Use proper type definitions instead of 'any'. If you must use it, \
                      add validation at the boundary to ensure the value has the expected shape.",
-                ));
-            }
+            ));
         }
     }
 
@@ -945,19 +932,21 @@ fn detect_suspicious_error_handling(ctx: &FileContext) -> Vec<ZerodayFinding> {
         }
 
         // Flag 'except: pass' pattern (Python hiding errors)
-        if ctx.ext == "py" {
-            if trimmed.starts_with("except") && trimmed.contains(":") && !trimmed.contains("log") {
-                // Check next line
-                if i + 1 < ctx.lines.len() {
-                    let next = ctx.lines[i + 1].trim();
-                    if next == "pass" || next.starts_with("#") {
-                        findings.push(ZerodayFinding::new(
+        if ctx.ext == "py"
+            && trimmed.starts_with("except")
+            && trimmed.contains(":")
+            && !trimmed.contains("log")
+        {
+            // Check next line
+            if i + 1 < ctx.lines.len() {
+                let next = ctx.lines[i + 1].trim();
+                if next == "pass" || next.starts_with("#") {
+                    findings.push(ZerodayFinding::new(
                             AnomalyType::SuspiciousErrorHandling,
                             "Pass on exception — error silently ignored",
                             &format!(
-                                "Line {}: '{}' followed by 'pass'. Silently ignoring exceptions \
-                                 can hide security breaches during error conditions.",
-                                line_num, trimmed
+                                "Line {line_num}: '{trimmed}' followed by 'pass'. Silently ignoring exceptions \
+                                 can hide security breaches during error conditions."
                             ),
                             Severity::High,
                             Confidence::High,
@@ -967,7 +956,6 @@ fn detect_suspicious_error_handling(ctx: &FileContext) -> Vec<ZerodayFinding> {
                             "At minimum log the exception. For security-critical code, \
                              implement proper error recovery with monitoring alerts.",
                         ));
-                    }
                 }
             }
         }
@@ -1026,7 +1014,7 @@ fn detect_taint_flow(ctx: &FileContext) -> Vec<ZerodayFinding> {
                     // Check if there's sanitization nearby
                     // Look up when this variable was defined
                     if let Some(&def_line) = tainted_vars.get(tainted_var) {
-                        let start = if i >= 3 { i - 3 } else { 0 };
+                        let start = i.saturating_sub(3);
                         let has_sanitizer = (start..=i).any(|j| {
                             let prev_lower = ctx.lines[j].trim().to_lowercase();
                             SANITIZERS.iter().any(|s| prev_lower.contains(s))
@@ -1043,15 +1031,13 @@ fn detect_taint_flow(ctx: &FileContext) -> Vec<ZerodayFinding> {
                             findings.push(ZerodayFinding::new(
                             AnomalyType::UntrustedToSink,
                             &format!(
-                                "Untrusted data '{}' reaches dangerous sink: {}",
-                                tainted_var, sink
+                                "Untrusted data '{tainted_var}' reaches dangerous sink: {sink}"
                             ),
                             &format!(
-                                "Variable '{}' (defined at line {}) from user input reaches '{}' \
-                                 at line {} without passing through any validation/sanitization. \
+                                "Variable '{tainted_var}' (defined at line {def_line}) from user input reaches '{sink}' \
+                                 at line {line_num} without passing through any validation/sanitization. \
                                  This is a novel injection vector — no known signature matches this \
-                                 specific data flow path.",
-                                tainted_var, def_line, sink, line_num
+                                 specific data flow path."
                             ),
                             risk,
                             Confidence::Medium,
@@ -1059,10 +1045,9 @@ fn detect_taint_flow(ctx: &FileContext) -> Vec<ZerodayFinding> {
                             def_line,
                             &snippet,
                             &format!(
-                                "Add validation before '{}' is used by '{}'. Use an allowlist \
+                                "Add validation before '{tainted_var}' is used by '{sink}'. Use an allowlist \
                                  for expected values and reject anything that doesn't match. \
-                                 Consider using parameterized APIs instead.",
-                                tainted_var, sink
+                                 Consider using parameterized APIs instead."
                             ),
                         ));
                         }
@@ -1088,8 +1073,8 @@ fn detect_taint_flow(ctx: &FileContext) -> Vec<ZerodayFinding> {
         .any(|s| lower.contains(s));
 
         if has_path_source && has_path_sink {
-            let has_sanitizer_nearby =
-                (if i >= 5 { i - 5 } else { 0 }..std::cmp::min(i + 2, ctx.lines.len())).any(|j| {
+            let has_sanitizer_nearby = (i.saturating_sub(5)..std::cmp::min(i + 2, ctx.lines.len()))
+                .any(|j| {
                     let pl = ctx.lines[j].trim().to_lowercase();
                     pl.contains("..")
                         || pl.contains("basename")
@@ -1103,10 +1088,9 @@ fn detect_taint_flow(ctx: &FileContext) -> Vec<ZerodayFinding> {
                     AnomalyType::TaintedPath,
                     "User-controlled path reaches file operation without validation",
                     &format!(
-                        "Line {} uses user-controlled data in a file operation without path \
+                        "Line {line_num} uses user-controlled data in a file operation without path \
                          validation. This is a potential path traversal vulnerability that \
-                         allows reading/writing arbitrary files.",
-                        line_num
+                         allows reading/writing arbitrary files."
                     ),
                     Severity::Critical,
                     Confidence::Medium,
@@ -1235,7 +1219,7 @@ Return ONLY valid JSON with your findings. If nothing novel found, return {{"fin
     let response = client
         .chat(system_prompt, &user_prompt, model)
         .await
-        .map_err(|e| anyhow::anyhow!("AI zero-day analysis failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("AI zero-day analysis failed: {e}"))?;
 
     parse_ai_zeroday_findings(&response, project_path)
 }
@@ -1447,7 +1431,7 @@ fn extract_function_param(line: &str, source_keyword: &str) -> Option<String> {
 
     // Look backwards from the keyword for the parameter name
     let before = &trimmed[..pos];
-    if let Some(param_end) = before.rfind(|c: char| c == ',' || c == '(') {
+    if let Some(param_end) = before.rfind([',', '(']) {
         let param = before[param_end + 1..].trim();
         if !param.is_empty() && !param.contains(' ') && !param.contains('=') {
             return Some(param.to_string());
@@ -1536,42 +1520,35 @@ pub async fn collect_zeroday_findings(
             break;
         }
 
-        match result {
-            Ok(entry) => {
-                let path = entry.path();
-                if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
-                    let ext = path
-                        .extension()
-                        .map(|e| e.to_str().unwrap_or("").to_lowercase())
-                        .unwrap_or_default();
-                    if !ext.is_empty() && is_supported_ext(&ext) {
-                        match std::fs::read_to_string(path) {
-                            Ok(content) => {
-                                let lines: Vec<String> =
-                                    content.lines().map(|l| l.to_string()).collect();
-                                let ctx = FileContext {
-                                    path: path.to_string_lossy().to_string(),
-                                    lines,
-                                    ext,
-                                };
+        if let Ok(entry) = result {
+            let path = entry.path();
+            if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_str().unwrap_or("").to_lowercase())
+                    .unwrap_or_default();
+                if !ext.is_empty() && is_supported_ext(&ext) {
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+                        let ctx = FileContext {
+                            path: path.to_string_lossy().to_string(),
+                            lines,
+                            ext,
+                        };
 
-                                // Layer 1: Anomaly Detection (always runs)
-                                let anomalies = detect_file_anomalies(&ctx);
-                                report.anomalies.extend(anomalies);
+                        // Layer 1: Anomaly Detection (always runs)
+                        let anomalies = detect_file_anomalies(&ctx);
+                        report.anomalies.extend(anomalies);
 
-                                // Layer 2: Taint Flow Analysis
-                                if !no_flow && !anomaly_only {
-                                    let flow = detect_taint_flow(&ctx);
-                                    report.flow_findings.extend(flow);
-                                }
-                            }
-                            Err(_) => {}
+                        // Layer 2: Taint Flow Analysis
+                        if !no_flow && !anomaly_only {
+                            let flow = detect_taint_flow(&ctx);
+                            report.flow_findings.extend(flow);
                         }
-                        report.scanned_files += 1;
                     }
+                    report.scanned_files += 1;
                 }
             }
-            Err(_) => {}
         }
     }
 
@@ -1658,7 +1635,7 @@ pub async fn run_zeroday(
             Err(e) => {
                 output::print_warn(
                     "AI Hunter",
-                    &format!("analysis failed: {} (continuing with static analysis)", e),
+                    &format!("analysis failed: {e} (continuing with static analysis)"),
                 );
             }
         }
@@ -1684,7 +1661,7 @@ pub async fn run_zeroday(
                 ),
             );
         } else {
-            println!("{}", output_str);
+            println!("{output_str}");
         }
         output::print_footer();
         return Ok(());
