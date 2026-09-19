@@ -88,47 +88,210 @@ struct OsvReference {
     url: Option<String>,
 }
 
-
-
 /// Known vulnerability database (embedded fallback when OSV API is unreachable)
 /// This is a minimal set of well-known CVEs for common packages.
 /// In production, rely on OSV.dev API for comprehensive coverage.
 const EMBEDDED_ADVISORIES: &[(&str, &str, &str, &str, Severity)] = &[
     // Rust crates
-    ("crates.io", "serde", "<1.0.100", "CVE-2023-XXXX: Outdated serde version", Severity::Low),
-    ("crates.io", "openssl", "<0.10.45", "CVE-2023-0464: OpenSSL vulnerability", Severity::High),
-    ("crates.io", "tokio", "<1.25.0", "CVE-2023-XXXX: Tokio vulnerability", Severity::Medium),
-    ("crates.io", "hyper", "<0.14.20", "CVE-2023-XXXX: Hyper HTTP request smuggling", Severity::High),
-    ("crates.io", "reqwest", "<0.11.14", "CVE-2023-XXXX: Reqwest redirect header leak", Severity::Medium),
-    ("crates.io", "regex", "<1.7.3", "CVE-2023-XXXX: Regex DoS vulnerability", Severity::Medium),
-    ("crates.io", "zip", "<0.6.4", "CVE-2023-XXXX: Zip archive vulnerability", Severity::High),
-
+    (
+        "crates.io",
+        "serde",
+        "<1.0.100",
+        "CVE-2023-XXXX: Outdated serde version",
+        Severity::Low,
+    ),
+    (
+        "crates.io",
+        "openssl",
+        "<0.10.45",
+        "CVE-2023-0464: OpenSSL vulnerability",
+        Severity::High,
+    ),
+    (
+        "crates.io",
+        "tokio",
+        "<1.25.0",
+        "CVE-2023-XXXX: Tokio vulnerability",
+        Severity::Medium,
+    ),
+    (
+        "crates.io",
+        "hyper",
+        "<0.14.20",
+        "CVE-2023-XXXX: Hyper HTTP request smuggling",
+        Severity::High,
+    ),
+    (
+        "crates.io",
+        "reqwest",
+        "<0.11.14",
+        "CVE-2023-XXXX: Reqwest redirect header leak",
+        Severity::Medium,
+    ),
+    (
+        "crates.io",
+        "regex",
+        "<1.7.3",
+        "CVE-2023-XXXX: Regex DoS vulnerability",
+        Severity::Medium,
+    ),
+    (
+        "crates.io",
+        "zip",
+        "<0.6.4",
+        "CVE-2023-XXXX: Zip archive vulnerability",
+        Severity::High,
+    ),
     // npm packages
-    ("npm", "lodash", "<4.17.21", "CVE-2021-23337: Lodash prototype pollution", Severity::High),
-    ("npm", "axios", "<0.21.2", "CVE-2021-3749: Axios SSRF vulnerability", Severity::Medium),
-    ("npm", "express", "<4.17.3", "CVE-2022-24999: Express open redirect", Severity::Medium),
-    ("npm", "minimist", "<1.2.6", "CVE-2021-44906: Minimist prototype pollution", Severity::Medium),
-    ("npm", "moment", "<2.29.4", "CVE-2022-24785: Moment.js path traversal", Severity::Low),
-    ("npm", "follow-redirects", "<1.14.8", "CVE-2022-0536: Follow-redirects credential leak", Severity::High),
-    ("npm", "json5", "<2.2.2", "CVE-2022-46175: JSON5 prototype pollution", Severity::High),
-    ("npm", "nth-check", "<2.0.1", "CVE-2021-3803: Nth-check ReDoS", Severity::Low),
-    ("npm", "trim-newlines", "<3.0.1", "CVE-2021-33623: Trim-newlines ReDoS", Severity::Low),
-    ("npm", "glob-parent", "<5.1.2", "CVE-2021-40895: Glob-parent ReDoS", Severity::Low),
-
+    (
+        "npm",
+        "lodash",
+        "<4.17.21",
+        "CVE-2021-23337: Lodash prototype pollution",
+        Severity::High,
+    ),
+    (
+        "npm",
+        "axios",
+        "<0.21.2",
+        "CVE-2021-3749: Axios SSRF vulnerability",
+        Severity::Medium,
+    ),
+    (
+        "npm",
+        "express",
+        "<4.17.3",
+        "CVE-2022-24999: Express open redirect",
+        Severity::Medium,
+    ),
+    (
+        "npm",
+        "minimist",
+        "<1.2.6",
+        "CVE-2021-44906: Minimist prototype pollution",
+        Severity::Medium,
+    ),
+    (
+        "npm",
+        "moment",
+        "<2.29.4",
+        "CVE-2022-24785: Moment.js path traversal",
+        Severity::Low,
+    ),
+    (
+        "npm",
+        "follow-redirects",
+        "<1.14.8",
+        "CVE-2022-0536: Follow-redirects credential leak",
+        Severity::High,
+    ),
+    (
+        "npm",
+        "json5",
+        "<2.2.2",
+        "CVE-2022-46175: JSON5 prototype pollution",
+        Severity::High,
+    ),
+    (
+        "npm",
+        "nth-check",
+        "<2.0.1",
+        "CVE-2021-3803: Nth-check ReDoS",
+        Severity::Low,
+    ),
+    (
+        "npm",
+        "trim-newlines",
+        "<3.0.1",
+        "CVE-2021-33623: Trim-newlines ReDoS",
+        Severity::Low,
+    ),
+    (
+        "npm",
+        "glob-parent",
+        "<5.1.2",
+        "CVE-2021-40895: Glob-parent ReDoS",
+        Severity::Low,
+    ),
     // PyPI packages
-    ("PyPI", "django", "<3.2.18", "CVE-2023-23969: Django potential denial of service", Severity::Medium),
-    ("PyPI", "django", "<4.1.8", "CVE-2023-31047: Django bypass of validation", Severity::Medium),
-    ("PyPI", "flask", "<2.2.5", "CVE-2023-25577: Flask open redirect", Severity::Medium),
-    ("PyPI", "requests", "<2.31.0", "CVE-2023-32681: Requests certificate verification", Severity::High),
-    ("PyPI", "urllib3", "<1.26.17", "CVE-2023-43804: Urllib3 cookie header injection", Severity::Medium),
-    ("PyPI", "cryptography", "<39.0.1", "CVE-2023-23931: Cryptography vulnerability", Severity::High),
-    ("PyPI", "pillow", "<9.5.0", "CVE-2023-3379: Pillow path traversal", Severity::Medium),
-    ("PyPI", "jinja2", "<3.1.2", "CVE-2023-XXXX: Jinja2 XSS vulnerability", Severity::Medium),
-
+    (
+        "PyPI",
+        "django",
+        "<3.2.18",
+        "CVE-2023-23969: Django potential denial of service",
+        Severity::Medium,
+    ),
+    (
+        "PyPI",
+        "django",
+        "<4.1.8",
+        "CVE-2023-31047: Django bypass of validation",
+        Severity::Medium,
+    ),
+    (
+        "PyPI",
+        "flask",
+        "<2.2.5",
+        "CVE-2023-25577: Flask open redirect",
+        Severity::Medium,
+    ),
+    (
+        "PyPI",
+        "requests",
+        "<2.31.0",
+        "CVE-2023-32681: Requests certificate verification",
+        Severity::High,
+    ),
+    (
+        "PyPI",
+        "urllib3",
+        "<1.26.17",
+        "CVE-2023-43804: Urllib3 cookie header injection",
+        Severity::Medium,
+    ),
+    (
+        "PyPI",
+        "cryptography",
+        "<39.0.1",
+        "CVE-2023-23931: Cryptography vulnerability",
+        Severity::High,
+    ),
+    (
+        "PyPI",
+        "pillow",
+        "<9.5.0",
+        "CVE-2023-3379: Pillow path traversal",
+        Severity::Medium,
+    ),
+    (
+        "PyPI",
+        "jinja2",
+        "<3.1.2",
+        "CVE-2023-XXXX: Jinja2 XSS vulnerability",
+        Severity::Medium,
+    ),
     // Go modules
-    ("Go", "golang.org/x/net", "<0.7.0", "CVE-2022-27664: net/http memory exhaustion", Severity::High),
-    ("Go", "golang.org/x/text", "<0.3.8", "CVE-2021-38561: Text encoding vulnerability", Severity::Medium),
-    ("Go", "golang.org/x/crypto", "<0.1.0", "CVE-2022-27191: SSH key exchange panic", Severity::Medium),
+    (
+        "Go",
+        "golang.org/x/net",
+        "<0.7.0",
+        "CVE-2022-27664: net/http memory exhaustion",
+        Severity::High,
+    ),
+    (
+        "Go",
+        "golang.org/x/text",
+        "<0.3.8",
+        "CVE-2021-38561: Text encoding vulnerability",
+        Severity::Medium,
+    ),
+    (
+        "Go",
+        "golang.org/x/crypto",
+        "<0.1.0",
+        "CVE-2022-27191: SSH key exchange panic",
+        Severity::Medium,
+    ),
 ];
 
 // -- Manifest Parsers --
@@ -269,7 +432,10 @@ pub fn parse_composer_json(path: &Path) -> Result<Vec<Dependency>> {
             if name != "php" {
                 deps.push(Dependency {
                     name,
-                    version: version.trim_start_matches('^').trim_start_matches('~').to_string(),
+                    version: version
+                        .trim_start_matches('^')
+                        .trim_start_matches('~')
+                        .to_string(),
                     ecosystem: "Packagist".to_string(),
                     manifest_file: path.to_path_buf(),
                     is_dev: false,
@@ -282,7 +448,10 @@ pub fn parse_composer_json(path: &Path) -> Result<Vec<Dependency>> {
         for (name, version) in require_dev {
             deps.push(Dependency {
                 name,
-                version: version.trim_start_matches('^').trim_start_matches('~').to_string(),
+                version: version
+                    .trim_start_matches('^')
+                    .trim_start_matches('~')
+                    .to_string(),
                 ecosystem: "Packagist".to_string(),
                 manifest_file: path.to_path_buf(),
                 is_dev: true,
@@ -305,10 +474,7 @@ pub fn parse_pubspec_yaml(path: &Path) -> Result<Vec<Dependency>> {
         None => return Ok(deps),
     };
 
-    let dep_sections = [
-        ("dependencies", false),
-        ("dev_dependencies", true),
-    ];
+    let dep_sections = [("dependencies", false), ("dev_dependencies", true)];
 
     for (section_key, is_dev) in &dep_sections {
         if let Some(section) = map.get(&serde_yaml::Value::String(section_key.to_string())) {
@@ -453,7 +619,10 @@ pub fn parse_package_json(path: &Path) -> Result<Vec<Dependency>> {
         for (name, version) in deps_map {
             deps.push(Dependency {
                 name,
-                version: version.trim_start_matches('^').trim_start_matches('~').to_string(),
+                version: version
+                    .trim_start_matches('^')
+                    .trim_start_matches('~')
+                    .to_string(),
                 ecosystem: "npm".to_string(),
                 manifest_file: path.to_path_buf(),
                 is_dev: false,
@@ -465,7 +634,10 @@ pub fn parse_package_json(path: &Path) -> Result<Vec<Dependency>> {
         for (name, version) in deps_map {
             deps.push(Dependency {
                 name,
-                version: version.trim_start_matches('^').trim_start_matches('~').to_string(),
+                version: version
+                    .trim_start_matches('^')
+                    .trim_start_matches('~')
+                    .to_string(),
                 ecosystem: "npm".to_string(),
                 manifest_file: path.to_path_buf(),
                 is_dev: true,
@@ -483,16 +655,24 @@ pub fn parse_requirements_txt(path: &Path) -> Result<Vec<Dependency>> {
 
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("-r") || trimmed.starts_with("--") {
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("-r")
+            || trimmed.starts_with("--")
+        {
             continue;
         }
 
         // Handle `package==1.0.0`, `package>=1.0.0`, `package~=1.0.0`
         if let Some(eq_pos) = trimmed.find("==") {
             let name = trimmed[..eq_pos].trim().to_string();
-            let version = trimmed[eq_pos + 2..].trim().split(',')
-                .next().unwrap_or("")
-                .trim().to_string();
+            let version = trimmed[eq_pos + 2..]
+                .trim()
+                .split(',')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if !name.is_empty() && !version.is_empty() {
                 deps.push(Dependency {
                     name,
@@ -563,7 +743,11 @@ pub fn version_matches_constraint(version: &str, constraint: &str) -> bool {
 }
 
 /// Query OSV.dev API for vulnerabilities
-async fn query_osv(ecosystem: &str, name: &str, version: &str) -> Result<Vec<(String, String, Option<String>, Severity)>> {
+async fn query_osv(
+    ecosystem: &str,
+    name: &str,
+    version: &str,
+) -> Result<Vec<(String, String, Option<String>, Severity)>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
@@ -620,10 +804,20 @@ async fn query_osv(ecosystem: &str, name: &str, version: &str) -> Result<Vec<(St
 pub fn find_manifests(project_path: &Path) -> Vec<PathBuf> {
     let mut manifests = Vec::new();
     let manifest_names = [
-        "cargo.toml", "package.json", "requirements.txt",
-        "gemfile", "go.mod", "composer.json", "pubspec.yaml",
-        "cargo.lock", "package-lock.json", "yarn.lock",
-        "gemfile.lock", "go.sum", "pom.xml", "build.gradle",
+        "cargo.toml",
+        "package.json",
+        "requirements.txt",
+        "gemfile",
+        "go.mod",
+        "composer.json",
+        "pubspec.yaml",
+        "cargo.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "gemfile.lock",
+        "go.sum",
+        "pom.xml",
+        "build.gradle",
     ];
 
     // Walk project root (not recursively into dep dirs)
@@ -645,7 +839,10 @@ pub fn find_manifests(project_path: &Path) -> Vec<PathBuf> {
     }
 
     // Recursively search common subdirectories up to depth 3
-    let search_dirs = ["src", "app", "server", "client", "backend", "frontend", "api", "lib", "cmd", "pkg", "internal", "modules", "packages"];
+    let search_dirs = [
+        "src", "app", "server", "client", "backend", "frontend", "api", "lib", "cmd", "pkg",
+        "internal", "modules", "packages",
+    ];
     for subdir in &search_dirs {
         let sub_path = project_path.join(subdir);
         if sub_path.is_dir() {
@@ -656,7 +853,13 @@ pub fn find_manifests(project_path: &Path) -> Vec<PathBuf> {
     manifests
 }
 
-fn find_manifests_recursive(dir: &Path, manifest_names: &[&str], manifests: &mut Vec<PathBuf>, depth: usize, max_depth: usize) {
+fn find_manifests_recursive(
+    dir: &Path,
+    manifest_names: &[&str],
+    manifests: &mut Vec<PathBuf>,
+    depth: usize,
+    max_depth: usize,
+) {
     if depth > max_depth {
         return;
     }
@@ -666,7 +869,10 @@ fn find_manifests_recursive(dir: &Path, manifest_names: &[&str], manifests: &mut
             if path.is_dir() {
                 // Skip node_modules, target, .git, vendor
                 let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if matches!(dir_name, "node_modules" | "target" | ".git" | "vendor" | "build" | "dist") {
+                if matches!(
+                    dir_name,
+                    "node_modules" | "target" | ".git" | "vendor" | "build" | "dist"
+                ) {
                     continue;
                 }
                 find_manifests_recursive(&path, manifest_names, manifests, depth + 1, max_depth);
@@ -722,10 +928,7 @@ fn check_embedded_advisories(dep: &Dependency) -> Vec<Finding> {
                     Confidence::High,
                     "dependency-scanner",
                 )
-                .at(
-                    dep.manifest_file.to_string_lossy().to_string(),
-                    0,
-                )
+                .at(dep.manifest_file.to_string_lossy().to_string(), 0)
                 .with_cve(desc.split(':').next().unwrap_or("unknown"))
                 .with_cwe("CWE-1104")
                 .with_remediation(format!(
@@ -782,7 +985,9 @@ fn import_tokens(line: &str) -> Vec<String> {
                 let spec: String = bytes[i + 1..end].iter().collect();
                 let spec = spec.trim();
                 if !spec.is_empty()
-                    && spec.chars().all(|ch| ch.is_alphanumeric() || "_-.@/".contains(ch))
+                    && spec
+                        .chars()
+                        .all(|ch| ch.is_alphanumeric() || "_-.@/".contains(ch))
                 {
                     tokens.push(spec.to_lowercase());
                 }
@@ -818,8 +1023,8 @@ fn import_tokens(line: &str) -> Vec<String> {
 /// project walk. Used by deps scanning so reachability costs one walk, not one
 /// per vulnerable package.
 pub fn build_usage_map(project_path: &Path) -> std::collections::HashMap<String, Vec<String>> {
-    use ignore::WalkBuilder;
     use crate::scan;
+    use ignore::WalkBuilder;
 
     let walker = WalkBuilder::new(project_path)
         .git_ignore(true)
@@ -846,14 +1051,32 @@ pub fn build_usage_map(project_path: &Path) -> std::collections::HashMap<String,
             .unwrap_or_default();
         if !matches!(
             ext.as_str(),
-            "rs" | "js" | "jsx" | "ts" | "tsx" | "py" | "go" | "rb" | "java"
-                | "kt" | "swift" | "c" | "cpp" | "h" | "hpp" | "cs" | "php" | "vue" | "svelte"
+            "rs" | "js"
+                | "jsx"
+                | "ts"
+                | "tsx"
+                | "py"
+                | "go"
+                | "rb"
+                | "java"
+                | "kt"
+                | "swift"
+                | "c"
+                | "cpp"
+                | "h"
+                | "hpp"
+                | "cs"
+                | "php"
+                | "vue"
+                | "svelte"
         ) {
             continue;
         }
         file_count += 1;
 
-        let Ok(content) = std::fs::read_to_string(path) else { continue };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
         let rel = path
             .strip_prefix(project_path)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -914,7 +1137,8 @@ fn annotate_usage(
 
     if usage_files.is_empty() {
         finding.usage = Some(
-            "declared in manifest but not directly imported in source (low reachability)".to_string(),
+            "declared in manifest but not directly imported in source (low reachability)"
+                .to_string(),
         );
         // Not imported anywhere: reachability is low, discount the risk.
         finding.exploitability = (finding.exploitability * 0.5).clamp(0.0, 1.0);
@@ -922,7 +1146,11 @@ fn annotate_usage(
     }
     let shown: Vec<&str> = usage_files.iter().take(4).map(|s| s.as_str()).collect();
     let more = usage_files.len().saturating_sub(shown.len());
-    let mut text = format!("used in {} file(s): {}", usage_files.len(), shown.join(", "));
+    let mut text = format!(
+        "used in {} file(s): {}",
+        usage_files.len(),
+        shown.join(", ")
+    );
     if more > 0 {
         text.push_str(&format!(" (+{} more)", more));
     }
@@ -1025,7 +1253,10 @@ pub async fn run_deps(
     if manifests.is_empty() {
         println!("  {} No dependency manifests found.", "[-]".yellow());
         println!("  Supported: Cargo.toml, package.json, requirements.txt, and others.");
-        return Ok(FindingReport::new("dependency-scanner", canonical_path.to_string_lossy()));
+        return Ok(FindingReport::new(
+            "dependency-scanner",
+            canonical_path.to_string_lossy(),
+        ));
     }
 
     println!(
@@ -1048,7 +1279,12 @@ pub async fn run_deps(
                 all_deps.extend(deps);
             }
             Err(e) => {
-                eprintln!("  {} Failed to parse {}: {}", "[!]".yellow(), manifest.display(), e);
+                eprintln!(
+                    "  {} Failed to parse {}: {}",
+                    "[!]".yellow(),
+                    manifest.display(),
+                    e
+                );
             }
         }
     }
@@ -1058,7 +1294,10 @@ pub async fn run_deps(
 
     if all_deps.is_empty() {
         println!("\n  {} No dependencies found in manifests.", "[-]".yellow());
-        return Ok(FindingReport::new("dependency-scanner", canonical_path.to_string_lossy()));
+        return Ok(FindingReport::new(
+            "dependency-scanner",
+            canonical_path.to_string_lossy(),
+        ));
     }
 
     println!(
@@ -1098,13 +1337,20 @@ pub async fn run_deps(
 
     // Display results
     println!();
-    println!("{} {}", "[LIST]".bright_blue(), "Dependency Analysis Results".bold());
+    println!(
+        "{} {}",
+        "[LIST]".bright_blue(),
+        "Dependency Analysis Results".bold()
+    );
     println!("  {}", "-".repeat(50).dimmed());
     report.print_summary();
 
     if report.is_empty() {
         println!();
-        println!("{} No known vulnerabilities found in dependencies.", "[OK]".green().bold());
+        println!(
+            "{} No known vulnerabilities found in dependencies.",
+            "[OK]".green().bold()
+        );
         if !use_online {
             println!(
                 "  {} Run {} for online vulnerability database checks (requires internet).",
@@ -1126,17 +1372,36 @@ pub async fn run_deps(
         let vuln_count = report
             .findings
             .iter()
-            .filter(|f| f.file_path.as_deref().map(|fp| fp.contains(&dep.name)).unwrap_or(false))
+            .filter(|f| {
+                f.file_path
+                    .as_deref()
+                    .map(|fp| fp.contains(&dep.name))
+                    .unwrap_or(false)
+            })
             .count();
         let status = if vuln_count > 0 {
-            format!("{} ({})", "[!]".yellow(), format!("{} vulnerabilities", vuln_count).red().bold())
+            format!(
+                "{} ({})",
+                "[!]".yellow(),
+                format!("{} vulnerabilities", vuln_count).red().bold()
+            )
         } else {
             "[OK]".green().to_string()
         };
-        println!("  {} {} {}  {}", dep.ecosystem.bold().dimmed(), dep.name.cyan(), dep.version.dimmed(), status);
+        println!(
+            "  {} {} {}  {}",
+            dep.ecosystem.bold().dimmed(),
+            dep.name.cyan(),
+            dep.version.dimmed(),
+            status
+        );
     }
 
-    let critical_high = report.findings.iter().filter(|f| f.severity == Severity::Critical || f.severity == Severity::High).count();
+    let critical_high = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == Severity::Critical || f.severity == Severity::High)
+        .count();
     if critical_high > 0 {
         println!();
         println!("{} Found {} critical/high severity dependency issues. Update affected packages immediately.", "[!]".yellow().bold(), critical_high.to_string().bold());

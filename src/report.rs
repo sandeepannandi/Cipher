@@ -3,8 +3,8 @@ use crate::finding::{dedup_key, should_collapse, Finding, FindingType, Severity}
 use crate::review;
 use crate::secrets;
 use anyhow::Result;
-use colored::*;
 use chrono::Utc;
+use colored::*;
 use serde::Serialize;
 use std::path::Path;
 
@@ -90,12 +90,13 @@ impl AggregatedReport {
             }
         }
         kept
-    }    /// Compute an overall security score 0–100.
-///
-/// Penalty is per-finding: severity weight (critical 25 / high 10 / medium 4 /
-/// low 1) scaled by exploitability and business impact — so a critical bug in a
-/// payment path with high reachability hurts much more than an unreachable low
-/// in a test file.
+    }
+    /// Compute an overall security score 0–100.
+    ///
+    /// Penalty is per-finding: severity weight (critical 25 / high 10 / medium 4 /
+    /// low 1) scaled by exploitability and business impact — so a critical bug in a
+    /// payment path with high reachability hurts much more than an unreachable low
+    /// in a test file.
     pub fn security_score(&self) -> f64 {
         let total = self.total_findings();
         if total == 0 {
@@ -104,7 +105,9 @@ impl AggregatedReport {
         let penalty: f64 = self
             .deduped_all()
             .iter()
-            .map(|f| severity_weight(f.severity) * (0.5 + f.exploitability) * (0.5 + f.business_impact))
+            .map(|f| {
+                severity_weight(f.severity) * (0.5 + f.exploitability) * (0.5 + f.business_impact)
+            })
             .sum();
         (100.0 - penalty).clamp(0.0, 100.0)
     }
@@ -150,9 +153,11 @@ pub(crate) fn compute_business_impact(f: &Finding) -> f64 {
 
     if let Some(fp) = f.file_path.as_deref() {
         let low = fp.to_lowercase();
-        if ["payment", "billing", "checkout", "order", "wallet", "stripe", "charge"]
-            .iter()
-            .any(|k| low.contains(k))
+        if [
+            "payment", "billing", "checkout", "order", "wallet", "stripe", "charge",
+        ]
+        .iter()
+        .any(|k| low.contains(k))
         {
             impact = (impact + 0.15).min(1.0);
         }
@@ -209,7 +214,11 @@ pub async fn run_report(
     println!(
         "{} {}",
         "[STATS]".bright_blue(),
-        format!("Generating security report for {}...", canonical_path.display()).bold()
+        format!(
+            "Generating security report for {}...",
+            canonical_path.display()
+        )
+        .bold()
     );
 
     // Phase 1: Collect findings from all sources
@@ -370,25 +379,23 @@ fn generate_executive_md(report: &AggregatedReport) -> String {
     let mut md = String::new();
 
     md.push_str("# Security Report — Executive Summary\n\n");
-    md.push_str(&format!(
-        "**Project:** `{}`  \n", report.project_path
-    ));
-    md.push_str(&format!(
-        "**Generated:** {}  \n", report.created_at
-    ));
+    md.push_str(&format!("**Project:** `{}`  \n", report.project_path));
+    md.push_str(&format!("**Generated:** {}  \n", report.created_at));
     md.push_str("**Tool:** CipherAI — AI-Powered Security Analysis\n\n");
 
     md.push_str("## Overall Security Score\n\n");
-    md.push_str(&format!(
-        "{} **{:.0}/100**\n\n", score_badge, score
-    ));
+    md.push_str(&format!("{} **{:.0}/100**\n\n", score_badge, score));
 
     if score >= 80.0 {
         md.push_str("Your project has a **good** security posture. Minor issues to address.\n\n");
     } else if score >= 50.0 {
-        md.push_str("Your project has **moderate** security risks that should be addressed soon.\n\n");
+        md.push_str(
+            "Your project has **moderate** security risks that should be addressed soon.\n\n",
+        );
     } else {
-        md.push_str("Your project has **critical** security risks that need immediate attention.\n\n");
+        md.push_str(
+            "Your project has **critical** security risks that need immediate attention.\n\n",
+        );
     }
 
     md.push_str("## Finding Summary\n\n");
@@ -428,18 +435,21 @@ fn generate_executive_md(report: &AggregatedReport) -> String {
             md.push_str(&format!(
                 "   - File: `{}`{}  \n",
                 fp,
-                finding.line_number.map(|l| format!(":{}", l)).unwrap_or_default()
+                finding
+                    .line_number
+                    .map(|l| format!(":{}", l))
+                    .unwrap_or_default()
             ));
         }
         md.push_str(&format!(
             "   - {} — {}  \n\n",
-            finding.severity,
-            finding.confidence
+            finding.severity, finding.confidence
         ));
     }
 
     md.push_str("## Recommendations\n\n");
-    let critical_high = report.count_by_severity(Severity::Critical) + report.count_by_severity(Severity::High);
+    let critical_high =
+        report.count_by_severity(Severity::Critical) + report.count_by_severity(Severity::High);
     if critical_high > 0 {
         md.push_str(&format!(
             "- [RED] **{} critical/high severity issues** should be fixed immediately.\n",
@@ -477,12 +487,30 @@ fn generate_developer_md(report: &AggregatedReport) -> String {
 
     md.push_str("## Summary\n\n");
     md.push_str("| Severity | Count |\n|----------|------:|\n");
-    md.push_str(&format!("| [RED] Critical | {} |\n", report.count_by_severity(Severity::Critical)));
-    md.push_str(&format!("| 🟠 High | {} |\n", report.count_by_severity(Severity::High)));
-    md.push_str(&format!("| [YELLOW] Medium | {} |\n", report.count_by_severity(Severity::Medium)));
-    md.push_str(&format!("| [BLUE] Low | {} |\n", report.count_by_severity(Severity::Low)));
-    md.push_str(&format!("| **Total** | **{}** |\n\n", report.total_findings()));
-    md.push_str(&format!("**Security Score:** {:.0}/100  \n\n", report.security_score()));
+    md.push_str(&format!(
+        "| [RED] Critical | {} |\n",
+        report.count_by_severity(Severity::Critical)
+    ));
+    md.push_str(&format!(
+        "| 🟠 High | {} |\n",
+        report.count_by_severity(Severity::High)
+    ));
+    md.push_str(&format!(
+        "| [YELLOW] Medium | {} |\n",
+        report.count_by_severity(Severity::Medium)
+    ));
+    md.push_str(&format!(
+        "| [BLUE] Low | {} |\n",
+        report.count_by_severity(Severity::Low)
+    ));
+    md.push_str(&format!(
+        "| **Total** | **{}** |\n\n",
+        report.total_findings()
+    ));
+    md.push_str(&format!(
+        "**Security Score:** {:.0}/100  \n\n",
+        report.security_score()
+    ));
 
     let total = report.total_findings();
     if total == 0 {
@@ -493,7 +521,12 @@ fn generate_developer_md(report: &AggregatedReport) -> String {
     md.push_str("## Detailed Findings\n\n");
 
     for (i, finding) in report.all_sorted().iter().enumerate() {
-        md.push_str(&format!("### {}. {} ({:.0}/10)\n\n", i + 1, finding.title, finding.risk_score()));
+        md.push_str(&format!(
+            "### {}. {} ({:.0}/10)\n\n",
+            i + 1,
+            finding.title,
+            finding.risk_score()
+        ));
 
         md.push_str("| Field | Value |\n|-------|-------|\n");
         md.push_str(&format!("| Severity | {} |\n", finding.severity));
@@ -509,13 +542,25 @@ fn generate_developer_md(report: &AggregatedReport) -> String {
             md.push_str(&format!("| CVE | {} |\n", cve));
         }
         if let Some(ref fp) = finding.file_path {
-            let line = finding.line_number.map(|l| format!(":{}", l)).unwrap_or_default();
+            let line = finding
+                .line_number
+                .map(|l| format!(":{}", l))
+                .unwrap_or_default();
             md.push_str(&format!("| File | `{}` |\n", fp));
             md.push_str(&format!("| Line | {} |\n", line));
         }
-        md.push_str(&format!("| Exploitability | {:.0}% |\n", finding.exploitability * 100.0));
-        md.push_str(&format!("| Business Impact | {:.0}% |\n", finding.business_impact * 100.0));
-        md.push_str(&format!("| Remediation Effort | {} |\n", finding.remediation_effort));
+        md.push_str(&format!(
+            "| Exploitability | {:.0}% |\n",
+            finding.exploitability * 100.0
+        ));
+        md.push_str(&format!(
+            "| Business Impact | {:.0}% |\n",
+            finding.business_impact * 100.0
+        ));
+        md.push_str(&format!(
+            "| Remediation Effort | {} |\n",
+            finding.remediation_effort
+        ));
         md.push_str("\n");
 
         md.push_str("**Description:**\n\n");
@@ -772,17 +817,29 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     let score = report.security_score();
 
     println!();
-    println!("{}", "+----------------------------------------------┐".bright_blue());
+    println!(
+        "{}",
+        "+----------------------------------------------┐".bright_blue()
+    );
     println!(
         "{} {} {}",
         "|".bright_blue(),
         "CipherAI Security Report".bold().white(),
         "|".bright_blue()
     );
-    println!("{}", "+----------------------------------------------┘".bright_blue());
+    println!(
+        "{}",
+        "+----------------------------------------------┘".bright_blue()
+    );
     println!();
 
-    let score_color = if score >= 80.0 { "green" } else if score >= 50.0 { "yellow" } else { "red" };
+    let score_color = if score >= 80.0 {
+        "green"
+    } else if score >= 50.0 {
+        "yellow"
+    } else {
+        "red"
+    };
     println!(
         "  {} {}",
         "Security Score:".bold(),
@@ -796,13 +853,25 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     println!();
 
     // Summary table
-    println!("  {} {}  {} {}  {} {}  {} {}  ({} total)",
+    println!(
+        "  {} {}  {} {}  {} {}  {} {}  ({} total)",
         "*".red().bold(),
-        report.count_by_severity(Severity::Critical).to_string().red().bold(),
+        report
+            .count_by_severity(Severity::Critical)
+            .to_string()
+            .red()
+            .bold(),
         "*".yellow().bold(),
-        report.count_by_severity(Severity::High).to_string().yellow().bold(),
+        report
+            .count_by_severity(Severity::High)
+            .to_string()
+            .yellow()
+            .bold(),
         "*".cyan(),
-        report.count_by_severity(Severity::Medium).to_string().cyan(),
+        report
+            .count_by_severity(Severity::Medium)
+            .to_string()
+            .cyan(),
         "o".dimmed(),
         report.count_by_severity(Severity::Low).to_string().dimmed(),
         total.to_string().bold()
@@ -862,12 +931,19 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     }
 
     // Top findings
-    println!("  {} {} (all findings sorted by risk)\n", "[TARGET]".bold(), "Top Findings".bold());
+    println!(
+        "  {} {} (all findings sorted by risk)\n",
+        "[TARGET]".bold(),
+        "Top Findings".bold()
+    );
     let all = report.all_sorted();
     let max_show = all.len().min(10);
     for finding in all.iter().take(max_show) {
         let fp = finding.file_path.as_deref().unwrap_or("<unknown>");
-        let line = finding.line_number.map(|l| format!(":{}", l)).unwrap_or_default();
+        let line = finding
+            .line_number
+            .map(|l| format!(":{}", l))
+            .unwrap_or_default();
         println!(
             "    {}  {}  {}  {}  [{:.0}/10]  impact:{:.0}%",
             finding.severity.badge(),
@@ -879,7 +955,10 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
         );
     }
     if all.len() > max_show {
-        println!("    ... and {} more findings", (all.len() - max_show).to_string().dimmed());
+        println!(
+            "    ... and {} more findings",
+            (all.len() - max_show).to_string().dimmed()
+        );
     }
     println!();
 
@@ -890,7 +969,6 @@ fn print_terminal(report: &AggregatedReport, _report_type: &str) {
     println!("cipher-ai report --format html  (exports cipher-ai-report.html)");
     println!("cipher-ai report --type executive  (for managers)");
     println!();
-
 }
 
 #[cfg(test)]
@@ -918,7 +996,9 @@ mod tests {
     #[test]
     fn test_security_score_penalizes_critical() {
         let mut report = AggregatedReport::new("/proj");
-        report.review.push(mk("SQL Injection", "security-review", Severity::Critical));
+        report
+            .review
+            .push(mk("SQL Injection", "security-review", Severity::Critical));
         assert_eq!(report.security_score(), 75.0);
     }
 
@@ -927,7 +1007,8 @@ mod tests {
         let mut report = AggregatedReport::new("/proj");
         // Distinct locations so dedup doesn't collapse them into one finding
         for i in 0..10 {
-            let f = mk("SQL Injection", "security-review", Severity::Critical).at(format!("/proj/f{}.py", i), 1);
+            let f = mk("SQL Injection", "security-review", Severity::Critical)
+                .at(format!("/proj/f{}.py", i), 1);
             report.review.push(f);
         }
         assert_eq!(report.security_score(), 0.0);
@@ -971,10 +1052,16 @@ mod tests {
         let mut review_f = mk("SQL Injection", "security-review", Severity::High);
         review_f = review_f.at("/proj/app.py", 12);
         let mut pentest_f = mk("SQL Injection", "pentest", Severity::Critical);
-        pentest_f = pentest_f.at("/proj/app.py", 12).with_usage("endpoint: GET /search");
+        pentest_f = pentest_f
+            .at("/proj/app.py", 12)
+            .with_usage("endpoint: GET /search");
         report.review.push(review_f);
         report.pentest.push(pentest_f);
-        assert_eq!(report.total_findings(), 1, "same file:line collapses across scanners");
+        assert_eq!(
+            report.total_findings(),
+            1,
+            "same file:line collapses across scanners"
+        );
     }
 
     #[test]
@@ -991,7 +1078,10 @@ mod tests {
 
     #[test]
     fn test_html_escape_special_chars() {
-        assert_eq!(html_escape("<script>&\"'"), "&lt;script&gt;&amp;&quot;&#39;");
+        assert_eq!(
+            html_escape("<script>&\"'"),
+            "&lt;script&gt;&amp;&quot;&#39;"
+        );
         assert_eq!(html_escape("plain text"), "plain text");
     }
 
@@ -1025,11 +1115,17 @@ mod tests {
         // HTML must always export to a file (raw markup is useless on stdout)
         assert_eq!(resolve_output("html", None), Some("cipher-ai-report.html"));
         // Explicit --output wins
-        assert_eq!(resolve_output("html", Some("custom.html")), Some("custom.html"));
+        assert_eq!(
+            resolve_output("html", Some("custom.html")),
+            Some("custom.html")
+        );
         // Other formats keep stdout fallback so they can be piped
         assert_eq!(resolve_output("markdown", None), None);
         assert_eq!(resolve_output("json", None), None);
-        assert_eq!(resolve_output("json", Some("report.json")), Some("report.json"));
+        assert_eq!(
+            resolve_output("json", Some("report.json")),
+            Some("report.json")
+        );
         // Terminal format never exports
         assert_eq!(resolve_output("terminal", None), None);
     }

@@ -3,13 +3,39 @@ use std::path::Path;
 /// Directories/files to always exclude from scanning to prevent hangs
 /// on large dependency directories or build artifacts.
 pub const ALWAYS_EXCLUDE: &[&str] = &[
-    ".git", "node_modules", "vendor", "target", "build", "dist",
-    "__pycache__", ".tox", ".venv", "venv", ".env", ".env.example",
-    "*.min.js", "*.min.css", "*.map", "*.bundle.js",
-    "*.svg", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.ico",
-    "*.woff", "*.woff2", "*.ttf", "*.eot",
-    "*.lock", "package-lock.json", "yarn.lock", "Cargo.lock",
-    ".cargo", ".cipher-ai", ".secagent",
+    ".git",
+    "node_modules",
+    "vendor",
+    "target",
+    "build",
+    "dist",
+    "__pycache__",
+    ".tox",
+    ".venv",
+    "venv",
+    ".env",
+    ".env.example",
+    "*.min.js",
+    "*.min.css",
+    "*.map",
+    "*.bundle.js",
+    "*.svg",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.ico",
+    "*.woff",
+    "*.woff2",
+    "*.ttf",
+    "*.eot",
+    "*.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "Cargo.lock",
+    ".cargo",
+    ".cipher-ai",
+    ".secagent",
 ];
 
 /// Max directory depth for walking (prevents infinite descent)
@@ -72,7 +98,9 @@ mod tests {
 
     #[test]
     fn test_should_exclude_node_modules() {
-        assert!(should_exclude(Path::new("/project/node_modules/express/index.js")));
+        assert!(should_exclude(Path::new(
+            "/project/node_modules/express/index.js"
+        )));
     }
 
     #[test]

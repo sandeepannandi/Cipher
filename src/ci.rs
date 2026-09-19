@@ -97,13 +97,21 @@ pub async fn run_ci(
     let review_result = review::collect_review_findings(project_path, use_ai, None).await?;
     let review_critical = count_exact(&review_result.findings, Severity::Critical);
     let review_high = count_exact(&review_result.findings, Severity::High);
-    output::print_ok("Review", &format!(
-        "{} critical, {} high, {} total",
-        review_critical.to_string().red().bold(),
-        review_high.to_string().yellow().bold(),
-        review_result.len().to_string().bold()
-    ));
-    steps.push(CiStepResult { step: "review", critical: review_critical, high: review_high, total: review_result.len() });
+    output::print_ok(
+        "Review",
+        &format!(
+            "{} critical, {} high, {} total",
+            review_critical.to_string().red().bold(),
+            review_high.to_string().yellow().bold(),
+            review_result.len().to_string().bold()
+        ),
+    );
+    steps.push(CiStepResult {
+        step: "review",
+        critical: review_critical,
+        high: review_high,
+        total: review_result.len(),
+    });
     merged.extend(review_result.findings);
 
     // Step 2: Secrets scan
@@ -111,13 +119,21 @@ pub async fn run_ci(
     let secrets_result = secrets::collect_secrets_findings(project_path)?;
     let secrets_critical = count_exact(&secrets_result.findings, Severity::Critical);
     let secrets_high = count_exact(&secrets_result.findings, Severity::High);
-    output::print_ok("Secrets", &format!(
-        "{} critical, {} high, {} total",
-        secrets_critical.to_string().red().bold(),
-        secrets_high.to_string().yellow().bold(),
-        secrets_result.len().to_string().bold()
-    ));
-    steps.push(CiStepResult { step: "secrets", critical: secrets_critical, high: secrets_high, total: secrets_result.len() });
+    output::print_ok(
+        "Secrets",
+        &format!(
+            "{} critical, {} high, {} total",
+            secrets_critical.to_string().red().bold(),
+            secrets_high.to_string().yellow().bold(),
+            secrets_result.len().to_string().bold()
+        ),
+    );
+    steps.push(CiStepResult {
+        step: "secrets",
+        critical: secrets_critical,
+        high: secrets_high,
+        total: secrets_result.len(),
+    });
     merged.extend(secrets_result.findings);
 
     // Step 3: Deps check
@@ -125,13 +141,21 @@ pub async fn run_ci(
     let deps_result = deps::collect_deps_findings(project_path, false).await?;
     let deps_critical = count_exact(&deps_result.findings, Severity::Critical);
     let deps_high = count_exact(&deps_result.findings, Severity::High);
-    output::print_ok("Deps", &format!(
-        "{} critical, {} high, {} total",
-        deps_critical.to_string().red().bold(),
-        deps_high.to_string().yellow().bold(),
-        deps_result.len().to_string().bold()
-    ));
-    steps.push(CiStepResult { step: "deps", critical: deps_critical, high: deps_high, total: deps_result.len() });
+    output::print_ok(
+        "Deps",
+        &format!(
+            "{} critical, {} high, {} total",
+            deps_critical.to_string().red().bold(),
+            deps_high.to_string().yellow().bold(),
+            deps_result.len().to_string().bold()
+        ),
+    );
+    steps.push(CiStepResult {
+        step: "deps",
+        critical: deps_critical,
+        high: deps_high,
+        total: deps_result.len(),
+    });
     merged.extend(deps_result.findings);
 
     // Step 4: Zero-day anomaly scan
@@ -140,26 +164,47 @@ pub async fn run_ci(
     let zd_findings = zeroday_report.to_finding_report().findings;
     let zd_critical = count_exact(&zd_findings, Severity::Critical);
     let zd_high = count_exact(&zd_findings, Severity::High);
-    output::print_ok("Zero-day", &format!(
-        "{} critical, {} high, {} total",
-        zd_critical.to_string().red().bold(),
-        zd_high.to_string().yellow().bold(),
-        zd_findings.len().to_string().bold()
-    ));
-    steps.push(CiStepResult { step: "zeroday", critical: zd_critical, high: zd_high, total: zd_findings.len() });
+    output::print_ok(
+        "Zero-day",
+        &format!(
+            "{} critical, {} high, {} total",
+            zd_critical.to_string().red().bold(),
+            zd_high.to_string().yellow().bold(),
+            zd_findings.len().to_string().bold()
+        ),
+    );
+    steps.push(CiStepResult {
+        step: "zeroday",
+        critical: zd_critical,
+        high: zd_high,
+        total: zd_findings.len(),
+    });
     merged.extend(zd_findings);
 
     // Step 5: Attack path analysis
     output::print_step(5, total_steps, "Analyzing attack paths");
     let attack_count = match attack::collect_attack_summary(project_path).await {
         Ok(count) => {
-            output::print_ok("Attack paths", &format!("{} attack chains found", count.to_string().bold()));
-            steps.push(CiStepResult { step: "attack", critical: 0, high: 0, total: count });
+            output::print_ok(
+                "Attack paths",
+                &format!("{} attack chains found", count.to_string().bold()),
+            );
+            steps.push(CiStepResult {
+                step: "attack",
+                critical: 0,
+                high: 0,
+                total: count,
+            });
             count
         }
         Err(_) => {
             output::print_warn("Attack paths", "skipped (no findings to chain)");
-            steps.push(CiStepResult { step: "attack", critical: 0, high: 0, total: 0 });
+            steps.push(CiStepResult {
+                step: "attack",
+                critical: 0,
+                high: 0,
+                total: 0,
+            });
             0
         }
     };
@@ -181,15 +226,23 @@ pub async fn run_ci(
         anchor_findings(project_path, &mut live_findings);
         let p_critical = count_exact(&live_findings, Severity::Critical);
         let p_high = count_exact(&live_findings, Severity::High);
-        output::print_ok("Pentest", &format!(
-            "{} target(s) probed, {} proven finding(s) — {} critical, {} high",
-            sweep.targets.to_string().bold(),
-            live_findings.len().to_string().bold(),
-            p_critical.to_string().red().bold(),
-            p_high.to_string().yellow().bold()
-        ));
+        output::print_ok(
+            "Pentest",
+            &format!(
+                "{} target(s) probed, {} proven finding(s) — {} critical, {} high",
+                sweep.targets.to_string().bold(),
+                live_findings.len().to_string().bold(),
+                p_critical.to_string().red().bold(),
+                p_high.to_string().yellow().bold()
+            ),
+        );
         pentest_count = live_findings.len();
-        steps.push(CiStepResult { step: "pentest", critical: p_critical, high: p_high, total: live_findings.len() });
+        steps.push(CiStepResult {
+            step: "pentest",
+            critical: p_critical,
+            high: p_high,
+            total: live_findings.len(),
+        });
         merged.extend(std::mem::take(&mut live_findings));
     }
 
@@ -197,7 +250,10 @@ pub async fn run_ci(
     output::print_info("SBOM", "Generating software bill of materials...");
     match sbom::collect_sbom_summary(project_path).await {
         Ok(dep_count) => {
-            output::print_ok("SBOM", &format!("{} dependencies cataloged", dep_count.to_string().bold()));
+            output::print_ok(
+                "SBOM",
+                &format!("{} dependencies cataloged", dep_count.to_string().bold()),
+            );
         }
         Err(_) => {
             output::print_warn("SBOM", "generation skipped");
@@ -206,18 +262,45 @@ pub async fn run_ci(
 
     // Deduplicate findings across scanners, then compute totals
     let deduped = dedup_findings(merged);
-    let (total_critical, total_high, total_medium, total_low, total_findings) = compute_totals(&deduped);
-    let should_fail = should_fail(fail_severity, total_critical, total_high, total_medium, total_low);
+    let (total_critical, total_high, total_medium, total_low, total_findings) =
+        compute_totals(&deduped);
+    let should_fail = should_fail(
+        fail_severity,
+        total_critical,
+        total_high,
+        total_medium,
+        total_low,
+    );
 
-    let pass_fail = if should_fail && total_findings > 0 { "FAILED" } else { "PASSED" };
-    let pass_fail_styled = if should_fail && total_findings > 0 { pass_fail.red().bold().to_string() } else { pass_fail.green().bold().to_string() };
+    let pass_fail = if should_fail && total_findings > 0 {
+        "FAILED"
+    } else {
+        "PASSED"
+    };
+    let pass_fail_styled = if should_fail && total_findings > 0 {
+        pass_fail.red().bold().to_string()
+    } else {
+        pass_fail.green().bold().to_string()
+    };
 
     let mut summary_rows = vec![
         ("Status".to_string(), pass_fail_styled.clone()),
-        ("Critical".to_string(), total_critical.to_string().red().bold().to_string()),
-        ("High".to_string(), total_high.to_string().yellow().bold().to_string()),
-        ("Total Findings".to_string(), total_findings.to_string().bold().to_string()),
-        ("Attack Chains".to_string(), attack_count.to_string().bold().to_string()),
+        (
+            "Critical".to_string(),
+            total_critical.to_string().red().bold().to_string(),
+        ),
+        (
+            "High".to_string(),
+            total_high.to_string().yellow().bold().to_string(),
+        ),
+        (
+            "Total Findings".to_string(),
+            total_findings.to_string().bold().to_string(),
+        ),
+        (
+            "Attack Chains".to_string(),
+            attack_count.to_string().bold().to_string(),
+        ),
     ];
     if pentest_url.is_some() {
         summary_rows.push(("Pentest Findings".to_string(), pentest_count.to_string()));
@@ -231,7 +314,11 @@ pub async fn run_ci(
     // Handle JSON output
     if format == "json" {
         let json_report = CiJsonReport {
-            status: if should_fail && total_findings > 0 { "failed".to_string() } else { "passed".to_string() },
+            status: if should_fail && total_findings > 0 {
+                "failed".to_string()
+            } else {
+                "passed".to_string()
+            },
             summary: CiSummary {
                 total_critical,
                 total_high,

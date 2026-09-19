@@ -410,10 +410,7 @@ impl Finding {
         format!(
             "{} {} {} — {}",
             self.severity.badge(),
-            self.file_path
-                .as_deref()
-                .unwrap_or("<unknown>")
-                .yellow(),
+            self.file_path.as_deref().unwrap_or("<unknown>").yellow(),
             self.line_number
                 .map(|l| format!(":{}", l))
                 .unwrap_or_default(),
@@ -459,18 +456,27 @@ impl FindingReport {
 
     /// Sort findings by risk score (highest first)
     pub fn sort_by_risk(&mut self) {
-        self.findings
-            .sort_by(|a, b| b.risk_score().partial_cmp(&a.risk_score()).unwrap_or(std::cmp::Ordering::Equal));
+        self.findings.sort_by(|a, b| {
+            b.risk_score()
+                .partial_cmp(&a.risk_score())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// Count by severity
     pub fn count_by_severity(&self, severity: Severity) -> usize {
-        self.findings.iter().filter(|f| f.severity == severity).count()
+        self.findings
+            .iter()
+            .filter(|f| f.severity == severity)
+            .count()
     }
 
     /// Count by type
     pub fn count_by_type(&self, finding_type: FindingType) -> usize {
-        self.findings.iter().filter(|f| f.finding_type == finding_type).count()
+        self.findings
+            .iter()
+            .filter(|f| f.finding_type == finding_type)
+            .count()
     }
 
     /// Print a summary header
@@ -481,11 +487,7 @@ impl FindingReport {
         let low = self.count_by_severity(Severity::Low);
 
         println!();
-        println!(
-            "{} {}",
-            "[STATS]".bright_blue(),
-            "Findings Summary".bold()
-        );
+        println!("{} {}", "[STATS]".bright_blue(), "Findings Summary".bold());
         println!("  {}", "-".repeat(40).dimmed());
         println!(
             "  {} {}  {} {}  {} {}  {} {}  ({} total)",
@@ -532,14 +534,22 @@ impl FindingReport {
                     .line_number
                     .map(|l| format!(":{}", l))
                     .unwrap_or_default();
-                println!("    {} {}{}", "File:".bold().dimmed(), file.yellow(), line_info);
+                println!(
+                    "    {} {}{}",
+                    "File:".bold().dimmed(),
+                    file.yellow(),
+                    line_info
+                );
             }
             if let Some(ref code) = finding.code_snippet {
                 for line in code.lines().take(5) {
                     println!("    | {}", line.dimmed());
                 }
                 if code.lines().count() > 5 {
-                    println!("    | {} more lines...", (code.lines().count() - 5).to_string().dimmed());
+                    println!(
+                        "    | {} more lines...",
+                        (code.lines().count() - 5).to_string().dimmed()
+                    );
                 }
             }
             println!("    {}", finding.description.trim());
@@ -584,19 +594,28 @@ pub fn cwe_for_title(title: &str, finding_type: FindingType) -> Option<String> {
         "CWE-918"
     } else if t.contains("md5") || t.contains("sha1") || t.contains("weak hash") {
         "CWE-328"
-    } else if t.contains("weak encryption") || t.contains("ecb")
-        || t.contains("des_ede3") || t.contains("3des") || t.contains("tripledes") {
+    } else if t.contains("weak encryption")
+        || t.contains("ecb")
+        || t.contains("des_ede3")
+        || t.contains("3des")
+        || t.contains("tripledes")
+    {
         // NOTE: match "weak encryption" (both DES & ECB titles contain it)
         // instead of bare "des", which would also match "deserialization".
         "CWE-327"
-    } else if t.contains("hardcoded cryptographic key") || t.contains("encryption_key")
-        || t.contains("aes_key") || t.contains("secret_key") {
+    } else if t.contains("hardcoded cryptographic key")
+        || t.contains("encryption_key")
+        || t.contains("aes_key")
+        || t.contains("secret_key")
+    {
         "CWE-321"
     } else if t.contains("hardcoded") && (t.contains("credential") || t.contains("password")) {
         "CWE-798"
     } else if t.contains("jwt") || t.contains("token_secret") || t.contains("signing_key") {
         "CWE-345"
-    } else if t.contains("cookie") && (t.contains("insecure") || t.contains("httponly") || t.contains("samesite")) {
+    } else if t.contains("cookie")
+        && (t.contains("insecure") || t.contains("httponly") || t.contains("samesite"))
+    {
         "CWE-614"
     } else if t.contains("debug") {
         "CWE-489"
@@ -614,12 +633,19 @@ pub fn cwe_for_title(title: &str, finding_type: FindingType) -> Option<String> {
         "CWE-295"
     } else if t.contains("dependency") || t.contains("cve") || t.contains("vulnerable package") {
         "CWE-1104"
-    } else if t.contains("secret") || t.contains("api key") || t.contains("apikey")
-        || t.contains("token") || t.contains("credential") {
+    } else if t.contains("secret")
+        || t.contains("api key")
+        || t.contains("apikey")
+        || t.contains("token")
+        || t.contains("credential")
+    {
         "CWE-798"
     } else if t.contains("auth") || t.contains("login") || t.contains("session") {
         "CWE-287"
-    } else if t.contains("access control") || t.contains("authorization") || t.contains("permission") {
+    } else if t.contains("access control")
+        || t.contains("authorization")
+        || t.contains("permission")
+    {
         "CWE-862"
     } else if t.contains("boundary") || t.contains("bounds") {
         "CWE-125"
@@ -649,9 +675,23 @@ pub fn cwe_for_title(title: &str, finding_type: FindingType) -> Option<String> {
 fn is_credential_like(f: &Finding) -> bool {
     let t = f.title.to_lowercase();
     [
-        "password", "credential", "secret", "api key", "apikey", "token",
-        "private key", "jwt", "aws", "github", "gitlab", "stripe", "slack",
-        "discord", "heroku", "connection string", "service account",
+        "password",
+        "credential",
+        "secret",
+        "api key",
+        "apikey",
+        "token",
+        "private key",
+        "jwt",
+        "aws",
+        "github",
+        "gitlab",
+        "stripe",
+        "slack",
+        "discord",
+        "heroku",
+        "connection string",
+        "service account",
     ]
     .iter()
     .any(|k| t.contains(k))
@@ -669,7 +709,11 @@ pub(crate) fn dedup_key(f: &Finding) -> (String, usize, String) {
             };
             (fp.clone(), ln, bucket)
         }
-        _ => (format!("{}:{}", f.source, f.title.to_lowercase()), 0, String::new()),
+        _ => (
+            format!("{}:{}", f.source, f.title.to_lowercase()),
+            0,
+            String::new(),
+        ),
     }
 }
 
@@ -810,11 +854,19 @@ mod tests {
     fn test_risk_score_sorting() {
         let critical = Finding::new(
             FindingType::Vulnerability,
-            "c", "", Severity::Critical, Confidence::High, "t",
+            "c",
+            "",
+            Severity::Critical,
+            Confidence::High,
+            "t",
         );
         let low = Finding::new(
             FindingType::Vulnerability,
-            "l", "", Severity::Low, Confidence::Low, "t",
+            "l",
+            "",
+            Severity::Low,
+            Confidence::Low,
+            "t",
         );
         assert!(critical.risk_score() > low.risk_score());
     }

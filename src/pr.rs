@@ -10,9 +10,7 @@ const GITHUB_API: &str = "https://api.github.com";
 
 /// Collect all findings from every scanner (review, secrets, deps, zeroday).
 /// Returns findings sorted by risk score, plus the attack-chain count.
-pub(crate) async fn collect_pr_findings(
-    project_path: &Path,
-) -> Result<(Vec<Finding>, usize)> {
+pub(crate) async fn collect_pr_findings(project_path: &Path) -> Result<(Vec<Finding>, usize)> {
     let mut all = Vec::new();
 
     // Security review (pattern-based; no AI to keep the scan fast)
@@ -33,7 +31,9 @@ pub(crate) async fn collect_pr_findings(
     }
 
     // Attack-chain count (informational)
-    let attack_count = attack::collect_attack_summary(project_path).await.unwrap_or(0);
+    let attack_count = attack::collect_attack_summary(project_path)
+        .await
+        .unwrap_or(0);
 
     // Deduplicate across scanners and sort by risk
     let deduped = crate::finding::dedup_findings(all);
@@ -49,15 +49,32 @@ pub(crate) async fn collect_pr_findings(
 
 /// Severity counts helper.
 fn severity_counts(findings: &[Finding]) -> (usize, usize, usize, usize) {
-    let critical = findings.iter().filter(|f| f.severity == Severity::Critical).count();
-    let high = findings.iter().filter(|f| f.severity == Severity::High).count();
-    let medium = findings.iter().filter(|f| f.severity == Severity::Medium).count();
-    let low = findings.iter().filter(|f| f.severity == Severity::Low).count();
+    let critical = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Critical)
+        .count();
+    let high = findings
+        .iter()
+        .filter(|f| f.severity == Severity::High)
+        .count();
+    let medium = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Medium)
+        .count();
+    let low = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Low)
+        .count();
     (critical, high, medium, low)
 }
 
 /// Render a markdown PR comment body from the collected findings.
-pub(crate) fn render_pr_comment(findings: &[Finding], attack_count: usize, repo: &str, pr_number: u32) -> String {
+pub(crate) fn render_pr_comment(
+    findings: &[Finding],
+    attack_count: usize,
+    repo: &str,
+    pr_number: u32,
+) -> String {
     let (critical, high, medium, low) = severity_counts(findings);
     let total = findings.len();
 
@@ -197,14 +214,19 @@ pub(crate) async fn post_pr_comment(
         .build()
         .context("Failed to build HTTP client")?;
 
-    let url = format!("{}/repos/{}/issues/{}/comments", GITHUB_API, repo, pr_number);
+    let url = format!(
+        "{}/repos/{}/issues/{}/comments",
+        GITHUB_API, repo, pr_number
+    );
 
     let response = client
         .post(&url)
         .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
-        .json(&CommentBody { body: body.to_string() })
+        .json(&CommentBody {
+            body: body.to_string(),
+        })
         .send()
         .await
         .context("Failed to send comment to GitHub")?;
@@ -490,7 +512,10 @@ pub(crate) fn parse_added_lines(patch: &str) -> Vec<usize> {
 /// Case-insensitive exact match, or suffix match so absolute finding paths
 /// (e.g. `/proj/src/app.js`) line up with repo-relative changed-file paths
 /// (`src/app.js`).
-pub(crate) fn match_changed_file<'a>(fp: &str, files: &'a [ChangedFile]) -> Option<&'a ChangedFile> {
+pub(crate) fn match_changed_file<'a>(
+    fp: &str,
+    files: &'a [ChangedFile],
+) -> Option<&'a ChangedFile> {
     let fp_norm = fp.replace('\\', "/").to_lowercase();
     files.iter().find(|cf| {
         let cf_norm = cf.path.replace('\\', "/").to_lowercase();
@@ -540,7 +565,10 @@ pub(crate) fn split_by_diff(
 /// findings that have a file path and line number. Findings in changed files
 /// without a patch (binary/large files) are skipped — GitHub cannot position
 /// comments there and would reject the whole review. Capped at 10 comments.
-fn build_inline_comments(findings: &[Finding], files: &[ChangedFile]) -> Vec<(String, usize, String)> {
+fn build_inline_comments(
+    findings: &[Finding],
+    files: &[ChangedFile],
+) -> Vec<(String, usize, String)> {
     findings
         .iter()
         .filter(|f| f.severity == Severity::Critical || f.severity == Severity::High)
@@ -615,7 +643,10 @@ pub(crate) async fn post_review_comments(
     let url = format!("{}/repos/{}/pulls/{}/reviews", GITHUB_API, repo, pr_number);
     let body = ReviewBody {
         event: "COMMENT".to_string(),
-        body: format!("🔒 CipherAI found {} issue(s) in this diff.", comments.len()),
+        body: format!(
+            "🔒 CipherAI found {} issue(s) in this diff.",
+            comments.len()
+        ),
         comments: comments
             .iter()
             .map(|(path, line, text)| ReviewComment {
@@ -665,7 +696,10 @@ pub async fn run_pr(
 ) -> Result<()> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
-    output::print_header("PR Security Review", Some(&canonical_path.display().to_string()));
+    output::print_header(
+        "PR Security Review",
+        Some(&canonical_path.display().to_string()),
+    );
 
     // Resolve repo + PR number
     let repo = match resolve_repo(repo) {
@@ -705,17 +739,24 @@ pub async fn run_pr(
     let total_steps = if diff_only { 5 } else { 3 };
 
     // Step 1: run the scan suite
-    output::print_step(1, total_steps, "Running security scans (review + secrets + deps + zeroday)");
+    output::print_step(
+        1,
+        total_steps,
+        "Running security scans (review + secrets + deps + zeroday)",
+    );
     let (findings, attack_count) = collect_pr_findings(&canonical_path).await?;
     let (critical, high, medium, low) = severity_counts(&findings);
-    output::print_ok("Scans", &format!(
-        "{} critical, {} high, {} medium, {} low, {} total",
-        critical.to_string().red().bold(),
-        high.to_string().yellow().bold(),
-        medium.to_string().cyan(),
-        low.to_string().dimmed(),
-        findings.len().to_string().bold()
-    ));
+    output::print_ok(
+        "Scans",
+        &format!(
+            "{} critical, {} high, {} medium, {} low, {} total",
+            critical.to_string().red().bold(),
+            high.to_string().yellow().bold(),
+            medium.to_string().cyan(),
+            low.to_string().dimmed(),
+            findings.len().to_string().bold()
+        ),
+    );
 
     // Step 2 (diff-aware only): fetch changed files and filter findings
     let mut findings = findings;
@@ -729,17 +770,23 @@ pub async fn run_pr(
                 findings = in_diff;
                 preexisting = pre;
                 changed_files = files;
-                output::print_ok("Diff", &format!(
-                    "{} finding(s) in this PR's changes, {} pre-existing",
-                    findings.len(),
-                    preexisting.len()
-                ));
+                output::print_ok(
+                    "Diff",
+                    &format!(
+                        "{} finding(s) in this PR's changes, {} pre-existing",
+                        findings.len(),
+                        preexisting.len()
+                    ),
+                );
             }
             Err(e) => {
-                output::print_warn("Diff", &format!(
-                    "could not fetch changed files ({}); reviewing full repository",
-                    e
-                ));
+                output::print_warn(
+                    "Diff",
+                    &format!(
+                        "could not fetch changed files ({}); reviewing full repository",
+                        e
+                    ),
+                );
             }
         }
     }
@@ -767,7 +814,11 @@ pub async fn run_pr(
             let inline = build_inline_comments(&findings, &changed_files);
             if !inline.is_empty() {
                 println!();
-                println!("  {} {} inline comment(s) would be posted:", "[INLINE]".bold().cyan(), inline.len().to_string().cyan());
+                println!(
+                    "  {} {} inline comment(s) would be posted:",
+                    "[INLINE]".bold().cyan(),
+                    inline.len().to_string().cyan()
+                );
                 for (path, line, body) in &inline {
                     println!("    {} {}:{}", "->".cyan(), path.yellow(), line);
                     for l in body.lines().take(3) {
@@ -778,7 +829,10 @@ pub async fn run_pr(
             }
         }
         println!();
-        output::print_ok("Dry-run", "Rerun without --dry-run to post this review to the PR.");
+        output::print_ok(
+            "Dry-run",
+            "Rerun without --dry-run to post this review to the PR.",
+        );
         return Ok(());
     }
 
@@ -790,8 +844,12 @@ pub async fn run_pr(
             output::print_ok("Inline", "no critical/high findings in the diff");
         } else {
             match post_review_comments(&repo, &token, pr_number, &inline).await {
-                Ok(()) => output::print_ok("Inline", &format!("{} comment(s) posted", inline.len())),
-                Err(e) => output::print_warn("Inline", &format!("could not post inline comments ({})", e)),
+                Ok(()) => {
+                    output::print_ok("Inline", &format!("{} comment(s) posted", inline.len()))
+                }
+                Err(e) => {
+                    output::print_warn("Inline", &format!("could not post inline comments ({})", e))
+                }
             }
         }
     }
@@ -800,11 +858,7 @@ pub async fn run_pr(
     output::print_step(post_step, total_steps, "Posting summary comment to GitHub");
     match post_pr_comment(&repo, pr_number, &token, &comment).await {
         Ok(()) => {
-            output::print_success(&format!(
-                "Comment posted to {}/pull/{}",
-                repo,
-                pr_number
-            ));
+            output::print_success(&format!("Comment posted to {}/pull/{}", repo, pr_number));
         }
         Err(e) => {
             output::print_fail("GitHub", &e.to_string());
@@ -856,7 +910,13 @@ mod tests {
     #[test]
     fn test_render_pr_comment_with_findings() {
         let findings = vec![
-            mk("SQL Injection in query", Severity::Critical, "CWE-89", "app/query.py", 42),
+            mk(
+                "SQL Injection in query",
+                Severity::Critical,
+                "CWE-89",
+                "app/query.py",
+                42,
+            ),
             mk("Weak MD5 hash", Severity::High, "CWE-328", "app/hash.py", 7),
         ];
         let md = render_pr_comment(&findings, 3, "owner/repo", 12);
@@ -920,7 +980,13 @@ mod tests {
             patch: Some("@@ -1,2 +1,3 @@\n a\n+    exec(x);\n b\n".to_string()),
         }];
         let findings = vec![
-            mk("Command Injection", Severity::Critical, "CWE-78", "src/app.js", 2),
+            mk(
+                "Command Injection",
+                Severity::Critical,
+                "CWE-78",
+                "src/app.js",
+                2,
+            ),
             mk("Weak hash", Severity::Medium, "CWE-328", "src/app.js", 1),
             mk("Old issue", Severity::Low, "CWE-693", "src/other.js", 5),
         ];
@@ -972,7 +1038,13 @@ mod tests {
         ];
         let findings = vec![
             mk("Bug", Severity::High, "CWE-693", "src/app.js", 2),
-            mk("Secret in binary", Severity::Critical, "CWE-798", "assets/big.bin", 5),
+            mk(
+                "Secret in binary",
+                Severity::Critical,
+                "CWE-798",
+                "assets/big.bin",
+                5,
+            ),
         ];
         let inline = build_inline_comments(&findings, &files);
         assert_eq!(inline.len(), 1);
