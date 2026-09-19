@@ -367,7 +367,7 @@ pub fn parse_gemfile(path: &Path) -> Result<Vec<Dependency>> {
             // Extract name between quotes
             let after_gem = trimmed.trim_start_matches("gem ");
             let name = after_gem
-                .split(|c| c == ',' || c == ' ' || c == '\t')
+                .split([',', ' ', '\t'])
                 .next()
                 .unwrap_or("")
                 .trim()
@@ -477,7 +477,7 @@ pub fn parse_pubspec_yaml(path: &Path) -> Result<Vec<Dependency>> {
     let dep_sections = [("dependencies", false), ("dev_dependencies", true)];
 
     for (section_key, is_dev) in &dep_sections {
-        if let Some(section) = map.get(&serde_yaml::Value::String(section_key.to_string())) {
+        if let Some(section) = map.get(serde_yaml::Value::String(section_key.to_string())) {
             if let Some(dep_map) = section.as_mapping() {
                 for (key, value) in dep_map {
                     let name = match key.as_str() {
@@ -492,10 +492,10 @@ pub fn parse_pubspec_yaml(path: &Path) -> Result<Vec<Dependency>> {
                             // Handle: dependency_name:
                             //   version: ^1.2.3
                             //   sdk: flutter
-                            if m.contains_key(&serde_yaml::Value::String("sdk".to_string())) {
+                            if m.contains_key(serde_yaml::Value::String("sdk".to_string())) {
                                 continue;
                             }
-                            m.get(&serde_yaml::Value::String("version".to_string()))
+                            m.get(serde_yaml::Value::String("version".to_string()))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("*")
                                 .to_string()
@@ -1152,7 +1152,7 @@ fn annotate_usage(
         shown.join(", ")
     );
     if more > 0 {
-        text.push_str(&format!(" (+{} more)", more));
+        text.push_str(&format!(" (+{more} more)"));
     }
     finding.usage = Some(text);
     // Directly imported vulnerable package: much more exploitable.
@@ -1383,7 +1383,7 @@ pub async fn run_deps(
             format!(
                 "{} ({})",
                 "[!]".yellow(),
-                format!("{} vulnerabilities", vuln_count).red().bold()
+                format!("{vuln_count} vulnerabilities").red().bold()
             )
         } else {
             "[OK]".green().to_string()

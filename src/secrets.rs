@@ -404,7 +404,7 @@ pub async fn run_secrets(scan_path: &Path, format: &str, fail_on: Option<&str>) 
                 let badge = finding.severity.badge();
                 let line_str = finding
                     .line_number
-                    .map(|l| format!("Line {}", l))
+                    .map(|l| format!("Line {l}"))
                     .unwrap_or_default();
                 println!(
                     "    {} {}  {}",

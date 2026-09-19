@@ -466,7 +466,7 @@ fn discover_chains(findings: &[Finding], depth: usize) -> Vec<AttackChain> {
                     )
                 };
 
-                let name = format!("{} -> {}", entry_point, impact);
+                let name = format!("{entry_point} -> {impact}");
 
                 chains.push(AttackChain {
                     chain_type: rule.chain_type,
@@ -644,7 +644,7 @@ fn parse_ai_enrichment(response: &str) -> Result<(String, String, String)> {
     }
 
     let parsed: Enrichment =
-        serde_json::from_str(json_str).map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+        serde_json::from_str(json_str).map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
 
     Ok((
         parsed
@@ -727,7 +727,7 @@ fn display_chains(chains: &[AttackChain]) {
         println!();
         println!("    {} Description:", "[NOTE]".bold());
         for line in chain.description.lines() {
-            println!("      {}", line);
+            println!("      {line}");
         }
 
         // Finding details
@@ -739,11 +739,11 @@ fn display_chains(chains: &[AttackChain]) {
                 .as_deref()
                 .unwrap_or("<unknown>")
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or("<unknown>");
             let line = finding
                 .line_number
-                .map(|l| format!(":{}", l))
+                .map(|l| format!(":{l}"))
                 .unwrap_or_default();
             println!(
                 "      {} {} {}  {}{}",
@@ -798,7 +798,7 @@ fn display_chains_json(chains: &[AttackChain]) {
     };
 
     match serde_json::to_string_pretty(&output) {
-        Ok(json) => println!("{}", json),
+        Ok(json) => println!("{json}"),
         Err(e) => eprintln!("{} JSON serialization failed: {}", "[ERR]".red(), e),
     }
 }

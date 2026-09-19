@@ -249,7 +249,7 @@ impl AiClient {
             .chat_json(&system, &user, model)
             .await
             .map_err(|e| AgentTurnError::Api {
-                message: format!("{:#}", e),
+                message: format!("{e:#}"),
             })?;
         parse_agent_turn(&raw, tools)
     }
@@ -423,7 +423,7 @@ impl AiClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             let message = extract_error_message(&body).unwrap_or(body);
-            anyhow::bail!("Anthropic API error ({}): {}", status, message);
+            anyhow::bail!("Anthropic API error ({status}): {message}");
         }
 
         let parsed: AnthropicResponse = response
@@ -754,15 +754,15 @@ impl std::fmt::Display for AgentTurnError {
                 )
             }
             AgentTurnError::UnknownTool { tool } => {
-                write!(f, "model referenced unknown tool \"{}\"", tool)
+                write!(f, "model referenced unknown tool \"{tool}\"")
             }
             AgentTurnError::InvalidArgs { tool, detail } => {
-                write!(f, "invalid arguments for tool \"{}\": {}", tool, detail)
+                write!(f, "invalid arguments for tool \"{tool}\": {detail}")
             }
             AgentTurnError::InvalidSummary { detail } => {
-                write!(f, "invalid summary object: {}", detail)
+                write!(f, "invalid summary object: {detail}")
             }
-            AgentTurnError::Api { message } => write!(f, "agent API error: {}", message),
+            AgentTurnError::Api { message } => write!(f, "agent API error: {message}"),
         }
     }
 }
@@ -810,7 +810,7 @@ pub fn render_tool_catalog(tools: &[ToolSchema]) -> String {
         let params = if params.is_empty() {
             String::new()
         } else {
-            format!("({})", params)
+            format!("({params})")
         };
         out.push_str(&format!(
             "- {}{}\n    {}\n",
@@ -847,7 +847,7 @@ fn render_parameters(tool: &ToolSchema) -> String {
             } else {
                 ""
             };
-            format!("{}{}: {}", name, marker, ty)
+            format!("{name}{marker}: {ty}")
         })
         .collect();
     parts.join(", ")
@@ -913,14 +913,14 @@ pub fn parse_agent_turn(raw: &str, tools: &[ToolSchema]) -> Result<AgentTurn, Ag
     let turn: AgentTurn = serde_json::from_value(value).map_err(|e| {
         if has_summary {
             AgentTurnError::InvalidSummary {
-                detail: format!("{}", e),
+                detail: format!("{e}"),
             }
         } else {
             AgentTurnError::InvalidArgs {
                 tool: action_tool
                     .clone()
                     .unwrap_or_else(|| "<unknown>".to_string()),
-                detail: format!("{}", e),
+                detail: format!("{e}"),
             }
         }
     })?;
@@ -993,28 +993,16 @@ pub fn recovery_message(err: &AgentTurnError) -> String {
                 .to_string()
         }
         AgentTurnError::UnknownTool { tool } => {
-            format!(
-                "Tool \"{}\" is not in the catalog. Use one of the AVAILABLE TOOLS.",
-                tool
-            )
+            format!("Tool \"{tool}\" is not in the catalog. Use one of the AVAILABLE TOOLS.")
         }
         AgentTurnError::InvalidArgs { tool, detail } => {
-            format!(
-                "Invalid arguments for tool \"{}\": {}. Fix the args and retry.",
-                tool, detail
-            )
+            format!("Invalid arguments for tool \"{tool}\": {detail}. Fix the args and retry.")
         }
         AgentTurnError::InvalidSummary { detail } => {
-            format!(
-                "Your summary object was invalid: {}. Fix it and retry.",
-                detail
-            )
+            format!("Your summary object was invalid: {detail}. Fix it and retry.")
         }
         AgentTurnError::Api { message } => {
-            format!(
-                "The model API request failed: {}. Retry the request.",
-                message
-            )
+            format!("The model API request failed: {message}. Retry the request.")
         }
     }
 }
@@ -1495,8 +1483,7 @@ mod tests {
             let msg = recovery_message(&err);
             assert!(
                 !msg.trim().is_empty(),
-                "recovery message for {:?} was empty",
-                err
+                "recovery message for {err:?} was empty"
             );
         }
         assert!(recovery_message(&AgentTurnError::UnknownTool {
