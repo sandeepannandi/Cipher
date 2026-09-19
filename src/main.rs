@@ -34,6 +34,7 @@ struct Cli {
     path: Option<PathBuf>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Commands {
     /// Index a codebase for security analysis
@@ -493,6 +494,7 @@ enum Commands {
     },
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(ValueEnum, Clone)]
 enum Shell {
     Bash,

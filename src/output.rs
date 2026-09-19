@@ -137,13 +137,10 @@ pub fn print_summary_box(title: &str, rows: &[(&str, &str)]) {
 
     println!();
     println!(
-        "  {}",
-        format!(
-            "{}{}{}",
-            TL.bright_blue(),
-            H.repeat(box_w - 2),
-            TR.bright_blue()
-        )
+        "  {}{}{}",
+        TL.bright_blue(),
+        H.repeat(box_w - 2),
+        TR.bright_blue()
     );
     println!(
         "  {} {:^width$} {}",
@@ -153,13 +150,10 @@ pub fn print_summary_box(title: &str, rows: &[(&str, &str)]) {
         width = box_w.saturating_sub(2)
     );
     println!(
-        "  {}",
-        format!(
-            "{}{}{}",
-            LT.bright_blue(),
-            H.repeat(box_w - 2),
-            RT.bright_blue()
-        )
+        "  {}{}{}",
+        LT.bright_blue(),
+        H.repeat(box_w - 2),
+        RT.bright_blue()
     );
     for (key, val) in rows {
         let pad = box_w
@@ -176,13 +170,10 @@ pub fn print_summary_box(title: &str, rows: &[(&str, &str)]) {
         );
     }
     println!(
-        "  {}",
-        format!(
-            "{}{}{}",
-            BL.bright_blue(),
-            H.repeat(box_w - 2),
-            BR.bright_blue()
-        )
+        "  {}{}{}",
+        BL.bright_blue(),
+        H.repeat(box_w - 2),
+        BR.bright_blue()
     );
     println!();
 }

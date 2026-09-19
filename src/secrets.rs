@@ -263,7 +263,6 @@ fn scan_file(path: &Path, patterns: &[SecretPattern]) -> Vec<Finding> {
 }
 
 /// Check if a path should be excluded
-
 /// Collect secret findings without displaying them (for report generation)
 pub(crate) fn collect_secrets_findings(scan_path: &Path) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(scan_path)

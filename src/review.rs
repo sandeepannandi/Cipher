@@ -489,6 +489,7 @@ pub(crate) async fn collect_review_findings(
 }
 
 /// Run the `cipher-ai review` command
+#[allow(clippy::too_many_arguments)]
 pub async fn run_review(
     project_path: &Path,
     use_ai: bool,
