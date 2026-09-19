@@ -42,4 +42,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: ./target/release/cipher-ai watch --once --risk high --pr --path .
+        run: ./target/x86_64-unknown-linux-gnu/release/cipher-ai watch --once --risk high --pr --path .
