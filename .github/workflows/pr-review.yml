@@ -22,6 +22,11 @@ jobs:
       - name: Build cipher-ai
         run: cargo build --release --locked --target x86_64-unknown-linux-gnu
 
+      # The accuracy corpus is intentionally vulnerable and has its own
+      # dedicated workflow. Keep it out of this general product-source report.
+      - name: Exclude accuracy benchmark corpus from general review
+        run: rm -rf benchmarks/accuracy
+
       - name: Post security review comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
