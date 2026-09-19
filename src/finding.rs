@@ -417,6 +417,11 @@ impl Finding {
             self.title.bold()
         )
     }
+
+    /// Explicit, versioned output projection for machine-readable exports.
+    pub fn to_envelope(&self) -> FindingEnvelope {
+        FindingEnvelope::from_finding(self)
+    }
 }
 
 /// A collection of findings with summary stats
@@ -452,6 +457,11 @@ impl FindingReport {
 
     pub fn len(&self) -> usize {
         self.findings.len()
+    }
+
+    /// Explicit versioned output projection for a whole report.
+    pub fn to_envelope(&self) -> Vec<FindingEnvelope> {
+        self.findings.iter().map(Finding::to_envelope).collect()
     }
 
     /// Sort findings by risk score (highest first)
@@ -566,6 +576,144 @@ impl FindingReport {
             if let Some(ref usage) = finding.usage {
                 println!("    {} {}", "Usage:".bold().cyan(), usage.trim());
             }
+        }
+    }
+}
+
+/// Canonical CWE for a finding, normalized to the canonical `CWE-<id>` format.
+pub fn canonical_cwe(f: &Finding) -> Option<String> {
+    if let Some(cwe) = &f.cwe_id {
+        let cleaned = cwe.trim();
+        if cleaned.is_empty() {
+            return None;
+        }
+        if cleaned.to_ascii_uppercase().starts_with("CWE-") {
+            return Some(cleaned.to_ascii_uppercase());
+        }
+        return Some(format!("CWE-{cleaned}"));
+    }
+    cwe_for_title(&f.title, f.finding_type)
+}
+
+/// Stable, namespaced rule ID for SARIF / code scanning, independent from the
+/// random UUID and anchored to a canonical bug class.
+pub fn stable_rule_id(f: &Finding) -> String {
+    match canonical_cwe(f).as_deref() {
+        Some("CWE-79") => "cipher/xss".to_string(),
+        Some("CWE-89") => "cipher/sql-injection".to_string(),
+        Some("CWE-78") => "cipher/command-injection".to_string(),
+        Some("CWE-918") => "cipher/ssrf".to_string(),
+        Some("CWE-22") => "cipher/path-traversal".to_string(),
+        Some("CWE-639") | Some("CWE-862") => "cipher/idor".to_string(),
+        Some("CWE-798") => "cipher/secrets".to_string(),
+        Some("CWE-327") | Some("CWE-328") => "cipher/crypto".to_string(),
+        Some("CWE-287") => "cipher/auth".to_string(),
+        Some("CWE-16") | Some("CWE-693") | Some("CWE-840") => "cipher/general".to_string(),
+        _ => match f.finding_type {
+            FindingType::Secret => "cipher/secrets".to_string(),
+            FindingType::Authentication => "cipher/auth".to_string(),
+            FindingType::Authorization => "cipher/authz".to_string(),
+            FindingType::Injection => "cipher/injection".to_string(),
+            FindingType::Misconfiguration => "cipher/misconfig".to_string(),
+            FindingType::Cryptography => "cipher/crypto".to_string(),
+            FindingType::Dependency => "cipher/dependency".to_string(),
+            FindingType::BusinessLogic => "cipher/business-logic".to_string(),
+            FindingType::Vulnerability => "cipher/general".to_string(),
+        },
+    }
+}
+
+/// Deterministic fingerprint for a finding, suitable for change detection and
+/// partial SARIF fingerprints without tying to a random UUID or mutable prose.
+pub fn stable_fingerprint(f: &Finding) -> String {
+    use sha2::{Digest, Sha256};
+
+    let normalized = format!(
+        "{}|{}|{}|{}",
+        stable_rule_id(f),
+        f.file_path.as_deref().unwrap_or(""),
+        f.line_number.map(|ln| ln.max(1)).unwrap_or(1),
+        f.finding_type
+    );
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    let digest = hasher.finalize();
+    format!("sha256:{digest:x}")
+}
+
+/// Versioned, derived output envelope for explicit machine-readable exports.
+///
+/// This intentionally does not mutate the main `Finding` struct and preserves the
+/// historic JSON shape for default serialization.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FindingEnvelope {
+    pub schema_version: u64,
+    pub id: String,
+    pub rule_id: String,
+    pub fingerprint: String,
+    pub title: String,
+    pub description: String,
+    pub severity: Severity,
+    pub confidence: Confidence,
+    pub cwe: Option<String>,
+    pub owasp: Option<String>,
+    pub location: FindingLocation,
+    pub evidence: FindingEvidence,
+    pub remediation: Option<FindingRemediation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FindingLocation {
+    pub path: Option<String>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub uri: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FindingEvidence {
+    pub snippet: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FindingRemediation {
+    pub summary: String,
+    pub effort: Option<RemediationEffort>,
+}
+
+impl FindingEnvelope {
+    pub fn from_finding(f: &Finding) -> Self {
+        let cwe = canonical_cwe(f);
+        let uri = f
+            .file_path
+            .as_ref()
+            .map(|p| format!("file:///{}", p.replace('\\', "/")));
+        Self {
+            schema_version: 2,
+            id: f.id.clone(),
+            rule_id: stable_rule_id(f),
+            fingerprint: stable_fingerprint(f),
+            title: f.title.clone(),
+            description: f.description.clone(),
+            severity: f.severity,
+            confidence: f.confidence,
+            cwe: cwe.clone(),
+            owasp: f.owasp_category.map(|o| o.code().to_string()),
+            location: FindingLocation {
+                path: f.file_path.clone(),
+                line: f.line_number,
+                column: None,
+                uri,
+            },
+            evidence: FindingEvidence {
+                snippet: f.code_snippet.clone(),
+                summary: f.usage.clone(),
+            },
+            remediation: f.remediation.clone().map(|summary| FindingRemediation {
+                summary,
+                effort: Some(f.remediation_effort),
+            }),
         }
     }
 }
@@ -869,5 +1017,143 @@ mod tests {
             "t",
         );
         assert!(critical.risk_score() > low.risk_score());
+    }
+
+    #[test]
+    fn test_finding_envelope_is_stable_and_namespaced() {
+        let a = Finding::new(
+            FindingType::Injection,
+            "SQL Injection",
+            "User-supplied input reaches a SQL query.",
+            Severity::High,
+            Confidence::High,
+            "review",
+        )
+        .at("src/app.py", 42)
+        .with_cwe("CWE-89")
+        .with_remediation("Use parameterized queries.");
+
+        let env_a = FindingEnvelope::from_finding(&a);
+        let env_b = FindingEnvelope::from_finding(&a);
+
+        assert_eq!(env_a, env_b);
+        assert_eq!(env_a.schema_version, 2);
+        assert_eq!(env_a.rule_id, "cipher/sql-injection");
+        assert_eq!(env_a.cwe, Some("CWE-89".to_string()));
+        assert!(env_a.fingerprint.starts_with("sha256:"));
+        assert!(env_a.fingerprint == env_b.fingerprint);
+        assert_eq!(env_a.location.path, Some("src/app.py".to_string()));
+        assert_eq!(env_a.location.line, Some(42));
+        assert_eq!(
+            env_a.remediation.as_ref().unwrap().summary,
+            "Use parameterized queries."
+        );
+    }
+
+    #[test]
+    fn test_finding_envelope_is_deterministic_across_equivalent_findings() {
+        let a = Finding::new(
+            FindingType::Vulnerability,
+            "Path Traversal",
+            "Untrusted input reaches a file read.",
+            Severity::Medium,
+            Confidence::Medium,
+            "review",
+        )
+        .at("src/files.rs", 12)
+        .with_cwe("CWE-22")
+        .with_remediation("Validate and canonicalize user paths.");
+
+        let b = Finding::new(
+            FindingType::Vulnerability,
+            "Path Traversal",
+            "Untrusted input reaches a file read.",
+            Severity::Medium,
+            Confidence::Medium,
+            "review",
+        )
+        .at("src/files.rs", 12)
+        .with_cwe("CWE-22")
+        .with_remediation("Validate and canonicalize user paths.");
+
+        assert_eq!(
+            FindingEnvelope::from_finding(&a).fingerprint,
+            FindingEnvelope::from_finding(&b).fingerprint
+        );
+        assert_eq!(
+            FindingEnvelope::from_finding(&a).rule_id,
+            "cipher/path-traversal"
+        );
+    }
+
+    #[test]
+    fn test_finding_fingerprint_ignores_severity_and_prose() {
+        let a = Finding::new(
+            FindingType::Injection,
+            "SQL injection (error-based)",
+            "User input reaches a SQL query sink.\n- q=' -> 200",
+            Severity::Critical,
+            Confidence::High,
+            "review",
+        )
+        .at("src/app.py", 42)
+        .with_cwe("CWE-89");
+
+        let mut b = a.clone();
+        b.severity = Severity::Low;
+        b.title = "SQLi variant".to_string();
+        b.description = "Different prose for the same bug.".to_string();
+        b.remediation = Some("Use parameterized queries.".to_string());
+
+        assert_eq!(stable_rule_id(&a), stable_rule_id(&b));
+        assert_eq!(stable_fingerprint(&a), stable_fingerprint(&b));
+    }
+
+    #[test]
+    fn test_legacy_finding_json_is_exact_shape_compatible() {
+        let finding = Finding::new(
+            FindingType::Injection,
+            "SQL Injection",
+            "User input reaches a SQL query.",
+            Severity::High,
+            Confidence::High,
+            "review",
+        )
+        .at("src/app.py", 42)
+        .with_cwe("CWE-89")
+        .with_remediation("Use parameterized queries.")
+        .with_usage("endpoint: GET /search");
+
+        let expected = serde_json::json!({
+            "id": finding.id,
+            "finding_type": "injection",
+            "title": "SQL Injection",
+            "description": "User input reaches a SQL query.",
+            "severity": "High",
+            "confidence": "High",
+            "file_path": "src/app.py",
+            "line_number": 42,
+            "code_snippet": null,
+            "remediation": "Use parameterized queries.",
+            "owasp_category": null,
+            "cwe_id": "CWE-89",
+            "cve_id": null,
+            "exploitability": 0.5,
+            "business_impact": 0.5,
+            "remediation_effort": "Hours",
+            "created_at": finding.created_at,
+            "source": "review",
+            "usage": "endpoint: GET /search"
+        });
+
+        assert_eq!(
+            serde_json::to_string(&finding).unwrap(),
+            serde_json::to_string(&expected).unwrap()
+        );
+        let round_trip: Finding =
+            serde_json::from_str(&serde_json::to_string(&finding).unwrap()).unwrap();
+        assert_eq!(round_trip.id, finding.id);
+        assert_eq!(round_trip.file_path, finding.file_path);
+        assert_eq!(round_trip.usage, finding.usage);
     }
 }
