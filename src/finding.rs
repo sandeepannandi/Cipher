@@ -1125,7 +1125,10 @@ mod tests {
         .with_usage("endpoint: GET /search");
 
         let mut expected = serde_json::Map::new();
-        expected.insert("id".to_string(), serde_json::Value::String(finding.id.clone()));
+        expected.insert(
+            "id".to_string(),
+            serde_json::Value::String(finding.id.clone()),
+        );
         expected.insert(
             "finding_type".to_string(),
             serde_json::Value::String("Injection".to_string()),
@@ -1150,7 +1153,10 @@ mod tests {
             "file_path".to_string(),
             serde_json::Value::String("src/app.py".to_string()),
         );
-        expected.insert("line_number".to_string(), serde_json::Value::Number(42.into()));
+        expected.insert(
+            "line_number".to_string(),
+            serde_json::Value::Number(42.into()),
+        );
         expected.insert("code_snippet".to_string(), serde_json::Value::Null);
         expected.insert(
             "remediation".to_string(),
@@ -1172,7 +1178,10 @@ mod tests {
             "created_at".to_string(),
             serde_json::Value::String(finding.created_at.to_string()),
         );
-        expected.insert("source".to_string(), serde_json::Value::String("review".to_string()));
+        expected.insert(
+            "source".to_string(),
+            serde_json::Value::String("review".to_string()),
+        );
         expected.insert(
             "usage".to_string(),
             serde_json::Value::String("endpoint: GET /search".to_string()),
@@ -1180,10 +1189,7 @@ mod tests {
 
         let expected = serde_json::Value::Object(expected);
 
-        assert_eq!(
-            serde_json::to_value(&finding).unwrap(),
-            expected,
-        );
+        assert_eq!(serde_json::to_value(&finding).unwrap(), expected,);
         let round_trip: Finding =
             serde_json::from_str(&serde_json::to_string(&finding).unwrap()).unwrap();
         assert_eq!(round_trip.id, finding.id);
