@@ -27,6 +27,7 @@ pub struct FixPlan {
 }
 
 /// Run the `cipher-ai fix` command
+#[allow(clippy::too_many_arguments)]
 pub async fn run_fix(
     project_path: &Path,
     finding_id: Option<&str>,
@@ -891,12 +892,10 @@ fn resolve_finding_path(stored: &str, project_path: &Path) -> PathBuf {
         .max_depth(Some(crate::scan::MAX_WALK_DEPTH))
         .build();
 
-    let mut count = 0;
-    for result in walker {
+    for (count, result) in walker.enumerate() {
         if count >= crate::scan::MAX_SCAN_FILES {
             break;
         }
-        count += 1;
         if let Ok(entry) = result {
             let path = entry.path();
             if path.is_file() && !crate::scan::should_exclude(path) {

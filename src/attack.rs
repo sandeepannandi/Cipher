@@ -236,13 +236,10 @@ pub async fn run_attack(
             top.risk_score
         );
         println!(
-            "    {} Chain: {}",
+            "    {} Chain: {}  ->  {}",
             "->".bold(),
-            format!(
-                "{}  ->  {}",
-                top.entry_point.yellow(),
-                top.impact.red().bold()
-            )
+            top.entry_point.yellow(),
+            top.impact.red().bold()
         );
         println!(
             "    {} {} steps — {} findings involved",
@@ -579,9 +576,7 @@ async fn enrich_chains_ai(chains: &mut [AttackChain], _project_path: &Path) -> R
     // Only enrich the top 5 chains (most impactful)
     let to_enrich = chains.len().min(5);
 
-    for i in 0..to_enrich {
-        let chain = &chains[i];
-
+    for chain in chains.iter_mut().take(to_enrich) {
         let findings_summary: Vec<String> = chain
             .findings
             .iter()
@@ -614,9 +609,9 @@ Describe how these findings could be chained in a real attack. Return JSON only.
 
         if let Ok(response) = client.chat(system_prompt, &user_prompt, None).await {
             if let Ok((scenario, entry_point, impact)) = parse_ai_enrichment(&response) {
-                chains[i].description = scenario;
-                chains[i].entry_point = entry_point;
-                chains[i].impact = impact;
+                chain.description = scenario;
+                chain.entry_point = entry_point;
+                chain.impact = impact;
             }
         }
     }

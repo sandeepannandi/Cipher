@@ -714,8 +714,8 @@ pub fn version_matches_constraint(version: &str, constraint: &str) -> bool {
     let (v_major, v_minor, v_patch) = version_tuple();
 
     // Handle "<=x.y.z" constraints (MUST check before "<" since "<=" starts with '<')
-    if constraint.starts_with("<=") {
-        let c = constraint[2..].trim();
+    if let Some(stripped) = constraint.strip_prefix("<=") {
+        let c = stripped.trim();
         let c_parts: Vec<u32> = c.split('.').filter_map(|p| p.parse::<u32>().ok()).collect();
         if c_parts.len() >= 3 {
             return (v_major, v_minor, v_patch) <= (c_parts[0], c_parts[1], c_parts[2]);
@@ -727,8 +727,8 @@ pub fn version_matches_constraint(version: &str, constraint: &str) -> bool {
     }
 
     // Handle "<x.y.z" constraints
-    if constraint.starts_with('<') {
-        let c = constraint[1..].trim();
+    if let Some(stripped) = constraint.strip_prefix('<') {
+        let c = stripped.trim();
         let c_parts: Vec<u32> = c.split('.').filter_map(|p| p.parse::<u32>().ok()).collect();
         if c_parts.len() >= 3 {
             return (v_major, v_minor, v_patch) < (c_parts[0], c_parts[1], c_parts[2]);

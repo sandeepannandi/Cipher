@@ -137,7 +137,7 @@ fn detect_language(path: &Path) -> Option<&'static str> {
 
     match file_name.as_str() {
         n if n == "dockerfile" || n.starts_with("dockerfile.") => Some("dockerfile"),
-        n if n == "makefile" => Some("makefile"),
+        "makefile" => Some("makefile"),
         n if n.ends_with(".env") || n == ".env" => Some("env"),
         _ => None,
     }

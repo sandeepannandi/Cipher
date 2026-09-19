@@ -172,6 +172,7 @@ pub struct ZerodayFinding {
 }
 
 impl ZerodayFinding {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         anomaly_type: AnomalyType,
         title: &str,

@@ -1089,8 +1089,7 @@ async fn enrich_paths_ai(paths: &mut [TaintPath], query: &str) -> Result<()> {
     };
 
     let to_enrich = paths.len().min(5);
-    for i in 0..to_enrich {
-        let path = &paths[i];
+    for path in paths.iter_mut().take(to_enrich) {
         let steps_text: Vec<String> = path
             .steps
             .iter()
@@ -1114,7 +1113,7 @@ async fn enrich_paths_ai(paths: &mut [TaintPath], query: &str) -> Result<()> {
 
         if let Ok(response) = client.chat(system_prompt, &user_prompt, None).await {
             if let Some(explanation) = parse_explanation(&response) {
-                paths[i].description = explanation;
+                path.description = explanation;
             }
         }
     }
