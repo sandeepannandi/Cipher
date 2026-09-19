@@ -21,6 +21,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build Cipher
         run: cargo build --release --locked
+      - name: Run benchmark unit tests
+        run: python3 -m unittest discover -s benchmarks/accuracy -p 'test_*.py'
       - name: Run accuracy baseline
         run: python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai --output /tmp/cipher-accuracy.json
       - name: Upload result

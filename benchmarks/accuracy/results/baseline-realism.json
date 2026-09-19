@@ -1,0 +1,1070 @@
+{
+  "summary": {
+    "schema_version": 2,
+    "suite": "cipher-pattern-baseline",
+    "cipher": "./target/release/cipher-ai",
+    "thresholds": {
+      "min_precision": 0.5,
+      "min_recall": 0.5,
+      "min_f1": 0.5,
+      "max_execution_errors": 0
+    },
+    "overall": {
+      "TP": 15,
+      "FP": 3,
+      "FN": 3,
+      "TN": 11,
+      "precision": 0.8333,
+      "recall": 0.8333,
+      "f1": 0.8333,
+      "false_positive_rate": 0.2143,
+      "execution_errors": 0
+    },
+    "groups": {
+      "language": {
+        "java": {
+          "TP": 1,
+          "FP": 0,
+          "FN": 2,
+          "TN": 1,
+          "precision": 1.0,
+          "recall": 0.3333,
+          "f1": 0.5,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 4
+        },
+        "javascript": {
+          "TP": 3,
+          "FP": 2,
+          "FN": 1,
+          "TN": 4,
+          "precision": 0.6,
+          "recall": 0.75,
+          "f1": 0.6667,
+          "false_positive_rate": 0.3333,
+          "execution_errors": 0,
+          "cases": 8
+        },
+        "python": {
+          "TP": 6,
+          "FP": 0,
+          "FN": 0,
+          "TN": 4,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 10
+        },
+        "rust": {
+          "TP": 5,
+          "FP": 1,
+          "FN": 0,
+          "TN": 2,
+          "precision": 0.8333,
+          "recall": 1.0,
+          "f1": 0.9091,
+          "false_positive_rate": 0.3333,
+          "execution_errors": 0,
+          "cases": 8
+        }
+      },
+      "vulnerability_class": {
+        "command_injection": {
+          "TP": 2,
+          "FP": 1,
+          "FN": 1,
+          "TN": 0,
+          "precision": 0.6667,
+          "recall": 0.6667,
+          "f1": 0.6667,
+          "false_positive_rate": 1.0,
+          "execution_errors": 0,
+          "cases": 4
+        },
+        "debug_mode_enabled": {
+          "TP": 1,
+          "FP": 0,
+          "FN": 0,
+          "TN": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 1
+        },
+        "hardcoded_cryptographic_key": {
+          "TP": 1,
+          "FP": 0,
+          "FN": 0,
+          "TN": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 2
+        },
+        "hardcoded_secret": {
+          "TP": 3,
+          "FP": 2,
+          "FN": 1,
+          "TN": 2,
+          "precision": 0.6,
+          "recall": 0.75,
+          "f1": 0.6667,
+          "false_positive_rate": 0.5,
+          "execution_errors": 0,
+          "cases": 6
+        },
+        "idor": {
+          "TP": 1,
+          "FP": 0,
+          "FN": 0,
+          "TN": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 1
+        },
+        "insecure_deserialization": {
+          "TP": 1,
+          "FP": 0,
+          "FN": 0,
+          "TN": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 1
+        },
+        "path_traversal": {
+          "TP": 1,
+          "FP": 0,
+          "FN": 0,
+          "TN": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 2
+        },
+        "secure_cookie": {
+          "TP": 0,
+          "FP": 0,
+          "FN": 0,
+          "TN": 1,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 1
+        },
+        "sensitive_logging": {
+          "TP": 1,
+          "FP": 0,
+          "FN": 0,
+          "TN": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 2
+        },
+        "tls_verification_disabled": {
+          "TP": 1,
+          "FP": 0,
+          "FN": 0,
+          "TN": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 2
+        },
+        "unsafe_yaml_load": {
+          "TP": 0,
+          "FP": 0,
+          "FN": 0,
+          "TN": 1,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 1
+        },
+        "weak_hash": {
+          "TP": 3,
+          "FP": 0,
+          "FN": 1,
+          "TN": 3,
+          "precision": 1.0,
+          "recall": 0.75,
+          "f1": 0.8571,
+          "false_positive_rate": 0.0,
+          "execution_errors": 0,
+          "cases": 7
+        }
+      }
+    },
+    "family_counts": {
+      "handpicked": 12,
+      "control": 12,
+      "extracted": 3,
+      "mutation": 3
+    },
+    "execution_errors": {
+      "total": 0,
+      "cases": []
+    },
+    "cases": [
+      {
+        "id": "PY-001",
+        "file": "python/weak_md5.py",
+        "language": "python",
+        "expected_title": "Weak Hash Algorithm \u2014 MD5",
+        "cwe": "CWE-328",
+        "expected": true,
+        "fix_terms": [
+          "SHA-256"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "weak_hash",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Weak Hash Algorithm \u2014 MD5"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "PY-002",
+        "file": "python/hardcoded_password.py",
+        "language": "python",
+        "expected_title": "Hardcoded Credentials",
+        "cwe": "CWE-798",
+        "expected": true,
+        "fix_terms": [
+          "environment"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "hardcoded_secret",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Hardcoded Credentials"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "PY-003",
+        "file": "python/unsafe_pickle.py",
+        "language": "python",
+        "expected_title": "Insecure Deserialization",
+        "cwe": "CWE-502",
+        "expected": true,
+        "fix_terms": [
+          "safe deserialization"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "insecure_deserialization",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Insecure Deserialization"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "PY-004",
+        "file": "python/debug_enabled.py",
+        "language": "python",
+        "expected_title": "Debug Mode Enabled",
+        "cwe": "CWE-489",
+        "expected": true,
+        "fix_terms": [
+          "Disable"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "debug_mode_enabled",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Debug Mode Enabled"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "PY-005",
+        "file": "python/tls_disabled.py",
+        "language": "python",
+        "expected_title": "Disabled SSL/TLS Verification",
+        "cwe": "CWE-295",
+        "expected": true,
+        "fix_terms": [
+          "Enable"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "tls_verification_disabled",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Disabled SSL/TLS Verification"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "JS-001",
+        "file": "javascript/jwt_secret.js",
+        "language": "javascript",
+        "expected_title": "JWT Secret Hardcoded",
+        "cwe": "CWE-798",
+        "expected": true,
+        "fix_terms": [
+          "environment"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "hardcoded_secret",
+        "TP": 1,
+        "FP": 1,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "JWT Secret Hardcoded",
+          "Hardcoded Credentials"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "JS-002",
+        "file": "javascript/sensitive_log.js",
+        "language": "javascript",
+        "expected_title": "Sensitive Data in Logging",
+        "cwe": "CWE-532",
+        "expected": true,
+        "fix_terms": [
+          "redaction"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "sensitive_logging",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Sensitive Data in Logging"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "JS-003",
+        "file": "javascript/path_concat.js",
+        "language": "javascript",
+        "expected_title": "Path Traversal",
+        "cwe": "CWE-22",
+        "expected": true,
+        "fix_terms": [
+          "Validate"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "path_traversal",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Path Traversal"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "RS-001",
+        "file": "rust/weak_sha1.rs",
+        "language": "rust",
+        "expected_title": "Weak Hash Algorithm \u2014 SHA1",
+        "cwe": "CWE-328",
+        "expected": true,
+        "fix_terms": [
+          "SHA-256"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "weak_hash",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Weak Hash Algorithm \u2014 SHA1"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "RS-002",
+        "file": "rust/hardcoded_key.rs",
+        "language": "rust",
+        "expected_title": "Hardcoded Cryptographic Key",
+        "cwe": "CWE-321",
+        "expected": true,
+        "fix_terms": [
+          "environment"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "hardcoded_cryptographic_key",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Hardcoded Cryptographic Key"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "RS-003",
+        "file": "rust/command_injection.rs",
+        "language": "rust",
+        "expected_title": "Command Injection",
+        "cwe": "CWE-78",
+        "expected": true,
+        "fix_terms": [
+          "Avoid shell"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "command_injection",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Command Injection"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "RS-004",
+        "file": "rust/idor.rs",
+        "language": "rust",
+        "expected_title": "Insecure Direct Object Reference (IDOR)",
+        "cwe": "CWE-639",
+        "expected": true,
+        "fix_terms": [
+          "permission"
+        ],
+        "family": "handpicked",
+        "vulnerability_class": "idor",
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Insecure Direct Object Reference (IDOR)"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "NEG-PY-001",
+        "file": "python/safe_hash.py",
+        "language": "python",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "weak_hash",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/python/safe_hash.py",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "NEG-PY-001",
+          "origin": "control-weak_hash",
+          "archive_url": "benchmarks/accuracy/fixtures/python/safe_hash.py"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "NEG-PY-002",
+        "file": "python/safe_password_env.py",
+        "language": "python",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "hardcoded_secret",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/python/safe_password_env.py",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "NEG-PY-002",
+          "origin": "control-hardcoded_secret",
+          "archive_url": "benchmarks/accuracy/fixtures/python/safe_password_env.py"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "NEG-PY-003",
+        "file": "python/safe_yaml.py",
+        "language": "python",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "unsafe_yaml_load",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/python/safe_yaml.py",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "NEG-PY-003",
+          "origin": "control-unsafe_yaml_load",
+          "archive_url": "benchmarks/accuracy/fixtures/python/safe_yaml.py"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "NEG-JS-001",
+        "file": "javascript/safe_log.js",
+        "language": "javascript",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "sensitive_logging",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/javascript/safe_log.js",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "NEG-JS-001",
+          "origin": "control-sensitive_logging",
+          "archive_url": "benchmarks/accuracy/fixtures/javascript/safe_log.js"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "NEG-JS-002",
+        "file": "javascript/safe_path.js",
+        "language": "javascript",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "path_traversal",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/javascript/safe_path.js",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "NEG-JS-002",
+          "origin": "control-path_traversal",
+          "archive_url": "benchmarks/accuracy/fixtures/javascript/safe_path.js"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "NEG-JS-003",
+        "file": "javascript/secure_cookie.js",
+        "language": "javascript",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "secure_cookie",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/javascript/secure_cookie.js",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "NEG-JS-003",
+          "origin": "control-secure_cookie",
+          "archive_url": "benchmarks/accuracy/fixtures/javascript/secure_cookie.js"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "NEG-RS-001",
+        "file": "rust/safe_tls.rs",
+        "language": "rust",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "tls_verification_disabled",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/rust/safe_tls.rs",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "NEG-RS-001",
+          "origin": "control-tls_verification_disabled",
+          "archive_url": "benchmarks/accuracy/fixtures/rust/safe_tls.rs"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "NEG-RS-002",
+        "file": "rust/safe_key_env.rs",
+        "language": "rust",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "hardcoded_cryptographic_key",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/rust/safe_key_env.rs",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "NEG-RS-002",
+          "origin": "control-hardcoded_cryptographic_key",
+          "archive_url": "benchmarks/accuracy/fixtures/rust/safe_key_env.rs"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "EX-JAVA-001",
+        "file": "java/juliet_weak_hash.java",
+        "language": "java",
+        "expected_title": "Weak Hash Algorithm \u2014 MD5",
+        "cwe": "CWE-328",
+        "expected": true,
+        "fix_terms": [
+          "SHA-256"
+        ],
+        "family": "extracted",
+        "vulnerability_class": "weak_hash",
+        "provenance": {
+          "source_url": "https://samate.nist.gov/SARD/test-suites/85",
+          "archive_url": "https://samate.nist.gov/SARD/downloads/test-suites/2013-05-01-juliet-test-suite-for-java-v1-2.zip",
+          "upstream_suite": "NIST Juliet Java",
+          "upstream_version": "1.2",
+          "original_id": "CWE-328",
+          "origin": "Juliet Java 1.2"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 1,
+        "TN": 0,
+        "outcome": "FN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "EX-JAVA-002",
+        "file": "java/juliet_command_injection.java",
+        "language": "java",
+        "expected_title": "Command Injection",
+        "cwe": "CWE-78",
+        "expected": true,
+        "fix_terms": [
+          "Avoid shell"
+        ],
+        "family": "extracted",
+        "vulnerability_class": "command_injection",
+        "provenance": {
+          "source_url": "https://samate.nist.gov/SARD/test-suites/85",
+          "archive_url": "https://samate.nist.gov/SARD/downloads/test-suites/2013-05-01-juliet-test-suite-for-java-v1-2.zip",
+          "upstream_suite": "NIST Juliet Java",
+          "upstream_version": "1.2",
+          "original_id": "CWE-78",
+          "origin": "Juliet Java 1.2"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 1,
+        "TN": 0,
+        "outcome": "FN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "EX-JAVA-003",
+        "file": "java/juliet_hardcoded_secret.java",
+        "language": "java",
+        "expected_title": "Hardcoded Credentials",
+        "cwe": "CWE-798",
+        "expected": true,
+        "fix_terms": [
+          "environment"
+        ],
+        "family": "extracted",
+        "vulnerability_class": "hardcoded_secret",
+        "provenance": {
+          "source_url": "https://samate.nist.gov/SARD/test-suites/85",
+          "archive_url": "https://samate.nist.gov/SARD/downloads/test-suites/2013-05-01-juliet-test-suite-for-java-v1-2.zip",
+          "upstream_suite": "NIST Juliet Java",
+          "upstream_version": "1.2",
+          "original_id": "CWE-798",
+          "origin": "Juliet Java 1.2"
+        },
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Hardcoded Credentials"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "MUT-PY-001",
+        "file": "python/mutation_md5_helper.py",
+        "language": "python",
+        "expected_title": "Weak Hash Algorithm \u2014 MD5",
+        "cwe": "CWE-328",
+        "expected": true,
+        "fix_terms": [
+          "SHA-256"
+        ],
+        "family": "mutation",
+        "vulnerability_class": "weak_hash",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/python/weak_md5.py",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "PY-001",
+          "origin": "mutation-of-PY-001",
+          "archive_url": "benchmarks/accuracy/fixtures/python/weak_md5.py"
+        },
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Weak Hash Algorithm \u2014 MD5"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "MUT-JS-001",
+        "file": "javascript/mutation_jwt_secret.js",
+        "language": "javascript",
+        "expected_title": "JWT Secret Hardcoded",
+        "cwe": "CWE-798",
+        "expected": true,
+        "fix_terms": [
+          "environment"
+        ],
+        "family": "mutation",
+        "vulnerability_class": "hardcoded_secret",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/javascript/jwt_secret.js",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "JS-001",
+          "origin": "mutation-of-JS-001",
+          "archive_url": "benchmarks/accuracy/fixtures/javascript/jwt_secret.js"
+        },
+        "TP": 0,
+        "FP": 1,
+        "FN": 1,
+        "TN": 0,
+        "outcome": "FN",
+        "reported_titles": [
+          "Hardcoded Credentials"
+        ],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "MUT-RS-001",
+        "file": "rust/mutation_command_injection.rs",
+        "language": "rust",
+        "expected_title": "Command Injection",
+        "cwe": "CWE-78",
+        "expected": true,
+        "fix_terms": [
+          "Avoid shell"
+        ],
+        "family": "mutation",
+        "vulnerability_class": "command_injection",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/rust/command_injection.rs",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "RS-003",
+          "origin": "mutation-of-RS-003",
+          "archive_url": "benchmarks/accuracy/fixtures/rust/command_injection.rs"
+        },
+        "TP": 1,
+        "FP": 0,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "TP",
+        "reported_titles": [
+          "Command Injection"
+        ],
+        "evidence_complete": true,
+        "fix_quality": "actionable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "CTRL-PY-001",
+        "file": "python/control_safe_md5.py",
+        "language": "python",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "weak_hash",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/python/control_safe_md5.py",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "CTRL-PY-001",
+          "origin": "control-safe-weak_hash",
+          "archive_url": "benchmarks/accuracy/fixtures/python/control_safe_md5.py"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "CTRL-JS-001",
+        "file": "javascript/control_safe_jwt.js",
+        "language": "javascript",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "hardcoded_secret",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/javascript/control_safe_jwt.js",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "CTRL-JS-001",
+          "origin": "control-safe-hardcoded_secret",
+          "archive_url": "benchmarks/accuracy/fixtures/javascript/control_safe_jwt.js"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "CTRL-RS-001",
+        "file": "rust/control_safe_command.rs",
+        "language": "rust",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "command_injection",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/rust/control_safe_command.rs",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "CTRL-RS-001",
+          "origin": "control-safe-command_injection",
+          "archive_url": "benchmarks/accuracy/fixtures/rust/control_safe_command.rs"
+        },
+        "TP": 0,
+        "FP": 1,
+        "FN": 0,
+        "TN": 0,
+        "outcome": "FP",
+        "reported_titles": [
+          "Command Injection"
+        ],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "id": "CTRL-JAVA-001",
+        "file": "java/control_safe_hash.java",
+        "language": "java",
+        "expected": false,
+        "family": "control",
+        "vulnerability_class": "weak_hash",
+        "provenance": {
+          "source_url": "benchmarks/accuracy/fixtures/java/control_safe_hash.java",
+          "upstream_suite": "cipher-pattern-baseline",
+          "upstream_version": "baseline",
+          "original_id": "CTRL-JAVA-001",
+          "origin": "control-safe-weak_hash",
+          "archive_url": "benchmarks/accuracy/fixtures/java/control_safe_hash.java"
+        },
+        "TP": 0,
+        "FP": 0,
+        "FN": 0,
+        "TN": 1,
+        "outcome": "TN",
+        "reported_titles": [],
+        "evidence_complete": false,
+        "fix_quality": "not_applicable",
+        "exit_code": 0,
+        "error": null
+      }
+    ]
+  },
+  "threshold_checks": [
+    {
+      "metric": "min_precision",
+      "threshold": 0.5,
+      "actual": 0.8333,
+      "passed": true
+    },
+    {
+      "metric": "min_recall",
+      "threshold": 0.5,
+      "actual": 0.8333,
+      "passed": true
+    },
+    {
+      "metric": "min_f1",
+      "threshold": 0.5,
+      "actual": 0.8333,
+      "passed": true
+    },
+    {
+      "metric": "max_execution_errors",
+      "threshold": 0,
+      "actual": 0,
+      "passed": true
+    }
+  ],
+  "threshold_failures": []
+}
