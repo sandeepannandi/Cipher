@@ -5,7 +5,7 @@ Thank you for your interest in contributing to CipherAI! We welcome all contribu
 ## Getting Started
 
 1. Fork the repository and clone your fork.
-2. Ensure you have Rust 1.85+ installed (`rustup update`).
+2. Ensure you have Rust 1.88+ installed (`rustup update`).
 3. Set `GROQ_API_KEY` in your environment.
 4. Run `cargo build` to verify your setup.
 
