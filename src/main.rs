@@ -4,7 +4,10 @@ use colored::*;
 use std::path::PathBuf;
 
 // Modules are declared in the library crate (src/lib.rs).
-use cipher_ai::{attack, ci, config, deps, fix, indexer, pentest, pr, rag, report, review, sbom, secrets, trace, watch, zeroday};
+use cipher_ai::{
+    attack, ci, config, deps, fix, indexer, pentest, pr, rag, report, review, sbom, secrets, trace,
+    watch, zeroday,
+};
 
 const NAME: &str = "cipher-ai";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -523,7 +526,11 @@ async fn main() -> Result<()> {
             let project_path = path.unwrap_or_else(|| std::env::current_dir().unwrap());
             indexer::run_init(&project_path, force).await?;
         }
-        Commands::Ask { query, top_n, model } => {
+        Commands::Ask {
+            query,
+            top_n,
+            model,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             let query_str = query.join(" ");
             if query_str.trim().is_empty() {
@@ -532,47 +539,163 @@ async fn main() -> Result<()> {
             }
             rag::run_ask(&project_path, &query_str, top_n, model.as_deref()).await?;
         }
-        Commands::Secrets { path, format, fail_on, fail_on_secret } => {
+        Commands::Secrets {
+            path,
+            format,
+            fail_on,
+            fail_on_secret,
+        } => {
             let scan_path = path.unwrap_or_else(|| std::env::current_dir().unwrap());
             // Combine legacy --fail-on-secret with new --fail-on
-            let fail_level = fail_on.as_deref().or(if fail_on_secret { Some("high") } else { None });
+            let fail_level =
+                fail_on
+                    .as_deref()
+                    .or(if fail_on_secret { Some("high") } else { None });
             secrets::run_secrets(&scan_path, &format, fail_level).await?;
         }
         Commands::Status => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             indexer::run_status(&project_path).await?;
         }
-        Commands::Review { use_ai, verify, model, max_findings, min_severity, min_confidence, format, output } => {
+        Commands::Review {
+            use_ai,
+            verify,
+            model,
+            max_findings,
+            min_severity,
+            min_confidence,
+            format,
+            output,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            let min_sev = min_severity.as_deref().and_then(review::parse_severity_filter);
-            let min_conf = min_confidence.as_deref().and_then(review::parse_confidence_filter);
-            let max_f = if max_findings == 0 { None } else { Some(max_findings) };
-            review::run_review(&project_path, use_ai, verify, model.as_deref(), max_f, min_sev, min_conf, &format, output.as_deref()).await?;
+            let min_sev = min_severity
+                .as_deref()
+                .and_then(review::parse_severity_filter);
+            let min_conf = min_confidence
+                .as_deref()
+                .and_then(review::parse_confidence_filter);
+            let max_f = if max_findings == 0 {
+                None
+            } else {
+                Some(max_findings)
+            };
+            review::run_review(
+                &project_path,
+                use_ai,
+                verify,
+                model.as_deref(),
+                max_f,
+                min_sev,
+                min_conf,
+                &format,
+                output.as_deref(),
+            )
+            .await?;
         }
         Commands::Deps { online, fail_on } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             deps::run_deps(&project_path, online, fail_on.as_deref()).await?;
         }
-        Commands::Report { report_type, format, output, pentest_workspace } => {
+        Commands::Report {
+            report_type,
+            format,
+            output,
+            pentest_workspace,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            report::run_report(&project_path, &report_type, &format, output.as_deref(), pentest_workspace.as_deref()).await?;
+            report::run_report(
+                &project_path,
+                &report_type,
+                &format,
+                output.as_deref(),
+                pentest_workspace.as_deref(),
+            )
+            .await?;
         }
-        Commands::Attack { chain, depth, json, no_ai, flow } => {
+        Commands::Attack {
+            chain,
+            depth,
+            json,
+            no_ai,
+            flow,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             attack::run_attack(&project_path, chain.as_deref(), depth, json, !no_ai, flow).await?;
         }
-        Commands::Fix { finding_id, risk_level, target_file, fix_all, list_only, dry_run, auto_apply, verify, open_pr, repo, token } => {
+        Commands::Fix {
+            finding_id,
+            risk_level,
+            target_file,
+            fix_all,
+            list_only,
+            dry_run,
+            auto_apply,
+            verify,
+            open_pr,
+            repo,
+            token,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            fix::run_fix(&project_path, finding_id.as_deref(), risk_level.as_deref(), target_file.as_deref(), fix_all, list_only, dry_run, auto_apply, verify, open_pr, repo.as_deref(), token.as_deref()).await?;
+            fix::run_fix(
+                &project_path,
+                finding_id.as_deref(),
+                risk_level.as_deref(),
+                target_file.as_deref(),
+                fix_all,
+                list_only,
+                dry_run,
+                auto_apply,
+                verify,
+                open_pr,
+                repo.as_deref(),
+                token.as_deref(),
+            )
+            .await?;
         }
-        Commands::Ci { fail_on, use_ai, format, output, pentest_url } => {
+        Commands::Ci {
+            fail_on,
+            use_ai,
+            format,
+            output,
+            pentest_url,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            ci::run_ci(&project_path, fail_on.as_deref(), use_ai, &format, output.as_deref(), pentest_url).await?;
+            ci::run_ci(
+                &project_path,
+                fail_on.as_deref(),
+                use_ai,
+                &format,
+                output.as_deref(),
+                pentest_url,
+            )
+            .await?;
         }
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
         }
-        Commands::Pentest { objective, target_dir, url, max_turns, sub_agents, config, workspace, resume, format, allow_hosts, plan_only, point_retest, blackbox, check_email_auth, browser, openapi, model, max_tokens, max_cost, json, output } => {
+        Commands::Pentest {
+            objective,
+            target_dir,
+            url,
+            max_turns,
+            sub_agents,
+            config,
+            workspace,
+            resume,
+            format,
+            allow_hosts,
+            plan_only,
+            point_retest,
+            blackbox,
+            check_email_auth,
+            browser,
+            openapi,
+            model,
+            max_tokens,
+            max_cost,
+            json,
+            output,
+        } => {
             let project_path = target_dir
                 .or(cli.path)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -584,11 +707,7 @@ async fn main() -> Result<()> {
                     anyhow::bail!("--check-email-auth requires --config <app.yaml> with an authentication.email block");
                 };
                 let cfg = pentest::config::load_config(cfg_path)?;
-                let Some(email) = cfg
-                    .authentication
-                    .as_ref()
-                    .and_then(|a| a.email.as_ref())
-                else {
+                let Some(email) = cfg.authentication.as_ref().and_then(|a| a.email.as_ref()) else {
                     anyhow::bail!(
                         "config '{}' has no authentication.email block",
                         cfg_path.display()
@@ -604,11 +723,9 @@ async fn main() -> Result<()> {
             // degrade to "no spec" (which would run the sweep un-schema'd).
             let openapi_path = openapi;
             let openapi = match &openapi_path {
-                Some(p) => Some(
-                    p.to_str().ok_or_else(|| {
-                        anyhow::anyhow!("--openapi path is not valid UTF-8: {}", p.display())
-                    })?,
-                ),
+                Some(p) => Some(p.to_str().ok_or_else(|| {
+                    anyhow::anyhow!("--openapi path is not valid UTF-8: {}", p.display())
+                })?),
                 None => None,
             };
             pentest::run_pentest(
@@ -638,22 +755,75 @@ async fn main() -> Result<()> {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             sbom::run_sbom(&project_path, &format, output.as_deref()).await?;
         }
-        Commands::Trace { query, depth, json, use_ai } => {
+        Commands::Trace {
+            query,
+            depth,
+            json,
+            use_ai,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             let query_str = query.join(" ");
             trace::run_trace(&project_path, &query_str, depth, json, use_ai).await?;
         }
-        Commands::Pr { repo, pr_number, token, dry_run, diff } => {
+        Commands::Pr {
+            repo,
+            pr_number,
+            token,
+            dry_run,
+            diff,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            pr::run_pr(&project_path, repo.as_deref(), pr_number, token.as_deref(), dry_run, diff).await?;
+            pr::run_pr(
+                &project_path,
+                repo.as_deref(),
+                pr_number,
+                token.as_deref(),
+                dry_run,
+                diff,
+            )
+            .await?;
         }
-        Commands::Watch { interval_minutes, risk_level, open_pr, repo, token, once, pentest_url } => {
+        Commands::Watch {
+            interval_minutes,
+            risk_level,
+            open_pr,
+            repo,
+            token,
+            once,
+            pentest_url,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            watch::run_watch(&project_path, interval_minutes, Some(risk_level.as_str()), open_pr, repo.as_deref(), token.as_deref(), once, pentest_url.as_deref()).await?;
+            watch::run_watch(
+                &project_path,
+                interval_minutes,
+                Some(risk_level.as_str()),
+                open_pr,
+                repo.as_deref(),
+                token.as_deref(),
+                once,
+                pentest_url.as_deref(),
+            )
+            .await?;
         }
-        Commands::Zeroday { use_ai, model, format, output, anomaly_only, no_flow } => {
+        Commands::Zeroday {
+            use_ai,
+            model,
+            format,
+            output,
+            anomaly_only,
+            no_flow,
+        } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
-            zeroday::run_zeroday(&project_path, use_ai, model.as_deref(), &format, output.as_deref(), anomaly_only, no_flow).await?;
+            zeroday::run_zeroday(
+                &project_path,
+                use_ai,
+                model.as_deref(),
+                &format,
+                output.as_deref(),
+                anomaly_only,
+                no_flow,
+            )
+            .await?;
         }
         Commands::Completions { shell } => {
             use clap::CommandFactory;

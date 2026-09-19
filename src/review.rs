@@ -153,7 +153,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     add_vuln!(
         "Hardcoded Cryptographic Key",
         "Hardcoded encryption keys can be extracted from source code. Use a key management system.",
-        Severity::Critical, Confidence::Medium, Some(OwaspCategory::A02CryptographicFailures),
+        Severity::Critical,
+        Confidence::Medium,
+        Some(OwaspCategory::A02CryptographicFailures),
         r#"(?i)(?:encryption_key|secret_key|cipher_key|aes_key|crypto_key)\s*[=:]\s*['\"][A-Za-z0-9+/=]{16,}['\"]"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Move the key to environment variables or a secret manager. Never hardcode keys in source."
@@ -174,7 +176,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     add_vuln!(
         "JWT Secret Hardcoded",
         "JWT signing secrets in source code allow token forgery if exposed.",
-        Severity::Critical, Confidence::High, Some(OwaspCategory::A07AuthFailures),
+        Severity::Critical,
+        Confidence::High,
+        Some(OwaspCategory::A07AuthFailures),
         r#"(?i)(?:jwt_secret|jwt_key|token_secret|signing_key)\s*[=:]\s*['\"][^'\"]{8,}['\"]"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Use environment variables for JWT secrets. Rotate immediately if exposed."
@@ -183,7 +187,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     add_vuln!(
         "Insecure Cookie Configuration",
         "Cookies missing Secure, HttpOnly, or SameSite flags can be exploited via XSS or MITM.",
-        Severity::High, Confidence::Medium, Some(OwaspCategory::A05SecurityMisconfiguration),
+        Severity::High,
+        Confidence::Medium,
+        Some(OwaspCategory::A05SecurityMisconfiguration),
         r#"(?i)(?:cookie|Cookie|set_cookie)\s*\(\s*['\"]\w+['\"]\s*,\s*['\"]\w+['\"]"#,
         Some(r#"(?i)(?:HttpOnly|Secure|SameSite)"#),
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
@@ -204,7 +210,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     add_vuln!(
         "CORS Misconfiguration",
         "Permissive CORS policy allows any origin to access your API. Restrict to trusted origins.",
-        Severity::High, Confidence::High, Some(OwaspCategory::A05SecurityMisconfiguration),
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A05SecurityMisconfiguration),
         r#"(?i)(?:Access-Control-Allow-Origin\s*:\s*\*|allow_origins.*\['\''*|cors.*allow_all)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Replace wildcard CORS origin with specific allowed origins. Never use '*' in production."
@@ -244,7 +252,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     add_vuln!(
         "Mass Assignment / Autobinding",
         "Automatic binding of request parameters to model attributes can allow property tampering.",
-        Severity::High, Confidence::Medium, Some(OwaspCategory::A01BrokenAccessControl),
+        Severity::High,
+        Confidence::Medium,
+        Some(OwaspCategory::A01BrokenAccessControl),
         r#"(?i)(?:update_attributes|mass_assignment|fillable\s*=\s*\[\s*\*\s*\]|guard\s*=\s*\[\s*\]|@ModelAttribute)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Use allowlists (fillable/guarded) to restrict which attributes can be mass-assigned."
@@ -253,7 +263,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     add_vuln!(
         "Disabled SSL/TLS Verification",
         "Disabling SSL certificate verification defeats HTTPS protection and enables MITM attacks.",
-        Severity::Critical, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
+        Severity::Critical,
+        Confidence::High,
+        Some(OwaspCategory::A02CryptographicFailures),
         r#"(?i)(?:verify\s*(?:=>|=)\s*false\b|tls_verify\s*[=:]\s*false|dangerous_accept|no_verify)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Enable SSL/TLS certificate verification. Never disable it in production."
@@ -332,10 +344,7 @@ pub(crate) fn filter_findings(
 }
 
 /// Scan a single file for vulnerability patterns
-fn scan_file_for_vulns(
-    path: &Path,
-    patterns: &[VulnPattern],
-) -> Vec<Finding> {
+fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     let mut findings = Vec::new();
     let ext = file_extension(path);
 
@@ -412,7 +421,9 @@ fn scan_file_for_vulns(
             }
 
             // Attach a stable CWE identifier derived from the pattern title
-            if let Some(cwe) = crate::finding::cwe_for_title(pattern.name, FindingType::Vulnerability) {
+            if let Some(cwe) =
+                crate::finding::cwe_for_title(pattern.name, FindingType::Vulnerability)
+            {
                 finding = finding.with_cwe(cwe);
             }
 
@@ -497,7 +508,10 @@ pub async fn run_review(
 ) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
-    output::print_header("Security Review", Some(&format!("Scanning {}", canonical_path.display())));
+    output::print_header(
+        "Security Review",
+        Some(&format!("Scanning {}", canonical_path.display())),
+    );
 
     // Phase 1: Pattern-based scanning
     let spinner = ProgressBar::new_spinner();
@@ -511,7 +525,11 @@ pub async fn run_review(
     let mut report = collect_review_findings(&canonical_path, false, None).await?;
 
     let total_raw = report.len();
-    spinner.finish_with_message(format!("{} files scanned — {} raw issues found", "[OK]".green(), total_raw));
+    spinner.finish_with_message(format!(
+        "{} files scanned — {} raw issues found",
+        "[OK]".green(),
+        total_raw
+    ));
 
     // Phase 1b: AI verification — confirm real issues, filter false positives
     if verify {
@@ -555,10 +573,11 @@ pub async fn run_review(
         );
         match run_ai_review(&canonical_path, model).await {
             Ok(ai_findings) => {
-                let existing_keys: std::collections::HashSet<(String, Option<String>)> =
-                    report.findings.iter()
-                        .map(|f| (f.title.clone(), f.file_path.clone()))
-                        .collect();
+                let existing_keys: std::collections::HashSet<(String, Option<String>)> = report
+                    .findings
+                    .iter()
+                    .map(|f| (f.title.clone(), f.file_path.clone()))
+                    .collect();
                 for finding in ai_findings {
                     let key = (finding.title.clone(), finding.file_path.clone());
                     if !existing_keys.contains(&key) {
@@ -579,7 +598,12 @@ pub async fn run_review(
 
     // Apply filters
     let max_show = max_findings.unwrap_or(30);
-    let filtered = filter_findings(report.findings.clone(), min_severity, min_confidence, max_show);
+    let filtered = filter_findings(
+        report.findings.clone(),
+        min_severity,
+        min_confidence,
+        max_show,
+    );
 
     // Handle format/output
     if format == "sarif" || format == "json" {
@@ -638,7 +662,8 @@ pub async fn run_review(
     println!("{}", showing_info);
 
     // Build a mini report for display
-    let mut display_report = FindingReport::new("security-review", canonical_path.to_string_lossy());
+    let mut display_report =
+        FindingReport::new("security-review", canonical_path.to_string_lossy());
     for f in filtered {
         display_report.add(f);
     }
@@ -647,9 +672,17 @@ pub async fn run_review(
 
     if display_report.is_empty() {
         println!();
-        println!("{} No vulnerabilities detected matching your filters.", "[OK]".green().bold());
-        println!("  Note: Pattern-based scanners can miss business logic and context-dependent issues.");
-        println!("  Run {} for deeper analysis, or run without --min-severity to see all findings.", "cipher-ai review --ai".yellow());
+        println!(
+            "{} No vulnerabilities detected matching your filters.",
+            "[OK]".green().bold()
+        );
+        println!(
+            "  Note: Pattern-based scanners can miss business logic and context-dependent issues."
+        );
+        println!(
+            "  Run {} for deeper analysis, or run without --min-severity to see all findings.",
+            "cipher-ai review --ai".yellow()
+        );
         return Ok(report);
     }
 
@@ -679,7 +712,10 @@ pub async fn run_review(
         .collect();
 
     if !critical_high.is_empty() {
-        println!("  [RED] Fix {} critical/high severity issues first:", critical_high.len());
+        println!(
+            "  [RED] Fix {} critical/high severity issues first:",
+            critical_high.len()
+        );
         for f in critical_high.iter().take(5) {
             let fp = f.file_path.as_deref().unwrap_or("<unknown>");
             println!(
@@ -690,7 +726,10 @@ pub async fn run_review(
             );
         }
         if critical_high.len() > 5 {
-            println!("      • ... and {} more", (critical_high.len() - 5).to_string().dimmed());
+            println!(
+                "      • ... and {} more",
+                (critical_high.len() - 5).to_string().dimmed()
+            );
         }
     }
 
@@ -711,18 +750,39 @@ pub async fn run_review(
 fn is_supported_extension(ext: &str) -> bool {
     matches!(
         ext,
-        "rs" | "js" | "jsx" | "ts" | "tsx" | "py" | "go" | "rb" | "java" | "kt"
-            | "swift" | "c" | "cpp" | "h" | "hpp" | "cs" | "php" | "sh" | "bash"
-            | "yaml" | "yml" | "json" | "toml" | "sql" | "vue" | "svelte" | "dart"
-            | "scala" | "lua"
+        "rs" | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "py"
+            | "go"
+            | "rb"
+            | "java"
+            | "kt"
+            | "swift"
+            | "c"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "cs"
+            | "php"
+            | "sh"
+            | "bash"
+            | "yaml"
+            | "yml"
+            | "json"
+            | "toml"
+            | "sql"
+            | "vue"
+            | "svelte"
+            | "dart"
+            | "scala"
+            | "lua"
     )
 }
 
 /// Run AI-powered security review using the indexed codebase
-async fn run_ai_review(
-    project_path: &Path,
-    model: Option<&str>,
-) -> Result<Vec<Finding>> {
+async fn run_ai_review(project_path: &Path, model: Option<&str>) -> Result<Vec<Finding>> {
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
         ProgressStyle::default_spinner()
@@ -768,10 +828,7 @@ async fn run_ai_review(
             if reviewed_chunks.insert(chunk.id.clone()) {
                 let chunk_text = format!(
                     "--- {}:{}:{} ---\n{}\n\n",
-                    chunk.relative_path,
-                    chunk.start_line,
-                    chunk.end_line,
-                    chunk.content
+                    chunk.relative_path, chunk.start_line, chunk.end_line, chunk.content
                 );
                 if context.len() + chunk_text.len() > 20_000 {
                     break;
@@ -853,10 +910,7 @@ If no vulnerabilities found, return {{"findings": []}}."#
 }
 
 /// Parse AI JSON response into Finding objects
-fn parse_ai_findings(
-    response: &str,
-    project_path: &Path,
-) -> Result<Vec<Finding>> {
+fn parse_ai_findings(response: &str, project_path: &Path) -> Result<Vec<Finding>> {
     // Try to extract JSON from the response (handles markdown code blocks)
     let json_str = if let Some(start) = response.find("{\"findings\"") {
         let end = response[start..]
@@ -918,13 +972,18 @@ fn parse_ai_findings(
     let mut findings = Vec::new();
 
     for af in ai_response.findings {
-        let title = af.title.unwrap_or_else(|| "Unknown vulnerability".to_string());
+        let title = af
+            .title
+            .unwrap_or_else(|| "Unknown vulnerability".to_string());
         let description = af.description.unwrap_or_default();
         let severity = parse_severity(&af.severity.unwrap_or_default());
         let confidence = parse_confidence(&af.confidence.unwrap_or_default());
         let finding_type = parse_finding_type(&af.finding_type.unwrap_or_default());
         let owasp = parse_owasp(af.owasp_category.as_deref());
-        let cwe = af.cwe_id.as_deref().or(af.cwe_id_alt.as_deref())
+        let cwe = af
+            .cwe_id
+            .as_deref()
+            .or(af.cwe_id_alt.as_deref())
             .and_then(parse_cwe);
 
         let mut finding = Finding::new(
@@ -1045,11 +1104,17 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
                 .as_ref()
                 .and_then(|fp| std::path::Path::new(fp).canonicalize().ok())
                 .map(|p| format!("file:///{}", p.to_string_lossy().replace("\\", "/")))
-                .unwrap_or_else(|| format!("file:///{}", project_path.to_string_lossy().replace("\\", "/")));
+                .unwrap_or_else(|| {
+                    format!(
+                        "file:///{}",
+                        project_path.to_string_lossy().replace("\\", "/")
+                    )
+                });
 
-            let snippet = f.code_snippet.as_ref().map(|s| SarifSnippet {
-                text: s.clone(),
-            });
+            let snippet = f
+                .code_snippet
+                .as_ref()
+                .map(|s| SarifSnippet { text: s.clone() });
 
             let region = f.line_number.map(|ln| SarifRegion {
                 start_line: ln,
@@ -1062,7 +1127,11 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
                 rule_id: f.cwe_id.clone().unwrap_or_else(|| f.title.clone()),
                 level: sarif_level(f.severity).to_string(),
                 message: SarifMessage {
-                    text: format!("{}\n\n**Remediation:** {}", f.description, f.remediation.as_deref().unwrap_or("Not specified")),
+                    text: format!(
+                        "{}\n\n**Remediation:** {}",
+                        f.description,
+                        f.remediation.as_deref().unwrap_or("Not specified")
+                    ),
                 },
                 locations: vec![SarifLocation {
                     physical_location: SarifPhysicalLocation {
@@ -1217,21 +1286,39 @@ fn parse_owasp(s: Option<&str>) -> Option<OwaspCategory> {
     match s {
         Some(s) => {
             let s = s.trim().to_uppercase();
-            if s.contains("A01") || s.contains("BROKEN ACCESS CONTROL") || s.contains("ACCESS CONTROL") {
+            if s.contains("A01")
+                || s.contains("BROKEN ACCESS CONTROL")
+                || s.contains("ACCESS CONTROL")
+            {
                 Some(OwaspCategory::A01BrokenAccessControl)
-            } else if s.contains("A02") || s.contains("CRYPTOGRAPHIC FAILURES") || s.contains("CRYPTOGRAPHIC") {
+            } else if s.contains("A02")
+                || s.contains("CRYPTOGRAPHIC FAILURES")
+                || s.contains("CRYPTOGRAPHIC")
+            {
                 Some(OwaspCategory::A02CryptographicFailures)
             } else if s.contains("A03") || s.contains("INJECTION") {
                 Some(OwaspCategory::A03Injection)
             } else if s.contains("A04") || s.contains("INSECURE DESIGN") {
                 Some(OwaspCategory::A04InsecureDesign)
-            } else if s.contains("A05") || s.contains("SECURITY MISCONFIGURATION") || s.contains("MISCONFIGURATION") {
+            } else if s.contains("A05")
+                || s.contains("SECURITY MISCONFIGURATION")
+                || s.contains("MISCONFIGURATION")
+            {
                 Some(OwaspCategory::A05SecurityMisconfiguration)
-            } else if s.contains("A06") || s.contains("VULNERABLE COMPONENTS") || s.contains("OUTDATED COMPONENTS") {
+            } else if s.contains("A06")
+                || s.contains("VULNERABLE COMPONENTS")
+                || s.contains("OUTDATED COMPONENTS")
+            {
                 Some(OwaspCategory::A06VulnerableComponents)
-            } else if s.contains("A07") || s.contains("AUTHENTICATION") || s.contains("AUTH FAILURES") {
+            } else if s.contains("A07")
+                || s.contains("AUTHENTICATION")
+                || s.contains("AUTH FAILURES")
+            {
                 Some(OwaspCategory::A07AuthFailures)
-            } else if s.contains("A08") || s.contains("INTEGRITY FAILURES") || s.contains("DATA INTEGRITY") {
+            } else if s.contains("A08")
+                || s.contains("INTEGRITY FAILURES")
+                || s.contains("DATA INTEGRITY")
+            {
                 Some(OwaspCategory::A08IntegrityFailures)
             } else if s.contains("A09") || s.contains("LOGGING FAILURES") || s.contains("LOGGING") {
                 Some(OwaspCategory::A09LoggingFailures)
@@ -1244,5 +1331,3 @@ fn parse_owasp(s: Option<&str>) -> Option<OwaspCategory> {
         None => None,
     }
 }
-
-

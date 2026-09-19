@@ -81,11 +81,7 @@ pub async fn run_ask(
     for chunk in &results {
         let chunk_text = format!(
             "--- {}:{}:{} ({}) ---\n{}\n\n",
-            chunk.relative_path,
-            chunk.start_line,
-            chunk.end_line,
-            chunk.language,
-            chunk.content
+            chunk.relative_path, chunk.start_line, chunk.end_line, chunk.language, chunk.content
         );
 
         if context.len() + chunk_text.len() > MAX_CONTEXT_CHARS {
@@ -111,11 +107,7 @@ pub async fn run_ask(
 
     // Show what we found
     println!();
-    println!(
-        "{} {}",
-        "[*]".bright_blue(),
-        "Relevant Code Context".bold()
-    );
+    println!("{} {}", "[*]".bright_blue(), "Relevant Code Context".bold());
     println!("  {}", "-".repeat(40).dimmed());
 
     let mut file_set: Vec<&str> = Vec::new();
@@ -170,11 +162,7 @@ Focus on actionable insights and reference specific lines of code.
         .chat(SECURITY_SYSTEM_PROMPT, &user_prompt, model)
         .await
         .map_err(|e| {
-            eprintln!(
-                "\n{} Groq API error: {}",
-                "✗".red().bold(),
-                e
-            );
+            eprintln!("\n{} Groq API error: {}", "✗".red().bold(), e);
             e
         })?;
 

@@ -60,9 +60,7 @@ mod tests {
     fn test_groq_client_rejects_missing_key() {
         // No API key in env or config (typical test environment) — must error
         // cleanly rather than panic.
-        if std::env::var("GROQ_API_KEY").is_ok()
-            || crate::config::stored_api_key().is_some()
-        {
+        if std::env::var("GROQ_API_KEY").is_ok() || crate::config::stored_api_key().is_some() {
             return;
         }
         assert!(GroqClient::from_env().is_err());

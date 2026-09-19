@@ -95,21 +95,13 @@ fn build_verify_prompt(chunk: &[Finding]) -> String {
 
     for (i, f) in chunk.iter().enumerate() {
         let file = f.file_path.as_deref().unwrap_or("<unknown>");
-        let line = f
-            .line_number
-            .map(|l| l.to_string())
-            .unwrap_or_default();
+        let line = f.line_number.map(|l| l.to_string()).unwrap_or_default();
         let code = f
             .code_snippet
             .as_deref()
             .map(|c| {
                 let lines: Vec<&str> = c.lines().collect();
-                let snippet: String = lines
-                    .iter()
-                    .take(5)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let snippet: String = lines.iter().take(5).cloned().collect::<Vec<_>>().join("\n");
                 if lines.len() > 5 {
                     format!("{}\n...", snippet)
                 } else {
@@ -147,7 +139,10 @@ struct Verdict {
 }
 
 /// Parse the AI's JSON verdicts into a map of finding-index → verdict.
-fn parse_verdicts(response: &str, chunk: &[Finding]) -> Result<std::collections::HashMap<usize, Verdict>> {
+fn parse_verdicts(
+    response: &str,
+    chunk: &[Finding],
+) -> Result<std::collections::HashMap<usize, Verdict>> {
     // Extract the JSON object (handles markdown fences / trailing prose).
     let json_str = if let Some(start) = response.find('{') {
         let end = response[start..]
@@ -176,8 +171,8 @@ fn parse_verdicts(response: &str, chunk: &[Finding]) -> Result<std::collections:
         verdicts: Vec<RawVerdict>,
     }
 
-    let parsed: RawResponse = serde_json::from_str(json_str)
-        .context("Failed to parse AI verification response")?;
+    let parsed: RawResponse =
+        serde_json::from_str(json_str).context("Failed to parse AI verification response")?;
 
     let mut verdicts = std::collections::HashMap::new();
     for raw in parsed.verdicts {
@@ -275,9 +270,7 @@ mod tests {
     async fn test_verify_findings_no_api_key_keeps_findings() {
         // If a real API key is configured (env or config file), this test would
         // hit the live Groq API — skip the network path in that case.
-        if std::env::var("GROQ_API_KEY").is_ok()
-            || crate::config::stored_api_key().is_some()
-        {
+        if std::env::var("GROQ_API_KEY").is_ok() || crate::config::stored_api_key().is_some() {
             return;
         }
         // Without a GROQ_API_KEY (or config), verification degrades gracefully

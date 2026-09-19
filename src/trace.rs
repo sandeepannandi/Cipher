@@ -12,34 +12,87 @@ use std::path::Path;
 
 /// Variable/API names that introduce untrusted data into a program.
 const TAINT_SOURCES: &[&str] = &[
-    "request", "req", "params", "body", "query", "input",
-    "$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_SERVER",
-    "ctx.request", "self.request", "this.request",
-    "request.data", "request.json", "request.form",
-    "req.body", "req.query", "req.params",
-    "getParameter", "getQueryString", "HttpServletRequest",
-    "args", "argv", "stdin",
+    "request",
+    "req",
+    "params",
+    "body",
+    "query",
+    "input",
+    "$_GET",
+    "$_POST",
+    "$_REQUEST",
+    "$_COOKIE",
+    "$_SERVER",
+    "ctx.request",
+    "self.request",
+    "this.request",
+    "request.data",
+    "request.json",
+    "request.form",
+    "req.body",
+    "req.query",
+    "req.params",
+    "getParameter",
+    "getQueryString",
+    "HttpServletRequest",
+    "args",
+    "argv",
+    "stdin",
 ];
 
 /// Dangerous operations that untrusted data should never reach.
 const TAINT_SINKS: &[&str] = &[
-    "exec", "system", "popen", "eval", "assert",
-    "query", "execute", "raw_query", "rawQuery",
-    "shell_exec", "passthru", "proc_open",
-    "os.system", "subprocess.call", "subprocess.Popen",
-    "runtime.exec", "ProcessBuilder",
-    "is_admin", "isAdmin", "admin", "grant", "role", "permission",
-    "authorize", "privilege", "sudo",
-    "open(", "write", "delete", "chmod", "unlink",
+    "exec",
+    "system",
+    "popen",
+    "eval",
+    "assert",
+    "query",
+    "execute",
+    "raw_query",
+    "rawQuery",
+    "shell_exec",
+    "passthru",
+    "proc_open",
+    "os.system",
+    "subprocess.call",
+    "subprocess.Popen",
+    "runtime.exec",
+    "ProcessBuilder",
+    "is_admin",
+    "isAdmin",
+    "admin",
+    "grant",
+    "role",
+    "permission",
+    "authorize",
+    "privilege",
+    "sudo",
+    "open(",
+    "write",
+    "delete",
+    "chmod",
+    "unlink",
 ];
 
 /// Sanitization functions that break taint propagation.
 const SANITIZERS: &[&str] = &[
-    "sanitize", "validate", "escape", "filter",
-    "htmlspecialchars", "strip_tags", "escapeHtml",
-    "escapeShellArg", "escapeshellarg",
-    "parseInt", "parseFloat", "intval", "floatval",
-    "is_numeric", "ctype_digit", "preg_match",
+    "sanitize",
+    "validate",
+    "escape",
+    "filter",
+    "htmlspecialchars",
+    "strip_tags",
+    "escapeHtml",
+    "escapeShellArg",
+    "escapeshellarg",
+    "parseInt",
+    "parseFloat",
+    "intval",
+    "floatval",
+    "is_numeric",
+    "ctype_digit",
+    "preg_match",
 ];
 
 /// Default max recursion depth for cross-file call tracing.
@@ -133,7 +186,9 @@ fn collect_functions(project_path: &Path) -> Vec<FunctionDef> {
         }
         file_count += 1;
 
-        let Ok(content) = std::fs::read_to_string(path) else { continue };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
         let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
         functions.extend(parse_functions(&lines, &path.to_string_lossy(), &ext));
 
@@ -266,7 +321,11 @@ fn extract_arrow_name(line: &str) -> Option<String> {
         let name = lhs.split_whitespace().last().unwrap_or("").trim();
         if !name.is_empty()
             && !name.contains('(')
-            && name.chars().next().map(|c| c.is_alphabetic() || c == '_').unwrap_or(false)
+            && name
+                .chars()
+                .next()
+                .map(|c| c.is_alphabetic() || c == '_')
+                .unwrap_or(false)
         {
             return Some(name.to_string());
         }
@@ -307,9 +366,16 @@ fn extract_params(line: &str) -> Vec<String> {
         if let Some(colon) = name.find(':') {
             name = &name[..colon];
         }
-        let name = name.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
+        let name = name
+            .trim()
+            .trim_matches(|c| c == '\'' || c == '"')
+            .to_string();
         if !name.is_empty()
-            && name.chars().next().map(|c| c.is_alphabetic() || c == '_').unwrap_or(false)
+            && name
+                .chars()
+                .next()
+                .map(|c| c.is_alphabetic() || c == '_')
+                .unwrap_or(false)
             && !name.contains(' ')
         {
             params.push(name);
@@ -339,8 +405,24 @@ fn find_matching_paren(s: &str) -> Option<usize> {
 fn is_trace_ext(ext: &str) -> bool {
     matches!(
         ext,
-        "rs" | "js" | "jsx" | "ts" | "tsx" | "py" | "go" | "rb" | "java" | "kt"
-            | "swift" | "c" | "cpp" | "h" | "hpp" | "cs" | "php" | "vue" | "svelte"
+        "rs" | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "py"
+            | "go"
+            | "rb"
+            | "java"
+            | "kt"
+            | "swift"
+            | "c"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "cs"
+            | "php"
+            | "vue"
+            | "svelte"
     )
 }
 
@@ -496,18 +578,18 @@ impl<'a> Tracer<'a> {
                         .iter()
                         .enumerate()
                         .filter_map(|(idx, arg)| {
-                            tainted.iter().any(|t| line_uses(arg, &t.name)).then_some(idx)
+                            tainted
+                                .iter()
+                                .any(|t| line_uses(arg, &t.name))
+                                .then_some(idx)
                         })
                         .collect();
                     if tainted_args.is_empty() {
                         continue;
                     }
                     // Resolve the callee (prefer same file, then others)
-                    let candidates: Vec<&FunctionDef> = self
-                        .by_name
-                        .get(&callee_lower)
-                        .cloned()
-                        .unwrap_or_default();
+                    let candidates: Vec<&FunctionDef> =
+                        self.by_name.get(&callee_lower).cloned().unwrap_or_default();
                     let same_file: Vec<&FunctionDef> = candidates
                         .iter()
                         .copied()
@@ -524,7 +606,11 @@ impl<'a> Tracer<'a> {
                         let mut pre = Vec::new();
                         for &idx in &tainted_args {
                             if let Some(param) = candidate.param_at(idx) {
-                                if let Some(t) = tainted.iter().find(|t| line_uses(&args[idx], &t.name)).cloned() {
+                                if let Some(t) = tainted
+                                    .iter()
+                                    .find(|t| line_uses(&args[idx], &t.name))
+                                    .cloned()
+                                {
                                     pre.push(TaintedVar {
                                         name: param.to_string(),
                                         origin_line: t.origin_line,
@@ -555,7 +641,9 @@ impl<'a> Tracer<'a> {
                                 callee,
                                 args.iter()
                                     .enumerate()
-                                    .filter_map(|(i, a)| tainted_args.contains(&i).then_some(a.as_str()))
+                                    .filter_map(|(i, a)| tainted_args
+                                        .contains(&i)
+                                        .then_some(a.as_str()))
                                     .collect::<Vec<_>>()
                                     .join(", ")
                             ),
@@ -671,7 +759,13 @@ fn extract_calls(line: &str) -> Vec<(String, Vec<String>)> {
                 }
             }
             let name = name.trim_matches('.').to_string();
-            if !name.is_empty() && name.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+            if !name.is_empty()
+                && name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_alphabetic())
+                    .unwrap_or(false)
+            {
                 // Find matching close paren
                 let mut depth = 0i32;
                 let mut end = i;
@@ -749,8 +843,16 @@ fn focus_keywords(query: &str) -> Vec<String> {
     let q = query.to_lowercase();
     let mut focus = Vec::new();
     let admin_terms = [
-        "admin", "privilege", "escalat", "become", "role", "permission", "is_admin",
-        "authorize", "sudo", "access control",
+        "admin",
+        "privilege",
+        "escalat",
+        "become",
+        "role",
+        "permission",
+        "is_admin",
+        "authorize",
+        "sudo",
+        "access control",
     ];
     let injection_terms = [
         "inject", "sql", "command", "exec", "eval", "shell", "xss", "ssrf",
@@ -831,7 +933,10 @@ pub async fn run_trace(
         println!("  {} Query: {}\n", "[?]".yellow(), query.yellow().bold());
     }
 
-    println!("  {} Parsing functions across the codebase...", "[*]".cyan());
+    println!(
+        "  {} Parsing functions across the codebase...",
+        "[*]".cyan()
+    );
     let functions = collect_functions(&canonical_path);
     println!(
         "  {} Found {} functions",
@@ -877,7 +982,10 @@ pub async fn run_trace(
     }
 
     if use_ai {
-        println!("  {} Enriching top paths with AI analysis...", "[AI]".cyan());
+        println!(
+            "  {} Enriching top paths with AI analysis...",
+            "[AI]".cyan()
+        );
         if let Err(e) = enrich_paths_ai(&mut paths, query).await {
             eprintln!(
                 "  {} AI enrichment failed: {} (continuing with rule-based results)",
@@ -933,8 +1041,8 @@ pub fn trace_between_files(
     to_file: &str,
     depth: usize,
 ) -> Vec<TaintPath> {
-    let canonical_path = std::fs::canonicalize(project_path)
-        .unwrap_or_else(|_| project_path.to_path_buf());
+    let canonical_path =
+        std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
     let functions = collect_functions(&canonical_path);
     if functions.is_empty() {
         return Vec::new();
@@ -1124,23 +1232,38 @@ mod tests {
 
     #[test]
     fn test_extract_params_simple() {
-        assert_eq!(extract_params("fn foo(a, b: String, mut c) -> i32 {"), vec!["a", "b", "c"]);
+        assert_eq!(
+            extract_params("fn foo(a, b: String, mut c) -> i32 {"),
+            vec!["a", "b", "c"]
+        );
     }
 
     #[test]
     fn test_extract_params_python() {
-        assert_eq!(extract_params("def login(username, password):"), vec!["username", "password"]);
+        assert_eq!(
+            extract_params("def login(username, password):"),
+            vec!["username", "password"]
+        );
     }
 
     #[test]
     fn test_extract_params_js() {
-        assert_eq!(extract_params("function checkRole(user, role) {"), vec!["user", "role"]);
+        assert_eq!(
+            extract_params("function checkRole(user, role) {"),
+            vec!["user", "role"]
+        );
     }
 
     #[test]
     fn test_source_var() {
-        assert_eq!(source_var("let name = request.body.name"), Some("name".to_string()));
-        assert_eq!(source_var("const uid = req.query.uid"), Some("uid".to_string()));
+        assert_eq!(
+            source_var("let name = request.body.name"),
+            Some("name".to_string())
+        );
+        assert_eq!(
+            source_var("const uid = req.query.uid"),
+            Some("uid".to_string())
+        );
         assert_eq!(source_var("let x = 5;"), None);
     }
 
@@ -1233,7 +1356,9 @@ mod tests {
         let paths = tracer.trace_all();
         assert!(!paths.is_empty(), "expected cross-file taint path");
         assert!(
-            paths.iter().any(|p| p.steps.iter().any(|s| s.action == "call")),
+            paths
+                .iter()
+                .any(|p| p.steps.iter().any(|s| s.action == "call")),
             "expected a cross-file call hop in the path"
         );
     }
@@ -1248,11 +1373,8 @@ mod tests {
 
     #[test]
     fn test_trace_between_files_connects_cross_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "cipher_flow_{}_{}",
-            std::process::id(),
-            "between"
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("cipher_flow_{}_{}", std::process::id(), "between"));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("app.js"),
@@ -1268,7 +1390,10 @@ mod tests {
         let from = dir.join("app.js").to_string_lossy().to_string();
         let to = dir.join("lib.js").to_string_lossy().to_string();
         let paths = trace_between_files(&dir, &from, &to, 4);
-        assert!(!paths.is_empty(), "expected a cross-file flow between app.js and lib.js");
+        assert!(
+            !paths.is_empty(),
+            "expected a cross-file flow between app.js and lib.js"
+        );
         assert!(paths[0].steps.iter().any(|s| s.action == "call"));
         assert_eq!(paths[0].steps.last().unwrap().action, "sink");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1276,11 +1401,8 @@ mod tests {
 
     #[test]
     fn test_trace_between_files_no_path() {
-        let dir = std::env::temp_dir().join(format!(
-            "cipher_flow_{}_{}",
-            std::process::id(),
-            "none"
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("cipher_flow_{}_{}", std::process::id(), "none"));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.js"), "fn a() { let x = 1; }\n").unwrap();
         std::fs::write(dir.join("b.js"), "fn b() { let y = 2; }\n").unwrap();

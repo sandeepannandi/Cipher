@@ -69,7 +69,10 @@ pub async fn run_fix(
     let filtered = filter_findings(&findings, finding_id, risk_level, target_file, fix_all);
 
     if filtered.is_empty() {
-        println!("  {} No findings match your filter criteria.", "[*]".yellow());
+        println!(
+            "  {} No findings match your filter criteria.",
+            "[*]".yellow()
+        );
         if !list_only {
             println!();
             println!("  Available filters:");
@@ -101,7 +104,10 @@ pub async fn run_fix(
             println!();
             println!("  Finding IDs for the current scan:");
             print_fixable_findings(
-                &findings.iter().map(|f| f as &Finding).collect::<Vec<&Finding>>(),
+                &findings
+                    .iter()
+                    .map(|f| f as &Finding)
+                    .collect::<Vec<&Finding>>(),
                 &canonical_path,
             );
         }
@@ -112,7 +118,10 @@ pub async fn run_fix(
     if list_only {
         println!("  {} Fixable findings:", "[LIST]".bold());
         print_fixable_findings(
-            &filtered.iter().map(|f| f as &Finding).collect::<Vec<&Finding>>(),
+            &filtered
+                .iter()
+                .map(|f| f as &Finding)
+                .collect::<Vec<&Finding>>(),
             &canonical_path,
         );
         return Ok(());
@@ -120,13 +129,22 @@ pub async fn run_fix(
 
     // Step 3b: If --dry-run, show findings and their planned fixes
     if dry_run {
-        println!("  {} Dry-run mode — showing fixable findings without applying:", "[DRY]".cyan().bold());
+        println!(
+            "  {} Dry-run mode — showing fixable findings without applying:",
+            "[DRY]".cyan().bold()
+        );
         print_fixable_findings(
-            &filtered.iter().map(|f| f as &Finding).collect::<Vec<&Finding>>(),
+            &filtered
+                .iter()
+                .map(|f| f as &Finding)
+                .collect::<Vec<&Finding>>(),
             &canonical_path,
         );
         println!();
-        println!("  {} Run without --dry-run to apply these fixes.", "[IDEA]".bold());
+        println!(
+            "  {} Run without --dry-run to apply these fixes.",
+            "[IDEA]".bold()
+        );
         return Ok(());
     }
 
@@ -151,7 +169,10 @@ pub async fn run_fix(
         .collect();
 
     if fixable.is_empty() {
-        println!("  {} No fixable findings (all lack file paths).", "[-]".yellow());
+        println!(
+            "  {} No fixable findings (all lack file paths).",
+            "[-]".yellow()
+        );
         return Ok(());
     }
 
@@ -188,11 +209,7 @@ pub async fn run_fix(
             file_path.yellow(),
             line_info,
         );
-        println!(
-            "  {} {}",
-            finding.finding_type.icon(),
-            finding.title.bold()
-        );
+        println!("  {} {}", finding.finding_type.icon(), finding.title.bold());
 
         match generate_fix(&client, finding, &canonical_path).await {
             Ok(fix_plan) => {
@@ -255,13 +272,13 @@ pub async fn run_fix(
                     });
 
                     if verify {
-                        println!(
-                            "    {} Compile-checking the project...",
-                            "[*]".cyan()
-                        );
+                        println!("    {} Compile-checking the project...", "[*]".cyan());
                         match verify_compiles(&canonical_path) {
                             Ok(true) => {
-                                println!("    {} Build passes — fix is safe.", "[OK]".green().bold());
+                                println!(
+                                    "    {} Build passes — fix is safe.",
+                                    "[OK]".green().bold()
+                                );
                                 success_count += 1;
                             }
                             Ok(false) => {
@@ -315,7 +332,10 @@ pub async fn run_fix(
     if open_pr {
         if applied.is_empty() {
             println!();
-            println!("  {} No fixes applied — nothing to open a PR for.", "[-]".yellow());
+            println!(
+                "  {} No fixes applied — nothing to open a PR for.",
+                "[-]".yellow()
+            );
         } else {
             println!();
             create_fix_pr(&canonical_path, &applied, pr_repo, pr_token).await?;
@@ -349,14 +369,22 @@ async fn create_fix_pr(
     repo_arg: Option<&str>,
     token_arg: Option<&str>,
 ) -> Result<()> {
-    println!("  {} Preparing pull request with {} fix(es)...", "[PR]".cyan().bold(), applied.len());
+    println!(
+        "  {} Preparing pull request with {} fix(es)...",
+        "[PR]".cyan().bold(),
+        applied.len()
+    );
 
     // Resolve repository: flag > env > origin remote
     let repo = match crate::pr::resolve_repo(repo_arg) {
         Some(r) => r,
         None => match git_origin_repo(project_path) {
             Some(r) => {
-                println!("  {} Detected repository from git remote: {}", "[GIT]".cyan(), r.yellow());
+                println!(
+                    "  {} Detected repository from git remote: {}",
+                    "[GIT]".cyan(),
+                    r.yellow()
+                );
                 r
             }
             None => {
@@ -399,7 +427,10 @@ async fn create_fix_pr(
     // Create a branch for the fixes. Git failures degrade gracefully: the
     // fixes stay applied locally and we print manual push instructions instead
     // of aborting the whole command after real work was already done.
-    let branch = format!("cipherai/security-fixes-{}", chrono::Utc::now().format("%Y%m%d%H%M%S"));
+    let branch = format!(
+        "cipherai/security-fixes-{}",
+        chrono::Utc::now().format("%Y%m%d%H%M%S")
+    );
     println!("  {} Creating branch {}", "[GIT]".cyan(), branch.yellow());
     if let Err(e) = run_git(project_path, &["checkout", "-b", &branch]) {
         return graceful_pr_failure(&e);
@@ -441,7 +472,12 @@ async fn create_fix_pr(
     let title = format!("fix(security): {} CipherAI fix(es)", applied.len());
     let body = render_fix_pr_body(applied, &base, &branch);
 
-    println!("  {} Opening PR on {} (base: {})...", "[GITHUB]".cyan(), repo.yellow(), base.yellow());
+    println!(
+        "  {} Opening PR on {} (base: {})...",
+        "[GITHUB]".cyan(),
+        repo.yellow(),
+        base.yellow()
+    );
     match crate::pr::create_pull_request(&repo, &token, &branch, &base, &title, &body).await {
         Ok(url) => {
             println!();
@@ -546,7 +582,11 @@ fn render_fix_pr_body(applied: &[AppliedFix], base: &str, branch: &str) -> Strin
         md.push_str("\n## Regression tests\n\n");
         md.push_str("The following tests would catch these vulnerabilities if they regressed — add them to your test suite:\n\n");
         for f in &with_tests {
-            md.push_str(&format!("**{}**\n\n```\n{}\n```\n\n", f.title, f.test_code.as_deref().unwrap_or("")));
+            md.push_str(&format!(
+                "**{}**\n\n```\n{}\n```\n\n",
+                f.title,
+                f.test_code.as_deref().unwrap_or("")
+            ));
         }
     }
 
@@ -621,11 +661,7 @@ fn filter_findings(
 
     if let Some(id) = finding_id {
         // Exact match by full UUID
-        let matching: Vec<Finding> = findings
-            .iter()
-            .filter(|f| f.id == id)
-            .cloned()
-            .collect();
+        let matching: Vec<Finding> = findings.iter().filter(|f| f.id == id).cloned().collect();
         if !matching.is_empty() {
             return matching;
         }
@@ -762,7 +798,11 @@ fn verify_compiles(project_path: &Path) -> Result<bool> {
 
     // Pick the compile command based on the project's manifest.
     let (program, args, cwd) = if project_path.join("Cargo.toml").exists() {
-        ("cargo", vec!["check", "--quiet"], project_path.to_path_buf())
+        (
+            "cargo",
+            vec!["check", "--quiet"],
+            project_path.to_path_buf(),
+        )
     } else if project_path.join("package.json").exists() {
         // For JS/TS projects, try tsc first (fast, no emit). Fall back to npm
         // build ONLY if a build script exists — otherwise `npm run build` fails
@@ -773,16 +813,30 @@ fn verify_compiles(project_path: &Path) -> Result<bool> {
             .and_then(|v| v["scripts"]["build"].as_str().map(|s| !s.is_empty()))
             .unwrap_or(false);
         if project_path.join("tsconfig.json").exists() {
-            ("npx", vec!["tsc", "--noEmit", "-p", "tsconfig.json"], project_path.to_path_buf())
+            (
+                "npx",
+                vec!["tsc", "--noEmit", "-p", "tsconfig.json"],
+                project_path.to_path_buf(),
+            )
         } else if has_build_script {
-            ("npm", vec!["run", "build", "--silent"], project_path.to_path_buf())
+            (
+                "npm",
+                vec!["run", "build", "--silent"],
+                project_path.to_path_buf(),
+            )
         } else {
             anyhow::bail!("package.json has no build script or tsconfig — cannot verify");
         }
     } else if project_path.join("go.mod").exists() {
         ("go", vec!["build", "./..."], project_path.to_path_buf())
-    } else if project_path.join("pyproject.toml").exists() || project_path.join("requirements.txt").exists() {
-        ("python3", vec!["-m", "compileall", "-q", "."], project_path.to_path_buf())
+    } else if project_path.join("pyproject.toml").exists()
+        || project_path.join("requirements.txt").exists()
+    {
+        (
+            "python3",
+            vec!["-m", "compileall", "-q", "."],
+            project_path.to_path_buf(),
+        )
     } else {
         // Unknown build system — cannot verify.
         anyhow::bail!("no build system detected (expected Cargo.toml, package.json, go.mod, or pyproject.toml)");
@@ -884,7 +938,11 @@ async fn generate_fix(
     // Determine which lines to extract for context
     let target_line = finding.line_number.unwrap_or(1).saturating_sub(1); // 0-indexed
 
-    let context_start = if target_line >= 10 { target_line - 10 } else { 0 };
+    let context_start = if target_line >= 10 {
+        target_line - 10
+    } else {
+        0
+    };
     let context_end = (target_line + 11).min(total_lines);
 
     let original_lines: Vec<&str> = all_lines[context_start..context_end].to_vec();
@@ -916,7 +974,8 @@ async fn generate_fix(
     let remediation = finding
         .remediation
         .as_deref()
-        .unwrap_or("No specific remediation provided.");        let system_prompt = r#"You are Cipher, an expert application security engineer. Your job is to generate secure patches for code vulnerabilities.
+        .unwrap_or("No specific remediation provided.");
+    let system_prompt = r#"You are Cipher, an expert application security engineer. Your job is to generate secure patches for code vulnerabilities.
 
 For each vulnerability, you receive:
 1. The finding details (title, description, severity, confidence, remediation)
@@ -1042,8 +1101,9 @@ fn parse_fix_response(response: &str) -> Result<(String, String, Option<String>)
         .map_err(|e| anyhow::anyhow!("Failed to parse AI fix response: {}", e))?;
 
     let fixed_code = parsed.fixed_code.unwrap_or_default();
-    let explanation =
-        parsed.explanation.unwrap_or_else(|| "No explanation provided.".to_string());
+    let explanation = parsed
+        .explanation
+        .unwrap_or_else(|| "No explanation provided.".to_string());
     let test_code = parsed
         .test_code
         .map(|t| strip_code_fences(&t))
@@ -1176,11 +1236,8 @@ mod tests {
     use super::*;
 
     fn temp_file(name: &str, content: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "cipher_fix_test_{}_{}",
-            std::process::id(),
-            name
-        ));
+        let path =
+            std::env::temp_dir().join(format!("cipher_fix_test_{}_{}", std::process::id(), name));
         std::fs::write(&path, content).unwrap();
         path
     }
@@ -1224,7 +1281,8 @@ mod tests {
         let path = temp_file("apply", "line1\nline2\nline3\nline4\n");
         let finding = Finding::new(
             crate::finding::FindingType::Vulnerability,
-            "test", "test",
+            "test",
+            "test",
             Severity::High,
             crate::finding::Confidence::High,
             "test",
@@ -1250,7 +1308,8 @@ mod tests {
         let path = temp_file("oob", "a\nb\n");
         let finding = Finding::new(
             crate::finding::FindingType::Vulnerability,
-            "test", "test",
+            "test",
+            "test",
             Severity::High,
             crate::finding::Confidence::High,
             "test",
@@ -1319,10 +1378,7 @@ mod tests {
 
     #[test]
     fn test_resolve_finding_path_moved_checkout() {
-        let dir = std::env::temp_dir().join(format!(
-            "cipher_fix_move_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("cipher_fix_move_{}", std::process::id()));
         let src = dir.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("main.rs"), "fn main() {}").unwrap();

@@ -31,10 +31,20 @@ pub fn print_header(title: &str, subtitle: Option<&str>) {
     };
     let line_len = full.len().min(70) + 4;
     let sep = H.repeat(line_len);
-    println!("{} {} {}", TL.bright_blue().bold(), full.bold().white(), sep.bright_blue().bold());
+    println!(
+        "{} {} {}",
+        TL.bright_blue().bold(),
+        full.bold().white(),
+        sep.bright_blue().bold()
+    );
     if let Some(sub) = subtitle {
         let pad = line_len.saturating_sub(sub.len().min(70));
-        println!("{} {} {}", V.bright_blue(), sub.cyan(), " ".repeat(pad).bright_blue());
+        println!(
+            "{} {} {}",
+            V.bright_blue(),
+            sub.cyan(),
+            " ".repeat(pad).bright_blue()
+        );
     }
 }
 
@@ -63,7 +73,8 @@ pub fn print_step(current: usize, total: usize, label: &str) {
 
 /// Print a step result (success): ✓ Review: 2 critical, 5 high, 30 total
 pub fn print_ok(tag: &str, detail: &str) {
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         "✓".green().bold(),
         format!("{}:", tag).bold(),
         detail,
@@ -72,7 +83,8 @@ pub fn print_ok(tag: &str, detail: &str) {
 
 /// Print a step result (warning)
 pub fn print_warn(tag: &str, detail: &str) {
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         "⚠".yellow().bold(),
         format!("{}:", tag).bold(),
         detail,
@@ -81,7 +93,8 @@ pub fn print_warn(tag: &str, detail: &str) {
 
 /// Print a step result (error)
 pub fn print_fail(tag: &str, detail: &str) {
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         "✗".red().bold(),
         format!("{}:", tag).bold(),
         detail,
@@ -90,7 +103,8 @@ pub fn print_fail(tag: &str, detail: &str) {
 
 /// Print an informational note
 pub fn print_info(tag: &str, msg: &str) {
-    println!("  {} {} {}",
+    println!(
+        "  {} {} {}",
         "●".cyan().bold(),
         format!("{}:", tag).bold(),
         msg,
@@ -112,24 +126,47 @@ pub fn print_hint(msg: &str) {
 /// │  Total findings:   30                                     │
 /// └───────────────────────────────────────────────────────────┘
 pub fn print_summary_box(title: &str, rows: &[(&str, &str)]) {
-    let left_w = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(20).max(10);
+    let left_w = rows
+        .iter()
+        .map(|(k, _)| k.len())
+        .max()
+        .unwrap_or(20)
+        .max(10);
     let title_line = format!(" {} ", title);
     let box_w = (left_w + 30).max(title_line.len() + 4);
 
     println!();
-    println!("  {}",
-        format!("{}{}{}", TL.bright_blue(), H.repeat(box_w - 2), TR.bright_blue())
+    println!(
+        "  {}",
+        format!(
+            "{}{}{}",
+            TL.bright_blue(),
+            H.repeat(box_w - 2),
+            TR.bright_blue()
+        )
     );
-    println!("  {} {:^width$} {}",
-        V.bright_blue().bold(), title.bold().white(), V.bright_blue(),
+    println!(
+        "  {} {:^width$} {}",
+        V.bright_blue().bold(),
+        title.bold().white(),
+        V.bright_blue(),
         width = box_w.saturating_sub(2)
     );
-    println!("  {}",
-        format!("{}{}{}", LT.bright_blue(), H.repeat(box_w - 2), RT.bright_blue())
+    println!(
+        "  {}",
+        format!(
+            "{}{}{}",
+            LT.bright_blue(),
+            H.repeat(box_w - 2),
+            RT.bright_blue()
+        )
     );
     for (key, val) in rows {
-        let pad = box_w.saturating_sub(2 + 2 + key.len() + val.len()).saturating_sub(1);
-        println!("  {} {}:{} {}{}",
+        let pad = box_w
+            .saturating_sub(2 + 2 + key.len() + val.len())
+            .saturating_sub(1);
+        println!(
+            "  {} {}:{} {}{}",
             V.bright_blue(),
             key.bold(),
             " ".repeat(left_w.saturating_sub(key.len())).dimmed(),
@@ -138,8 +175,14 @@ pub fn print_summary_box(title: &str, rows: &[(&str, &str)]) {
             // V is not needed at far-right for aesthetic simplicity
         );
     }
-    println!("  {}",
-        format!("{}{}{}", BL.bright_blue(), H.repeat(box_w - 2), BR.bright_blue())
+    println!(
+        "  {}",
+        format!(
+            "{}{}{}",
+            BL.bright_blue(),
+            H.repeat(box_w - 2),
+            BR.bright_blue()
+        )
     );
     println!();
 }
@@ -155,10 +198,26 @@ pub fn print_findings_table(
     low: usize,
     total: usize,
 ) {
-    let bar_critical = if total > 0 { (critical as f64 / total as f64 * 20.0).round() as usize } else { 0 };
-    let bar_high = if total > 0 { (high as f64 / total as f64 * 20.0).round() as usize } else { 0 };
-    let bar_med = if total > 0 { (medium as f64 / total as f64 * 20.0).round() as usize } else { 0 };
-    let bar_low = if total > 0 { (low as f64 / total as f64 * 20.0).round() as usize } else { 0 };
+    let bar_critical = if total > 0 {
+        (critical as f64 / total as f64 * 20.0).round() as usize
+    } else {
+        0
+    };
+    let bar_high = if total > 0 {
+        (high as f64 / total as f64 * 20.0).round() as usize
+    } else {
+        0
+    };
+    let bar_med = if total > 0 {
+        (medium as f64 / total as f64 * 20.0).round() as usize
+    } else {
+        0
+    };
+    let bar_low = if total > 0 {
+        (low as f64 / total as f64 * 20.0).round() as usize
+    } else {
+        0
+    };
 
     let bar = format!(
         "{}{}{}{}",
@@ -169,7 +228,8 @@ pub fn print_findings_table(
     );
 
     println!("  {}", header.bold().white());
-    println!("    {} {}   {} {}   {} {}   {} {}  ({})",
+    println!(
+        "    {} {}   {} {}   {} {}   {} {}  ({})",
         "CRITICAL".red().bold(),
         format!("{:>4}", critical).red().bold(),
         "HIGH".yellow().bold(),
@@ -251,7 +311,8 @@ pub fn print_banner() {
 /// Print a key-value pair with aligned values
 pub fn print_kv(key: &str, value: &str, align: usize) {
     let a = align.max(15);
-    println!("  {}:{}{}",
+    println!(
+        "  {}:{}{}",
         key.bold(),
         " ".repeat(a.saturating_sub(key.len())),
         value

@@ -12,9 +12,36 @@ const MAX_INDEX_FILES: usize = 5_000;
 
 /// Supported file extensions for indexing
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "rs", "js", "jsx", "ts", "tsx", "py", "go", "rb", "java", "kt", "swift",
-    "c", "cpp", "h", "hpp", "cs", "php", "sh", "bash", "zsh", "yaml", "yml",
-    "json", "toml", "dockerfile", "sql", "graphql", "proto", "vue", "svelte",
+    "rs",
+    "js",
+    "jsx",
+    "ts",
+    "tsx",
+    "py",
+    "go",
+    "rb",
+    "java",
+    "kt",
+    "swift",
+    "c",
+    "cpp",
+    "h",
+    "hpp",
+    "cs",
+    "php",
+    "sh",
+    "bash",
+    "zsh",
+    "yaml",
+    "yml",
+    "json",
+    "toml",
+    "dockerfile",
+    "sql",
+    "graphql",
+    "proto",
+    "vue",
+    "svelte",
 ];
 
 /// A single chunk of code
@@ -149,8 +176,7 @@ fn chunk_code(content: &str, max_chunk_tokens: usize) -> Vec<(usize, usize, Stri
 
             if char_count >= max_chars / 2 {
                 let line = lines[end - 1].trim();
-                if end < total_lines && (line.is_empty() || line == "}" || line == "```")
-                {
+                if end < total_lines && (line.is_empty() || line == "}" || line == "```") {
                     break;
                 }
             }
@@ -189,30 +215,179 @@ fn tokenize(text: &str) -> Vec<String> {
 fn is_stopword(term: &str) -> bool {
     matches!(
         term,
-        "the" | "is" | "at" | "which" | "on" | "a" | "an" | "and" | "or" | "but"
-            | "in" | "with" | "to" | "for" | "of" | "by" | "from" | "as" | "are"
-            | "was" | "were" | "been" | "be" | "has" | "have" | "had" | "do" | "does"
-            | "did" | "will" | "would" | "could" | "should" | "may" | "might" | "can"
-            | "shall" | "this" | "that" | "these" | "those" | "it" | "its" | "not"
-            | "no" | "nor" | "if" | "else" | "then" | "than" | "so" | "such" | "only"
-            | "just" | "also" | "very" | "too" | "about" | "above" | "after" | "again"
-            | "all" | "any" | "both" | "each" | "few" | "more" | "most" | "other"
-            | "some" | "into" | "over" | "under" | "up" | "out" | "off" | "down"
-            | "here" | "there" | "when" | "where" | "why" | "how" | "what" | "who"
-            | "whom" | "while" | "during" | "before" | "between"
-            | "through" | "using" | "use" | "get" | "set" | "put" | "let" | "make"
-            | "run" | "new" | "return" | "void" | "null" | "true" | "false" | "none"
-            | "self" | "super" | "base" | "class" | "struct" | "enum" | "trait"
-            | "impl" | "type" | "fn" | "fun" | "def" | "function" | "var" | "const"
-            | "static" | "public" | "private" | "protected" | "internal" | "override"
-            | "virtual" | "abstract" | "sealed" | "readonly" | "async" | "await"
-            | "import" | "export" | "require" | "include" | "package" | "module"
-            | "namespace" | "default" | "case" | "switch" | "match" | "break"
-            | "continue" | "loop" | "try" | "catch"
-            | "finally" | "throw" | "throws" | "raise" | "except"
-            | "yield" | "println" | "print" | "console" | "log" | "debug"
-            | "info" | "warn" | "error" | "assert" | "expect" | "unwrap" | "panic"
-            | "todo" | "fixme" | "hack" | "xxx" | "note" | "warning"
+        "the"
+            | "is"
+            | "at"
+            | "which"
+            | "on"
+            | "a"
+            | "an"
+            | "and"
+            | "or"
+            | "but"
+            | "in"
+            | "with"
+            | "to"
+            | "for"
+            | "of"
+            | "by"
+            | "from"
+            | "as"
+            | "are"
+            | "was"
+            | "were"
+            | "been"
+            | "be"
+            | "has"
+            | "have"
+            | "had"
+            | "do"
+            | "does"
+            | "did"
+            | "will"
+            | "would"
+            | "could"
+            | "should"
+            | "may"
+            | "might"
+            | "can"
+            | "shall"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+            | "it"
+            | "its"
+            | "not"
+            | "no"
+            | "nor"
+            | "if"
+            | "else"
+            | "then"
+            | "than"
+            | "so"
+            | "such"
+            | "only"
+            | "just"
+            | "also"
+            | "very"
+            | "too"
+            | "about"
+            | "above"
+            | "after"
+            | "again"
+            | "all"
+            | "any"
+            | "both"
+            | "each"
+            | "few"
+            | "more"
+            | "most"
+            | "other"
+            | "some"
+            | "into"
+            | "over"
+            | "under"
+            | "up"
+            | "out"
+            | "off"
+            | "down"
+            | "here"
+            | "there"
+            | "when"
+            | "where"
+            | "why"
+            | "how"
+            | "what"
+            | "who"
+            | "whom"
+            | "while"
+            | "during"
+            | "before"
+            | "between"
+            | "through"
+            | "using"
+            | "use"
+            | "get"
+            | "set"
+            | "put"
+            | "let"
+            | "make"
+            | "run"
+            | "new"
+            | "return"
+            | "void"
+            | "null"
+            | "true"
+            | "false"
+            | "none"
+            | "self"
+            | "super"
+            | "base"
+            | "class"
+            | "struct"
+            | "enum"
+            | "trait"
+            | "impl"
+            | "type"
+            | "fn"
+            | "fun"
+            | "def"
+            | "function"
+            | "var"
+            | "const"
+            | "static"
+            | "public"
+            | "private"
+            | "protected"
+            | "internal"
+            | "override"
+            | "virtual"
+            | "abstract"
+            | "sealed"
+            | "readonly"
+            | "async"
+            | "await"
+            | "import"
+            | "export"
+            | "require"
+            | "include"
+            | "package"
+            | "module"
+            | "namespace"
+            | "default"
+            | "case"
+            | "switch"
+            | "match"
+            | "break"
+            | "continue"
+            | "loop"
+            | "try"
+            | "catch"
+            | "finally"
+            | "throw"
+            | "throws"
+            | "raise"
+            | "except"
+            | "yield"
+            | "println"
+            | "print"
+            | "console"
+            | "log"
+            | "debug"
+            | "info"
+            | "warn"
+            | "error"
+            | "assert"
+            | "expect"
+            | "unwrap"
+            | "panic"
+            | "todo"
+            | "fixme"
+            | "hack"
+            | "xxx"
+            | "note"
+            | "warning"
     )
 }
 
@@ -469,7 +644,11 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
     println!("  {} {}", "Project:".bold(), project_name.cyan().bold());
 
     // CLI version
-    println!("  {} v{}", "Version:".bold(), env!("CARGO_PKG_VERSION").cyan());
+    println!(
+        "  {} v{}",
+        "Version:".bold(),
+        env!("CARGO_PKG_VERSION").cyan()
+    );
 
     // Check config (canonical location)
     println!(
@@ -489,13 +668,12 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
     let index_path = data_dir(&canonical_path).join("index.json");
 
     if !index_path.exists() {
-        println!(
-            "  {} {}",
-            "Index:".bold(),
-            "not indexed".yellow()
-        );
+        println!("  {} {}", "Index:".bold(), "not indexed".yellow());
         println!("  {}", "-".repeat(40).dimmed());
-        println!("  Run {} to index this codebase", "cipher-ai init".yellow().bold());
+        println!(
+            "  Run {} to index this codebase",
+            "cipher-ai init".yellow().bold()
+        );
         return Ok(());
     }
 
@@ -503,7 +681,11 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
     let index: CodeIndex = serde_json::from_str(&content)?;
 
     println!("  {} {}", "Index:".bold(), "ready".green());
-    println!("  {} {}", "Indexed at:".bold(), index.summary.indexed_at.cyan());
+    println!(
+        "  {} {}",
+        "Indexed at:".bold(),
+        index.summary.indexed_at.cyan()
+    );
 
     println!("  {}", "-".repeat(40).dimmed());
     println!("  {} Codebase Statistics", "[DATA]".bold());
@@ -540,11 +722,16 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
     match std::env::var("GROQ_API_KEY") {
         Ok(key) => {
             let masked = if key.len() > 8 {
-                format!("{}...{}", &key[..4], &key[key.len()-4..])
+                format!("{}...{}", &key[..4], &key[key.len() - 4..])
             } else {
                 "set".to_string()
             };
-            println!("    {} Groq API key: {} ({})", "✓".green(), "configured".green(), masked.dimmed());
+            println!(
+                "    {} Groq API key: {} ({})",
+                "✓".green(),
+                "configured".green(),
+                masked.dimmed()
+            );
         }
         Err(_) => println!(
             "    {} Groq API key: {} (set GROQ_API_KEY env var)",
@@ -557,19 +744,33 @@ pub async fn run_status(project_path: &Path) -> Result<()> {
     let dockerfile = canonical_path.join("Dockerfile");
     println!(
         "    {} Dockerfile: {}",
-        if dockerfile.exists() { "✓".green() } else { "-".dimmed() },
-        if dockerfile.exists() { "present".green() } else { "not found".dimmed() }
+        if dockerfile.exists() {
+            "✓".green()
+        } else {
+            "-".dimmed()
+        },
+        if dockerfile.exists() {
+            "present".green()
+        } else {
+            "not found".dimmed()
+        }
     );
 
     // Available commands hint
     println!("  {}", "=".repeat(50).dimmed());
     println!("  {} Available commands:", "[CMD]".bold());
-    println!("    {} to scan for vulnerabilities", "cipher-ai review".cyan());
+    println!(
+        "    {} to scan for vulnerabilities",
+        "cipher-ai review".cyan()
+    );
     println!("    {} to scan for secrets", "cipher-ai secrets".cyan());
     println!("    {} to check dependencies", "cipher-ai deps".cyan());
     println!("    {} for zero-day analysis", "cipher-ai zeroday".cyan());
     println!("    {} to run all scans", "cipher-ai ci".cyan());
-    println!("    {} for interactive Q&A", "cipher-ai ask <question>".cyan());
+    println!(
+        "    {} for interactive Q&A",
+        "cipher-ai ask <question>".cyan()
+    );
 
     Ok(())
 }

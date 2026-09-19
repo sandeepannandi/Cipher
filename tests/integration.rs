@@ -1,39 +1,55 @@
-use cipher_ai::{deps, scan, zeroday, sbom, finding};
+use cipher_ai::{deps, finding, sbom, scan, zeroday};
 
 #[test]
 fn test_should_exclude_git() {
-    assert!(scan::should_exclude(std::path::Path::new("/project/.git/config")));
+    assert!(scan::should_exclude(std::path::Path::new(
+        "/project/.git/config"
+    )));
 }
 
 #[test]
 fn test_should_exclude_node_modules() {
-    assert!(scan::should_exclude(std::path::Path::new("/project/node_modules/express/index.js")));
+    assert!(scan::should_exclude(std::path::Path::new(
+        "/project/node_modules/express/index.js"
+    )));
 }
 
 #[test]
 fn test_should_not_exclude_source() {
-    assert!(!scan::should_exclude(std::path::Path::new("/project/src/main.rs")));
+    assert!(!scan::should_exclude(std::path::Path::new(
+        "/project/src/main.rs"
+    )));
 }
 
 #[test]
 fn test_should_exclude_minified() {
-    assert!(scan::should_exclude(std::path::Path::new("/project/app.min.js")));
+    assert!(scan::should_exclude(std::path::Path::new(
+        "/project/app.min.js"
+    )));
 }
 
 #[test]
 fn test_should_exclude_image() {
-    assert!(scan::should_exclude(std::path::Path::new("/project/logo.svg")));
-    assert!(scan::should_exclude(std::path::Path::new("/project/photo.png")));
+    assert!(scan::should_exclude(std::path::Path::new(
+        "/project/logo.svg"
+    )));
+    assert!(scan::should_exclude(std::path::Path::new(
+        "/project/photo.png"
+    )));
 }
 
 #[test]
 fn test_should_exclude_cipher_ai_dir() {
-    assert!(scan::should_exclude(std::path::Path::new("/project/.cipher-ai/index.json")));
+    assert!(scan::should_exclude(std::path::Path::new(
+        "/project/.cipher-ai/index.json"
+    )));
 }
 
 #[test]
 fn test_should_exclude_build_dir() {
-    assert!(scan::should_exclude(std::path::Path::new("/project/build/output.o")));
+    assert!(scan::should_exclude(std::path::Path::new(
+        "/project/build/output.o"
+    )));
 }
 
 #[test]
@@ -53,22 +69,37 @@ fn test_is_function_signature_python() {
 #[test]
 fn test_is_function_signature_javascript() {
     assert!(zeroday::is_function_signature("function hello() {", "js"));
-    assert!(zeroday::is_function_signature("async function fetch() {", "js"));
+    assert!(zeroday::is_function_signature(
+        "async function fetch() {",
+        "js"
+    ));
     assert!(!zeroday::is_function_signature("const x = 5;", "js"));
 }
 
 #[test]
 fn test_is_function_signature_go() {
     assert!(zeroday::is_function_signature("func main() {", "go"));
-    assert!(zeroday::is_function_signature("func hello(w http.ResponseWriter, r *http.Request) {", "go"));
+    assert!(zeroday::is_function_signature(
+        "func hello(w http.ResponseWriter, r *http.Request) {",
+        "go"
+    ));
     assert!(!zeroday::is_function_signature("import \"fmt\"", "go"));
 }
 
 #[test]
 fn test_is_function_signature_java() {
-    assert!(zeroday::is_function_signature("public void doSomething() {", "java"));
-    assert!(zeroday::is_function_signature("private String getName() {", "java"));
-    assert!(!zeroday::is_function_signature("import java.util.List;", "java"));
+    assert!(zeroday::is_function_signature(
+        "public void doSomething() {",
+        "java"
+    ));
+    assert!(zeroday::is_function_signature(
+        "private String getName() {",
+        "java"
+    ));
+    assert!(!zeroday::is_function_signature(
+        "import java.util.List;",
+        "java"
+    ));
 }
 
 #[test]
@@ -87,44 +118,80 @@ fn test_is_function_signature_ruby() {
 fn test_extract_function_name_rust() {
     assert_eq!(zeroday::extract_function_name("fn hello() {"), "hello");
     assert_eq!(zeroday::extract_function_name("fn main()"), "main");
-    assert_eq!(zeroday::extract_function_name("fn process_data<T>()"), "process_data");
+    assert_eq!(
+        zeroday::extract_function_name("fn process_data<T>()"),
+        "process_data"
+    );
 }
 
 #[test]
 fn test_extract_function_name_python() {
     assert_eq!(zeroday::extract_function_name("def hello():"), "hello");
-    assert_eq!(zeroday::extract_function_name("def process_data(args):"), "process_data");
+    assert_eq!(
+        zeroday::extract_function_name("def process_data(args):"),
+        "process_data"
+    );
 }
 
 #[test]
 fn test_extract_function_name_javascript() {
-    assert_eq!(zeroday::extract_function_name("function hello() {"), "hello");
-    assert_eq!(zeroday::extract_function_name("function processData() {"), "processData");
+    assert_eq!(
+        zeroday::extract_function_name("function hello() {"),
+        "hello"
+    );
+    assert_eq!(
+        zeroday::extract_function_name("function processData() {"),
+        "processData"
+    );
 }
 
 #[test]
 fn test_extract_function_name_go() {
     assert_eq!(zeroday::extract_function_name("func main() {"), "main");
-    assert_eq!(zeroday::extract_function_name("func ServeHTTP(w ResponseWriter, r *Request) {"), "ServeHTTP");
+    assert_eq!(
+        zeroday::extract_function_name("func ServeHTTP(w ResponseWriter, r *Request) {"),
+        "ServeHTTP"
+    );
 }
 
 #[test]
 fn test_extract_assigned_var_let() {
-    assert_eq!(zeroday::extract_assigned_var("let x = user_input"), Some("x".to_string()));
-    assert_eq!(zeroday::extract_assigned_var("let mut data = request.body()"), Some("data".to_string()));
-    assert_eq!(zeroday::extract_assigned_var("let name: String = get_name()"), Some("name".to_string()));
+    assert_eq!(
+        zeroday::extract_assigned_var("let x = user_input"),
+        Some("x".to_string())
+    );
+    assert_eq!(
+        zeroday::extract_assigned_var("let mut data = request.body()"),
+        Some("data".to_string())
+    );
+    assert_eq!(
+        zeroday::extract_assigned_var("let name: String = get_name()"),
+        Some("name".to_string())
+    );
 }
 
 #[test]
 fn test_extract_assigned_var_js() {
-    assert_eq!(zeroday::extract_assigned_var("var input = req.body"), Some("input".to_string()));
-    assert_eq!(zeroday::extract_assigned_var("const query = params.id"), Some("query".to_string()));
+    assert_eq!(
+        zeroday::extract_assigned_var("var input = req.body"),
+        Some("input".to_string())
+    );
+    assert_eq!(
+        zeroday::extract_assigned_var("const query = params.id"),
+        Some("query".to_string())
+    );
 }
 
 #[test]
 fn test_extract_assigned_var_simple() {
-    assert_eq!(zeroday::extract_assigned_var("x = get_input()"), Some("x".to_string()));
-    assert_eq!(zeroday::extract_assigned_var("data = req.body"), Some("data".to_string()));
+    assert_eq!(
+        zeroday::extract_assigned_var("x = get_input()"),
+        Some("x".to_string())
+    );
+    assert_eq!(
+        zeroday::extract_assigned_var("data = req.body"),
+        Some("data".to_string())
+    );
 }
 
 #[test]
@@ -135,8 +202,14 @@ fn test_extract_assigned_var_skips_comparisons() {
 
 #[test]
 fn test_extract_assigned_var_destructuring() {
-    assert_eq!(zeroday::extract_assigned_var("let {a, b} = get_pair()"), None);
-    assert_eq!(zeroday::extract_assigned_var("let (x, y) = get_tuple()"), None);
+    assert_eq!(
+        zeroday::extract_assigned_var("let {a, b} = get_pair()"),
+        None
+    );
+    assert_eq!(
+        zeroday::extract_assigned_var("let (x, y) = get_tuple()"),
+        None
+    );
 }
 
 #[test]
@@ -177,7 +250,10 @@ fn test_zeroday_report_total() {
         "Test description",
         finding::Severity::Medium,
         finding::Confidence::Medium,
-        "/test/file.rs", 10, "fn test() {}", "Fix it",
+        "/test/file.rs",
+        10,
+        "fn test() {}",
+        "Fix it",
     );
     report.anomalies.push(finding_obj);
     assert_eq!(report.total(), 1);
@@ -191,7 +267,8 @@ fn test_zeroday_finding_creation() {
         "Function spans too many lines",
         finding::Severity::Medium,
         finding::Confidence::Medium,
-        "/test/file.rs", 10,
+        "/test/file.rs",
+        10,
         "fn complex() {\n  // lots of code\n}",
         "Refactor into smaller functions",
     );
@@ -204,13 +281,25 @@ fn test_zeroday_finding_creation() {
 fn test_zeroday_severity_mapping() {
     let critical = zeroday::ZerodayFinding::new(
         zeroday::AnomalyType::TypeConfusionRisk,
-        "test", "", finding::Severity::Critical,
-        finding::Confidence::High, "/f.rs", 1, "", "",
+        "test",
+        "",
+        finding::Severity::Critical,
+        finding::Confidence::High,
+        "/f.rs",
+        1,
+        "",
+        "",
     );
     let low = zeroday::ZerodayFinding::new(
         zeroday::AnomalyType::SuspiciousErrorHandling,
-        "test", "", finding::Severity::Low,
-        finding::Confidence::Low, "/f.rs", 1, "", "",
+        "test",
+        "",
+        finding::Severity::Low,
+        finding::Confidence::Low,
+        "/f.rs",
+        1,
+        "",
+        "",
     );
     assert_eq!(critical.risk_score, 9.0);
     assert_eq!(low.risk_score, 3.0);
@@ -248,7 +337,9 @@ fn test_anomaly_type_categories() {
 fn test_parse_cargo_toml_basic() {
     let dir = std::env::temp_dir();
     let path = dir.join("Cargo_test_basic.toml");
-    std::fs::write(&path, r#"
+    std::fs::write(
+        &path,
+        r#"
 [package]
 name = "test"
 version = "0.1.0"
@@ -259,13 +350,21 @@ tokio = { version = "1.0", features = ["full"] }
 
 [dev-dependencies]
 tempfile = "3.0"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let deps = deps::parse_cargo_toml(&path).unwrap();
     assert_eq!(deps.len(), 3);
-    assert!(deps.iter().any(|d| d.name == "serde" && d.version == "1.0" && !d.is_dev));
-    assert!(deps.iter().any(|d| d.name == "tokio" && d.version == "1.0" && !d.is_dev));
-    assert!(deps.iter().any(|d| d.name == "tempfile" && d.version == "3.0" && d.is_dev));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "serde" && d.version == "1.0" && !d.is_dev));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "tokio" && d.version == "1.0" && !d.is_dev));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "tempfile" && d.version == "3.0" && d.is_dev));
     let _ = std::fs::remove_file(&path);
 }
 
@@ -283,7 +382,9 @@ fn test_parse_cargo_toml_empty() {
 fn test_parse_package_json_basic() {
     let dir = std::env::temp_dir();
     let path = dir.join("package_test.json");
-    std::fs::write(&path, r#"{
+    std::fs::write(
+        &path,
+        r#"{
   "name": "test",
   "dependencies": {
     "express": "^4.18.0",
@@ -292,12 +393,18 @@ fn test_parse_package_json_basic() {
   "devDependencies": {
     "jest": "^29.0.0"
   }
-}"#).unwrap();
+}"#,
+    )
+    .unwrap();
 
     let deps = deps::parse_package_json(&path).unwrap();
     assert_eq!(deps.len(), 3);
-    assert!(deps.iter().any(|d| d.name == "express" && d.version == "4.18.0" && !d.is_dev));
-    assert!(deps.iter().any(|d| d.name == "jest" && d.version == "29.0.0" && d.is_dev));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "express" && d.version == "4.18.0" && !d.is_dev));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "jest" && d.version == "29.0.0" && d.is_dev));
     let _ = std::fs::remove_file(&path);
 }
 
@@ -319,8 +426,12 @@ fn test_parse_requirements_txt_basic() {
 
     let deps = deps::parse_requirements_txt(&path).unwrap();
     assert_eq!(deps.len(), 2);
-    assert!(deps.iter().any(|d| d.name == "flask" && d.version == "2.3.0"));
-    assert!(deps.iter().any(|d| d.name == "django" && d.version == "4.2.0"));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "flask" && d.version == "2.3.0"));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "django" && d.version == "4.2.0"));
     let _ = std::fs::remove_file(&path);
 }
 
@@ -328,7 +439,9 @@ fn test_parse_requirements_txt_basic() {
 fn test_parse_go_mod_block() {
     let dir = std::env::temp_dir();
     let path = dir.join("go_test.mod");
-    std::fs::write(&path, r#"module example.com/project
+    std::fs::write(
+        &path,
+        r#"module example.com/project
 
 go 1.21
 
@@ -336,12 +449,18 @@ require (
     github.com/gin-gonic/gin v1.9.0
     golang.org/x/net v0.14.0
 )
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let deps = deps::parse_go_mod(&path).unwrap();
     assert_eq!(deps.len(), 2);
-    assert!(deps.iter().any(|d| d.name == "github.com/gin-gonic/gin" && d.version == "v1.9.0"));
-    assert!(deps.iter().any(|d| d.name == "golang.org/x/net" && d.version == "v0.14.0"));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "github.com/gin-gonic/gin" && d.version == "v1.9.0"));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "golang.org/x/net" && d.version == "v0.14.0"));
     let _ = std::fs::remove_file(&path);
 }
 
@@ -349,12 +468,16 @@ require (
 fn test_parse_go_mod_single_line() {
     let dir = std::env::temp_dir();
     let path = dir.join("go_test_single.mod");
-    std::fs::write(&path, r#"module example.com/project
+    std::fs::write(
+        &path,
+        r#"module example.com/project
 
 go 1.21
 
 require github.com/gin-gonic/gin v1.9.0
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let deps = deps::parse_go_mod(&path).unwrap();
     assert_eq!(deps.len(), 1);
@@ -366,21 +489,24 @@ require github.com/gin-gonic/gin v1.9.0
 fn test_parse_gemfile_basic() {
     let dir = std::env::temp_dir();
     let path = dir.join("Gemfile_test");
-    std::fs::write(&path, r#"source 'https://rubygems.org'
+    std::fs::write(
+        &path,
+        r#"source 'https://rubygems.org'
 
 gem 'rails', '~> 7.0.0'
 gem 'pg', '>= 1.5.0'
 gem 'puma'
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let deps = deps::parse_gemfile(&path).unwrap();
     assert_eq!(deps.len(), 3);
-    assert!(deps.iter().any(|d| d.name == "rails" && d.version == "7.0.0"));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "rails" && d.version == "7.0.0"));
     assert!(deps.iter().any(|d| d.name == "pg" && d.version == "1.5.0"));
-    assert_eq!(
-        deps.iter().find(|d| d.name == "puma").unwrap().version,
-        "*"
-    );
+    assert_eq!(deps.iter().find(|d| d.name == "puma").unwrap().version, "*");
     let _ = std::fs::remove_file(&path);
 }
 
@@ -388,7 +514,9 @@ gem 'puma'
 fn test_parse_composer_json_basic() {
     let dir = std::env::temp_dir();
     let path = dir.join("composer_test.json");
-    std::fs::write(&path, r#"{
+    std::fs::write(
+        &path,
+        r#"{
   "require": {
     "php": "^8.0",
     "laravel/framework": "^10.0",
@@ -397,11 +525,15 @@ fn test_parse_composer_json_basic() {
   "require-dev": {
     "phpunit/phpunit": "^10.0"
   }
-}"#).unwrap();
+}"#,
+    )
+    .unwrap();
 
     let deps = deps::parse_composer_json(&path).unwrap();
     assert_eq!(deps.len(), 3);
-    assert!(deps.iter().any(|d| d.name == "laravel/framework" && !d.is_dev));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "laravel/framework" && !d.is_dev));
     assert!(deps.iter().any(|d| d.name == "phpunit/phpunit" && d.is_dev));
     let _ = std::fs::remove_file(&path);
 }
@@ -410,7 +542,9 @@ fn test_parse_composer_json_basic() {
 fn test_parse_pubspec_yaml_basic() {
     let dir = std::env::temp_dir();
     let path = dir.join("pubspec_test.yaml");
-    std::fs::write(&path, r#"name: test_app
+    std::fs::write(
+        &path,
+        r#"name: test_app
 dependencies:
   flutter:
     sdk: flutter
@@ -420,13 +554,21 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   mockito: ^5.0.0
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let deps = deps::parse_pubspec_yaml(&path).unwrap();
     assert_eq!(deps.len(), 3);
-    assert!(deps.iter().any(|d| d.name == "http" && d.version == "1.0.0" && !d.is_dev));
-    assert!(deps.iter().any(|d| d.name == "path" && d.version == "2.0.0" && !d.is_dev));
-    assert!(deps.iter().any(|d| d.name == "mockito" && d.version == "5.0.0" && d.is_dev));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "http" && d.version == "1.0.0" && !d.is_dev));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "path" && d.version == "2.0.0" && !d.is_dev));
+    assert!(deps
+        .iter()
+        .any(|d| d.name == "mockito" && d.version == "5.0.0" && d.is_dev));
     let _ = std::fs::remove_file(&path);
 }
 
@@ -434,11 +576,15 @@ dev_dependencies:
 fn test_parse_pubspec_yaml_version_map() {
     let dir = std::env::temp_dir();
     let path = dir.join("pubspec_test_map.yaml");
-    std::fs::write(&path, r#"name: test_app
+    std::fs::write(
+        &path,
+        r#"name: test_app
 dependencies:
   awesome_package:
     version: ^3.0.0
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let deps = deps::parse_pubspec_yaml(&path).unwrap();
     assert_eq!(deps.len(), 1);
@@ -487,7 +633,9 @@ fn test_find_manifests_in_project() {
     let manifests = deps::find_manifests(project_root);
     assert!(!manifests.is_empty(), "Should find at least Cargo.toml");
     assert!(
-        manifests.iter().any(|m| m.file_name().and_then(|n| n.to_str()) == Some("Cargo.toml")),
+        manifests
+            .iter()
+            .any(|m| m.file_name().and_then(|n| n.to_str()) == Some("Cargo.toml")),
         "Should find Cargo.toml"
     );
 }
