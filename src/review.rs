@@ -88,9 +88,10 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Command Injection",
         "User input is passed to a shell command, which could allow command injection attacks.",
         Severity::Critical, Confidence::High, Some(OwaspCategory::A03Injection),
-        // Matches shell exec calls like exec("cmd {user_input}") or eval on user-controlled strings
-        r#"(?i)(?:exec|system|popen|shell_exec|subprocess\.\w+)\s*\([^)]*\$\{|(?:process::Command|cinnamon|shlex)\b"#,
-        &["rs", "py", "js", "ts", "rb", "go", "php"],
+        // Require evidence of shell evaluation or string composition. Merely
+        // constructing a process with a fixed executable and argument vector is safe.
+        r#"(?i)(?:(?:exec|system|popen|shell_exec|subprocess\.\w+)\s*\([^)]*\$\{|Command::new\(\s*["'](?:sh|bash|zsh|cmd|powershell)(?:\.exe)?["']\s*\).*\.arg\(\s*["'](?:-c|/c)["']\s*\)|Runtime\.getRuntime\(\)\.exec\s*\([^)]*\+)"#,
+        &["rs", "py", "js", "ts", "java", "rb", "go", "php"],
         "Avoid shell execution with user input. Use safer APIs that don't invoke a shell, and validate/sanitize all input."
     );
 
@@ -1493,6 +1494,43 @@ connect(secret);"#,
         let findings = scan(
             "const secret = process.env.JWT_SECRET;\nconst token = `jwt.${secret}.payload`;",
             "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn rust_shell_c_with_untrusted_argument_is_reported() {
+        let findings = scan(
+            r#"Command::new("sh").arg("-c").arg(input).status()?;"#,
+            "rs",
+        );
+        assert_eq!(titles(&findings), vec!["Command Injection"]);
+    }
+
+    #[test]
+    fn rust_fixed_executable_with_argument_vector_is_clean() {
+        let findings = scan(
+            r#"let mut cmd = Command::new("/usr/bin/printf");
+cmd.arg(input);"#,
+            "rs",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_runtime_exec_with_composed_shell_command_is_reported() {
+        let findings = scan(
+            r#"Runtime.getRuntime().exec("sh -c '" + input + "'");"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec!["Command Injection"]);
+    }
+
+    #[test]
+    fn java_process_builder_argument_vector_is_clean() {
+        let findings = scan(
+            r#"new ProcessBuilder("/usr/bin/printf", input).start();"#,
+            "java",
         );
         assert!(findings.is_empty());
     }
