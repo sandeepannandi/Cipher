@@ -13,13 +13,14 @@ The manifest uses schema version 2 and records metadata for each case:
 
 The extracted Java cases are small normalized/extracted CWE-pattern fixtures derived from the public Juliet Java suite, not byte-for-byte copies of upstream source files unless source-path verification was explicitly performed. This benchmark is intentionally a realism check for deterministic rule coverage, not a perfect reproduction of every upstream source artifact.
 
-### Known scanner misses
+### Selected-language depth case
 
-The current baseline intentionally records a few known scanner misses rather than treating them as runner defects:
-
-- `EX-JAVA-001` (`weak_hash`): MD5 detection is a known scanner miss in the current baseline
-- `EX-JAVA-002` (`command_injection`): command-injection detection is a known scanner miss in the current baseline
-- `MUT-JS-001` (`hardcoded_secret`): the mutation still triggers a generic hardcoded-secret finding but not the more specific JWT-secret title expectation
+The JavaScript/TypeScript path-traversal cases exercise a narrow local data-flow
+model: request path input, aliases or path construction, and a filesystem sink.
+The clean control uses `path.basename` before construction. This was chosen over
+adding more language breadth because path traversal was already a supported,
+high-severity class, but its previous rule only recognized a same-line string
+concatenation at `readFile`/`writeFile`.
 
 ## Run
 
