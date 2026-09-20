@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  security-events: write
 
 jobs:
   watch:
@@ -36,6 +37,33 @@ jobs:
 
       - name: Build cipher-ai
         run: cargo build --release --locked --target x86_64-unknown-linux-gnu
+
+      # Publish a complete default-branch snapshot under a category separate
+      # from pull-request analysis. Empty results remain valid and clear alerts.
+      - name: Generate SARIF
+        run: |
+          mkdir -p .cipher-ai-results
+          ./target/x86_64-unknown-linux-gnu/release/cipher-ai review \
+            --format sarif \
+            --output .cipher-ai-results/security-watch.sarif \
+            --max-findings 0 \
+            --path .
+
+      - name: Retain SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipher-ai-security-watch-sarif-${{ github.run_id }}
+          path: .cipher-ai-results/security-watch.sarif
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: .cipher-ai-results/security-watch.sarif
+          category: cipher-ai/security-watch
+          wait-for-processing: true
 
       - name: Run security watch (auto-fix PR)
         env:
