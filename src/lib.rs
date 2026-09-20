@@ -14,6 +14,7 @@ pub mod indexer;
 pub mod llm;
 pub mod output;
 pub mod pentest;
+pub mod policy;
 pub mod pr;
 pub mod rag;
 pub mod report;
