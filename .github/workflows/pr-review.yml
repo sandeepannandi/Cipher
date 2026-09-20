@@ -4,9 +4,13 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+# pull_request keeps forked code on GitHub's read-only token. The SARIF upload is
+# additionally restricted to branches in this repository; never use
+# pull_request_target to execute an untrusted fork checkout with write access.
 permissions:
   contents: read
   pull-requests: write
+  security-events: write
 
 jobs:
   security-review:
@@ -14,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -26,6 +30,36 @@ jobs:
       # dedicated workflow. Keep it out of this general product-source report.
       - name: Exclude accuracy benchmark corpus from general review
         run: rm -rf benchmarks/accuracy
+
+      # Always generate one deterministic file. A clean scan still produces
+      # valid SARIF with an empty results array, which closes resolved alerts.
+      - name: Generate SARIF
+        run: |
+          mkdir -p .cipher-ai-results
+          ./target/x86_64-unknown-linux-gnu/release/cipher-ai review \
+            --format sarif \
+            --output .cipher-ai-results/pr-review.sarif \
+            --max-findings 0 \
+            --path .
+
+      - name: Retain SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipher-ai-pr-sarif-${{ github.run_id }}
+          path: .cipher-ai-results/pr-review.sarif
+          if-no-files-found: error
+          retention-days: 14
+
+      # Fork pull requests run and preserve their SARIF artifact, but cannot
+      # upload into this repository's Security tab. Same-repository PRs can.
+      - name: Upload SARIF to GitHub Code Scanning
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: .cipher-ai-results/pr-review.sarif
+          category: cipher-ai/pr-review
+          wait-for-processing: true
 
       - name: Post security review comment
         env:
