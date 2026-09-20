@@ -48,3 +48,27 @@ fn both_workflows_generate_untruncated_deterministic_sarif() {
         assert!(yaml.contains("wait-for-processing: true"), "{path}");
     }
 }
+
+#[test]
+fn both_workflows_enforce_repository_policy_without_truncating_sarif() {
+    for path in [
+        ".github/workflows/pr-review.yml",
+        ".github/workflows/security-watch.yml",
+    ] {
+        let yaml = workflow(path);
+        assert!(yaml.contains("--fail-on-policy"), "{path}");
+        assert!(yaml.contains("--max-findings 0"), "{path}");
+    }
+}
+
+#[test]
+fn committed_policy_is_a_unique_versioned_baseline() {
+    let body = std::fs::read_to_string(".cipher-ai-policy.yml").unwrap();
+    let value: serde_yaml::Value = serde_yaml::from_str(&body).unwrap();
+    assert_eq!(value["version"].as_u64(), Some(1));
+    let fingerprints = value["baseline"]["fingerprints"].as_sequence().unwrap();
+    let unique: std::collections::BTreeSet<_> =
+        fingerprints.iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(fingerprints.len(), 54);
+    assert_eq!(unique.len(), fingerprints.len());
+}
