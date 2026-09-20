@@ -344,6 +344,43 @@ pub(crate) fn filter_findings(
     filtered
 }
 
+/// Return true when a generic `secret` binding is used as JWT signing material.
+///
+/// The generic credential rule still owns unrelated `secret = "..."` bindings.
+/// This narrow context check only promotes a binding when the same identifier is
+/// interpolated on a non-comment line that also names a JWT or token.
+fn is_contextual_jwt_secret(content: &str, assignment_line: &str) -> bool {
+    let Ok(binding) = Regex::new(
+        r#"(?i)\b(?:const|let|var|static|final)?\s*([a-z_][a-z0-9_]*)\s*[=:]\s*['\"][^'\"]{8,}['\"]"#,
+    ) else {
+        return false;
+    };
+    let Some(captures) = binding.captures(assignment_line) else {
+        return false;
+    };
+    let Some(identifier) = captures.get(1).map(|capture| capture.as_str()) else {
+        return false;
+    };
+    if identifier.to_ascii_lowercase().contains("jwt")
+        || ["token_secret", "signing_key"].contains(&identifier.to_ascii_lowercase().as_str())
+    {
+        return true;
+    }
+    if !matches!(identifier.to_ascii_lowercase().as_str(), "secret" | "key") {
+        return false;
+    }
+
+    let reference = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(identifier))).ok();
+    content.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.starts_with("//")
+            && !trimmed.starts_with('#')
+            && (line.to_ascii_lowercase().contains("jwt")
+                || line.to_ascii_lowercase().contains("token"))
+            && reference.as_ref().is_some_and(|re| re.is_match(line))
+    })
+}
+
 /// Scan a single file for vulnerability patterns
 fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -368,12 +405,22 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
             continue;
         }
 
+        let contextual_jwt_secret = is_contextual_jwt_secret(&content, line);
+
         for pattern in patterns {
             if !matches_extensions(&ext, pattern.target_extensions) {
                 continue;
             }
 
-            if !pattern.pattern.is_match(line) {
+            let pattern_matches = pattern.pattern.is_match(line)
+                || (pattern.name == "JWT Secret Hardcoded" && contextual_jwt_secret);
+            if !pattern_matches {
+                continue;
+            }
+
+            // A credential that is specifically JWT signing material should be
+            // reported once under the more precise rule, not again generically.
+            if pattern.name == "Hardcoded Credentials" && contextual_jwt_secret {
                 continue;
             }
 
@@ -1388,5 +1435,65 @@ fn parse_owasp(s: Option<&str>) -> Option<OwaspCategory> {
             }
         }
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod scanner_regression_tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn scan(source: &str, extension: &str) -> Vec<Finding> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("cipher-review-{nonce}.{extension}"));
+        fs::write(&path, source).expect("write fixture");
+        let findings = scan_file_for_vulns(&path, &build_vuln_patterns());
+        fs::remove_file(path).expect("remove fixture");
+        findings
+    }
+
+    fn titles(findings: &[Finding]) -> Vec<&str> {
+        findings
+            .iter()
+            .map(|finding| finding.title.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn jwt_specific_binding_is_not_reported_as_generic_secret() {
+        let findings = scan(r#"const jwt_secret = "replace-this-secret";"#, "js");
+        assert_eq!(titles(&findings), vec!["JWT Secret Hardcoded"]);
+    }
+
+    #[test]
+    fn contextual_jwt_secret_binding_is_promoted_to_specific_rule() {
+        let findings = scan(
+            "const secret = \"dev-secret\";\nconst token = `jwt.${secret}.payload`;",
+            "js",
+        );
+        assert_eq!(titles(&findings), vec!["JWT Secret Hardcoded"]);
+    }
+
+    #[test]
+    fn unrelated_generic_secret_keeps_generic_detection() {
+        let findings = scan(
+            r#"const secret = "dev-secret";
+connect(secret);"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec!["Hardcoded Credentials"]);
+    }
+
+    #[test]
+    fn environment_jwt_secret_is_not_reported() {
+        let findings = scan(
+            "const secret = process.env.JWT_SECRET;\nconst token = `jwt.${secret}.payload`;",
+            "js",
+        );
+        assert!(findings.is_empty());
     }
 }
