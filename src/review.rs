@@ -120,7 +120,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Weak Hash Algorithm — MD5",
         "MD5 is cryptographically broken and unsuitable for security purposes. Use bcrypt, argon2, or SHA-256/512.",
         Severity::High, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
-        r#"(?i)\b(md5)\s*\("#,
+        r#"(?i)(?:\bmd5\s*\(|MessageDigest\.getInstance\(\s*"MD5"\s*\))"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace MD5 with a secure hash function like SHA-256, SHA-512, or bcrypt/argon2 for passwords."
     );
@@ -1533,5 +1533,32 @@ cmd.arg(input);"#,
             "java",
         );
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_message_digest_md5_is_reported() {
+        let findings = scan(
+            r#"MessageDigest md = MessageDigest.getInstance("MD5");"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec!["Weak Hash Algorithm — MD5"]);
+    }
+
+    #[test]
+    fn java_message_digest_sha256_is_clean() {
+        let findings = scan(
+            r#"MessageDigest md = MessageDigest.getInstance("SHA-256");"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn md5_function_call_is_still_reported() {
+        let findings = scan(
+            r#"return hashlib.md5(value.encode("utf-8")).hexdigest();"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec!["Weak Hash Algorithm — MD5"]);
     }
 }
