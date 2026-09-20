@@ -38,6 +38,11 @@ jobs:
       - name: Build cipher-ai
         run: cargo build --release --locked --target x86_64-unknown-linux-gnu
 
+      # Keep the intentionally vulnerable accuracy corpus out of the general
+      # product-source policy gate, matching the PR review scan boundary.
+      - name: Exclude accuracy benchmark corpus from general review
+        run: rm -rf benchmarks/accuracy
+
       # Publish a complete default-branch snapshot under a category separate
       # from pull-request analysis. Empty results remain valid and clear alerts.
       - name: Generate SARIF
@@ -47,6 +52,7 @@ jobs:
             --format sarif \
             --output .cipher-ai-results/security-watch.sarif \
             --max-findings 0 \
+            --fail-on-policy \
             --path .
 
       - name: Retain SARIF artifact
