@@ -1504,85 +1504,6 @@ fn parse_owasp(s: Option<&str>) -> Option<OwaspCategory> {
     }
 }
 
-/// Find JavaScript/TypeScript filesystem sinks reached by a request-path value.
-///
-/// This intentionally models only straight-line local bindings. It follows a request
-/// source through direct aliases, string construction, and `path.join`/`path.resolve`,
-/// but stops at `path.basename`, which reduces a path to one component. The narrow
-/// model adds useful multi-line coverage without pretending to be interprocedural.
-fn js_path_traversal_sink_lines(
-    content: &str,
-    extension: &str,
-) -> std::collections::HashSet<usize> {
-    if !matches!(extension, "js" | "ts") {
-        return std::collections::HashSet::new();
-    }
-
-    let Ok(source) = Regex::new(
-        r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#,
-    ) else {
-        return std::collections::HashSet::new();
-    };
-    let Ok(binding) =
-        Regex::new(r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+?);?\s*$"#)
-    else {
-        return std::collections::HashSet::new();
-    };
-    let Ok(sink) = Regex::new(
-        r#"(?i)(?:\bfs\s*\.\s*)?(?:readFile|readFileSync|writeFile|writeFileSync|createReadStream|createWriteStream)\s*\(|\.sendFile\s*\("#,
-    ) else {
-        return std::collections::HashSet::new();
-    };
-
-    let mut tainted = std::collections::HashSet::new();
-    let mut sink_lines = std::collections::HashSet::new();
-    for (line_index, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty()
-            || trimmed.starts_with("//")
-            || trimmed.starts_with("/*")
-            || trimmed.starts_with('*')
-        {
-            continue;
-        }
-
-        if let Some(name) = source
-            .captures(line)
-            .and_then(|captures| captures.get(1))
-            .map(|capture| capture.as_str().to_string())
-        {
-            tainted.insert(name);
-        }
-
-        if let Some(captures) = binding.captures(line) {
-            let lhs = captures.get(1).map(|capture| capture.as_str());
-            let rhs = captures
-                .get(2)
-                .map(|capture| capture.as_str())
-                .unwrap_or("");
-            let derives_from_taint = tainted.iter().any(|name| identifier_in(rhs, name));
-            if derives_from_taint && !rhs.to_ascii_lowercase().contains("path.basename") {
-                if let Some(lhs) = lhs {
-                    tainted.insert(lhs.to_string());
-                }
-            }
-        }
-
-        if sink.is_match(line)
-            && tainted.iter().any(|name| identifier_in(line, name))
-            && !line.to_ascii_lowercase().contains("path.basename")
-        {
-            sink_lines.insert(line_index + 1);
-        }
-    }
-    sink_lines
-}
-
-fn identifier_in(text: &str, identifier: &str) -> bool {
-    Regex::new(&format!(r"\b{}\b", regex::escape(identifier)))
-        .is_ok_and(|reference| reference.is_match(text))
-}
-
 #[cfg(test)]
 mod scanner_regression_tests {
     use super::*;
@@ -1705,4 +1626,83 @@ cmd.arg(input);"#,
         );
         assert_eq!(titles(&findings), vec!["Weak Hash Algorithm — MD5"]);
     }
+}
+
+/// Find JavaScript/TypeScript filesystem sinks reached by a request-path value.
+///
+/// This intentionally models only straight-line local bindings. It follows a request
+/// source through direct aliases, string construction, and `path.join`/`path.resolve`,
+/// but stops at `path.basename`, which reduces a path to one component. The narrow
+/// model adds useful multi-line coverage without pretending to be interprocedural.
+fn js_path_traversal_sink_lines(
+    content: &str,
+    extension: &str,
+) -> std::collections::HashSet<usize> {
+    if !matches!(extension, "js" | "ts") {
+        return std::collections::HashSet::new();
+    }
+
+    let Ok(source) = Regex::new(
+        r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(binding) =
+        Regex::new(r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+?);?\s*$"#)
+    else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(sink) = Regex::new(
+        r#"(?i)(?:\bfs\s*\.\s*)?(?:readFile|readFileSync|writeFile|writeFileSync|createReadStream|createWriteStream)\s*\(|\.sendFile\s*\("#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+
+    let mut tainted = std::collections::HashSet::new();
+    let mut sink_lines = std::collections::HashSet::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
+        {
+            continue;
+        }
+
+        if let Some(name) = source
+            .captures(line)
+            .and_then(|captures| captures.get(1))
+            .map(|capture| capture.as_str().to_string())
+        {
+            tainted.insert(name);
+        }
+
+        if let Some(captures) = binding.captures(line) {
+            let lhs = captures.get(1).map(|capture| capture.as_str());
+            let rhs = captures
+                .get(2)
+                .map(|capture| capture.as_str())
+                .unwrap_or("");
+            let derives_from_taint = tainted.iter().any(|name| identifier_in(rhs, name));
+            if derives_from_taint && !rhs.to_ascii_lowercase().contains("path.basename") {
+                if let Some(lhs) = lhs {
+                    tainted.insert(lhs.to_string());
+                }
+            }
+        }
+
+        if sink.is_match(line)
+            && tainted.iter().any(|name| identifier_in(line, name))
+            && !line.to_ascii_lowercase().contains("path.basename")
+        {
+            sink_lines.insert(line_index + 1);
+        }
+    }
+    sink_lines
+}
+
+fn identifier_in(text: &str, identifier: &str) -> bool {
+    Regex::new(&format!(r"\b{}\b", regex::escape(identifier)))
+        .is_ok_and(|reference| reference.is_match(text))
 }
