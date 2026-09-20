@@ -31,6 +31,17 @@ jobs:
       - name: Exclude accuracy benchmark corpus from general review
         run: rm -rf benchmarks/accuracy
 
+      - name: Generate repository policy baseline for migration
+        run: ./target/x86_64-unknown-linux-gnu/release/cipher-ai review --write-policy-baseline .cipher-ai-policy.yml --path .
+
+      - name: Retain policy baseline migration artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipher-ai-policy-baseline-${{ github.run_id }}
+          path: .cipher-ai-policy.yml
+          if-no-files-found: error
+          retention-days: 1
+
       # Always generate one deterministic file. A clean scan still produces
       # valid SARIF with an empty results array, which closes resolved alerts.
       - name: Generate SARIF
