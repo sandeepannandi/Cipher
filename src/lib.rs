@@ -21,6 +21,7 @@ pub mod review;
 pub mod sbom;
 pub mod scan;
 pub mod secrets;
+pub mod setup;
 pub mod trace;
 pub mod verify;
 pub mod watch;

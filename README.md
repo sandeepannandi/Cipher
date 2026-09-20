@@ -20,10 +20,12 @@ CipherAI indexes your codebase, scans for vulnerabilities and secrets, discovers
 git clone https://github.com/sandeepannandi/Cipher.git
 cd Cipher
 cargo build --release
-export GROQ_API_KEY=gsk_your_key_here
+./target/release/cipher-ai setup     # guided: pick a provider, key stored owner-only, never echoed
 ./target/release/cipher-ai init
 ./target/release/cipher-ai ask "Any vulnerabilities?"
 ```
+
+Prefer a one-liner? `export GROQ_API_KEY=gsk_your_key_here` works too — `setup` detects it and writes nothing. `cipher-ai doctor` verifies the setup anytime (exit code + `--format json` for scripts).
 
 **TUI:** `cd tui && npm install && npm run build && node bin/cipher-ai.js` — `/help` for commands, `Ctrl+K` for the palette, **Esc** cancels.
 
@@ -46,7 +48,9 @@ export GROQ_API_KEY=gsk_your_key_here
 | `cipher-ai pr --diff` | Diff-aware PR review with inline comments |
 | `cipher-ai watch [--once] [--pr] [--pentest <url>]` | Continuous monitoring (live exploit sweep per scan) |
 | `cipher-ai ci [--format json] [--output f] [--fail-on X] [--pentest <url>]` | Run all scans + optional live pentest stage |
-| `cipher-ai config [set <key> <value>]` | API keys, provider, model (or `status`, `completions`) |
+| `cipher-ai setup [--provider X] [--key-stdin]` | Guided first-run setup: pick a provider, store the key owner-only (0600, never echoed), verify with doctor |
+| `cipher-ai doctor [--format json]` | Check provider/key readiness without printing secrets (exit 1 when setup is needed) |
+| `cipher-ai config [set <key> <value>]` | API keys, provider, model (or `status`, `completions`) — stored keys are masked, never printed raw |
 
 ### Pentest — the autonomous AI security engineer
 
@@ -97,6 +101,10 @@ All commands use consistent, beautiful terminal output: box-drawn headers, numbe
 ## Supported languages
 
 30+ (Rust, JS/TS, Python, Go, Ruby, Java, Kotlin, Swift, C/C++, C#, PHP, Shell, YAML, JSON, TOML, SQL, Dockerfile, HTML/CSS, Dart, Scala, Lua, R, …).
+
+## Secret handling
+
+API keys live only in `~/.cipher-ai/config.json`, written owner-only (`0600` on Unix; existing loose files are tightened on the next write). `setup` reads keys via a hidden prompt or `--key-stdin`, never echoes them, and `config get` masks stored values. Keys are never committed to the indexed project.
 
 ## Privacy
 

@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 // Modules are declared in the library crate (src/lib.rs).
 use cipher_ai::{
-    attack, ci, config, deps, fix, indexer, pentest, pr, rag, report, review, sbom, secrets, trace,
-    watch, zeroday,
+    attack, ci, config, deps, fix, indexer, pentest, pr, rag, report, review, sbom, secrets, setup,
+    trace, watch, zeroday,
 };
 
 const NAME: &str = "cipher-ai";
@@ -257,6 +257,18 @@ enum Commands {
 
         /// Config value
         value: Option<String>,
+    },
+
+    /// Guided first-run setup: pick an AI provider, store its API key safely
+    /// (owner-only config, never echoed), and verify with the doctor checks
+    Setup {
+        /// AI provider (groq, openai, anthropic). Prompted when omitted on a TTY.
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Read the API key from stdin (non-interactive; never echoed or printed)
+        #[arg(long)]
+        key_stdin: bool,
     },
 
     /// Check provider setup, config path, and missing-key guidance without printing secrets
@@ -681,6 +693,12 @@ async fn main() -> Result<()> {
         }
         Commands::Config { action, key, value } => {
             config::run_config(action.as_deref(), key.as_deref(), value.as_deref())?;
+        }
+        Commands::Setup {
+            provider,
+            key_stdin,
+        } => {
+            setup::run_setup(provider.as_deref(), key_stdin)?;
         }
         Commands::Doctor { format } => {
             config::run_doctor(&format)?;

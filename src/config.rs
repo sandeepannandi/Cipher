@@ -52,7 +52,34 @@ fn save_config(config: &Config) -> Result<()> {
     }
     let json = serde_json::to_string_pretty(config)?;
     std::fs::write(&path, json)?;
+    restrict_to_owner(&path);
     Ok(())
+}
+
+/// Best-effort chmod 600: the config file holds API keys and must never be
+/// group/world-readable. Applied on every save so pre-existing loose files
+/// are repaired the next time any value is written.
+#[cfg(unix)]
+fn restrict_to_owner(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o600);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_path: &std::path::Path) {}
+
+/// Mask a stored secret for display: first 4 + last 4 chars, never the middle.
+/// Short values collapse to "(set)" so even a short key's length stays hidden.
+pub(crate) fn mask_secret(value: &str) -> String {
+    if value.len() > 8 {
+        format!("{}...{}", &value[..4], &value[value.len() - 4..])
+    } else {
+        "(set)".to_string()
+    }
 }
 
 /// Persist the API key to the canonical config file, unless a key is
@@ -84,6 +111,25 @@ pub(crate) fn stored_anthropic_api_key() -> Option<String> {
 /// Read the persisted provider selection (None = default groq).
 pub(crate) fn stored_provider() -> Option<String> {
     load_config().ok().and_then(|c| c.provider)
+}
+
+/// Persist one provider's API key without printing anything. Used by the
+/// guided `setup` flow, which owns its own user-facing output.
+pub(crate) fn set_provider_key(provider: crate::llm::AiProvider, key: &str) -> Result<()> {
+    let mut config = load_config()?;
+    match provider {
+        crate::llm::AiProvider::Groq => config.groq_api_key = Some(key.to_string()),
+        crate::llm::AiProvider::OpenAI => config.openai_api_key = Some(key.to_string()),
+        crate::llm::AiProvider::Anthropic => config.anthropic_api_key = Some(key.to_string()),
+    }
+    save_config(&config)
+}
+
+/// Persist the provider selection without printing anything.
+pub(crate) fn set_provider_choice(provider: &str) -> Result<()> {
+    let mut config = load_config()?;
+    config.provider = Some(provider.to_string());
+    save_config(&config)
 }
 
 pub fn run_config_set(key: &str, value: &str) -> Result<()> {
@@ -151,7 +197,8 @@ pub fn run_config_set(key: &str, value: &str) -> Result<()> {
 fn print_key_status(env_var: &str, stored: Option<&String>) {
     match (std::env::var(env_var).ok(), stored) {
         (Some(_), _) => println!("(set via {env_var} env var)"),
-        (None, Some(v)) => println!("{v}"),
+        // Secrets are never printed in full - masked like `status` output.
+        (None, Some(v)) => println!("{}", mask_secret(v)),
         (None, None) => println!("(not set)"),
     }
 }
@@ -449,6 +496,15 @@ mod tests {
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_mask_secret_reveals_only_edges() {
+        assert_eq!(mask_secret("gsk_1234567890abcd"), "gsk_...abcd");
+        assert_eq!(mask_secret("123456789"), "1234...6789");
+        // Short values collapse entirely - length stays hidden too.
+        assert_eq!(mask_secret("short"), "(set)");
+        assert_eq!(mask_secret("12345678"), "(set)");
+    }
 
     #[test]
     fn test_doctor_report_masks_secret_status() {
