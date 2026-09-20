@@ -549,6 +549,9 @@ pub async fn run_review(
     min_confidence: Option<Confidence>,
     format: &str,
     output: Option<&str>,
+    policy_path: Option<&Path>,
+    write_policy_baseline: Option<&Path>,
+    fail_on_policy: bool,
 ) -> Result<FindingReport> {
     let canonical_path = std::fs::canonicalize(project_path)?;
 
@@ -640,7 +643,58 @@ pub async fn run_review(
         }
     }
 
-    // Apply filters
+    if let Some(path) = write_policy_baseline {
+        let baseline = crate::policy::Policy::baseline_from(&report.findings);
+        baseline.write(path)?;
+        eprintln!(
+            "  [POLICY] Accepted {} stable fingerprints in {}",
+            baseline.baseline.fingerprints.len(),
+            path.display()
+        );
+        return Ok(report);
+    }
+
+    let default_policy = canonical_path.join(".cipher-ai-policy.yml");
+    let effective_policy = policy_path
+        .map(std::path::PathBuf::from)
+        .or_else(|| default_policy.is_file().then_some(default_policy));
+    let policy_evaluation = if let Some(path) = effective_policy.as_deref() {
+        let policy = crate::policy::Policy::load(path)?;
+        let evaluation = policy.evaluate(&report.findings)?;
+        eprintln!(
+            "  [POLICY] {} new, {} baseline, {} suppressed, {} expired, {} below threshold",
+            evaluation.new,
+            evaluation.baseline,
+            evaluation.suppressed,
+            evaluation.expired,
+            evaluation.below_threshold
+        );
+        for finding in &evaluation.findings {
+            eprintln!(
+                "    {:?} {}{}{}",
+                finding.state,
+                finding.fingerprint,
+                finding
+                    .reason
+                    .as_ref()
+                    .map(|r| format!(" — {r}"))
+                    .unwrap_or_default(),
+                finding
+                    .expires
+                    .map(|d| format!(" (expires {d})"))
+                    .unwrap_or_default()
+            );
+        }
+        Some(evaluation)
+    } else {
+        if fail_on_policy {
+            anyhow::bail!("--fail-on-policy requires --policy or .cipher-ai-policy.yml");
+        }
+        None
+    };
+
+    // Apply display filters. Policy is evaluated against the complete finding set
+    // before these presentation-only filters, so limits cannot weaken the gate.
     let max_show = max_findings.unwrap_or(30);
     let filtered = filter_findings(
         report.findings.clone(),
@@ -667,6 +721,11 @@ pub async fn run_review(
             );
         } else {
             println!("{output_str}");
+        }
+        if fail_on_policy && policy_evaluation.as_ref().is_some_and(|p| p.gate_failed) {
+            anyhow::bail!(
+                "policy gate failed: new or expired findings meet the configured thresholds"
+            );
         }
         return Ok(report);
     }
@@ -787,6 +846,9 @@ pub async fn run_review(
         "cipher-ai review --max-findings 999 --min-severity low".yellow()
     );
 
+    if fail_on_policy && policy_evaluation.as_ref().is_some_and(|p| p.gate_failed) {
+        anyhow::bail!("policy gate failed: new or expired findings meet the configured thresholds");
+    }
     Ok(report)
 }
 

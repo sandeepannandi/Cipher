@@ -49,6 +49,7 @@ Prefer a one-liner? `export GROQ_API_KEY=gsk_your_key_here` works too — `setup
 | `cipher-ai init` | Index the codebase (TF-IDF, local, no DB) |
 | `cipher-ai ask "…"` | RAG + AI security Q&A over the index |
 | `cipher-ai review [--ai] [--format terminal\|json\|sarif\|md] [--min-severity X] [--max-findings N]` | OWASP Top 10 scan (20+ patterns) |
+| `cipher-ai review --policy .cipher-ai-policy.yml --fail-on-policy` | Gate only new/expired findings at policy severity + confidence thresholds |
 | `cipher-ai deps [--online] [--fail-on X]` | Dependency CVE scan (embedded DB + OSV.dev online) |
 | `cipher-ai secrets [--fail-on X]` | Credential leak scan (25+ patterns) |
 | `cipher-ai zeroday [--ai] [--anomaly-only] [--format json\|sarif]` | 3-layer zero-day detection (anomaly, taint flow, AI) |
@@ -152,3 +153,17 @@ cargo clippy --all-targets
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Repository policy
+
+Copy `.cipher-ai-policy.example.yml` to `.cipher-ai-policy.yml` to make review outcomes deterministic in CI. Policy evaluation uses the stable finding fingerprints already emitted in JSON and SARIF. Display flags such as `--max-findings` and `--min-severity` never weaken the policy gate.
+
+Create or refresh an accepted baseline explicitly:
+
+```sh
+cipher-ai review --write-policy-baseline .cipher-ai-policy.yml --path .
+```
+
+A baseline accepts only the listed fingerprints. Suppressions are separate, require a non-empty reason, and may include an ISO date expiry. Expired suppressions become gate-eligible again. No policy file means no findings are silently accepted; `--fail-on-policy` refuses to run without an explicit `--policy` or repository `.cipher-ai-policy.yml`. Policy schema errors, unknown keys, duplicate fingerprints, and invalid thresholds fail closed.
+
+For CI, run `cipher-ai review --format sarif --output results.sarif --max-findings 0 --fail-on-policy --path .`. SARIF is written before a failing exit so the complete scan remains available for upload and debugging.

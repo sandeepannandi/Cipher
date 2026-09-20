@@ -118,6 +118,18 @@ enum Commands {
         /// Write output to a file instead of stdout
         #[arg(short = 'o', long = "output")]
         output: Option<String>,
+
+        /// Repository policy YAML (defaults to .cipher-ai-policy.yml when present)
+        #[arg(long = "policy")]
+        policy: Option<PathBuf>,
+
+        /// Write the current findings as an accepted policy baseline, then exit
+        #[arg(long = "write-policy-baseline")]
+        write_policy_baseline: Option<PathBuf>,
+
+        /// Exit non-zero when policy-eligible new or expired findings exist
+        #[arg(long = "fail-on-policy")]
+        fail_on_policy: bool,
     },
 
     /// Scan dependencies for known vulnerabilities
@@ -587,6 +599,9 @@ async fn main() -> Result<()> {
             min_confidence,
             format,
             output,
+            policy,
+            write_policy_baseline,
+            fail_on_policy,
         } => {
             let project_path = cli.path.unwrap_or_else(|| std::env::current_dir().unwrap());
             let min_sev = min_severity
@@ -610,6 +625,9 @@ async fn main() -> Result<()> {
                 min_conf,
                 &format,
                 output.as_deref(),
+                policy.as_deref(),
+                write_policy_baseline.as_deref(),
+                fail_on_policy,
             )
             .await?;
         }

@@ -1,0 +1,18 @@
+# Cipher repository policy schema v1. Copy to .cipher-ai-policy.yml to enable it.
+version: 1
+
+# Findings already accepted when the policy was created. Generate this list with:
+# cipher-ai review --write-policy-baseline .cipher-ai-policy.yml --path .
+baseline:
+  fingerprints: []
+
+# Every suppression must name one stable fingerprint and explain why it is safe.
+# `expires` is optional (YYYY-MM-DD); after that date the finding gates again.
+suppressions: []
+# - fingerprint: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+#   reason: False positive: test-only fixture tracked in SEC-123
+#   expires: 2026-12-31
+
+gate:
+  min_severity: high
+  min_confidence: medium
