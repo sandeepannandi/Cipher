@@ -1634,6 +1634,7 @@ cmd.arg(input);"#,
 /// source through direct aliases, string construction, and `path.join`/`path.resolve`,
 /// but stops at `path.basename`, which reduces a path to one component. The narrow
 /// model adds useful multi-line coverage without pretending to be interprocedural.
+#[allow(clippy::items_after_test_module)]
 fn js_path_traversal_sink_lines(
     content: &str,
     extension: &str,
@@ -1702,6 +1703,7 @@ fn js_path_traversal_sink_lines(
     sink_lines
 }
 
+#[allow(clippy::items_after_test_module)]
 fn identifier_in(text: &str, identifier: &str) -> bool {
     Regex::new(&format!(r"\b{}\b", regex::escape(identifier)))
         .is_ok_and(|reference| reference.is_match(text))
