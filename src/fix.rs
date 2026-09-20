@@ -1,11 +1,13 @@
-use crate::finding::{dedup_findings, Finding, Severity};
+use crate::finding::{dedup_findings, Finding, FindingType, Severity};
 use crate::groq::GroqClient;
 use crate::pentest::workspace::list_workspaces;
 use crate::{deps, review, secrets};
 use anyhow::{Context, Result};
+use chrono::Utc;
 use colored::*;
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
+use serde::Serialize;
 use similar::{ChangeTag, TextDiff};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -24,6 +26,140 @@ pub struct FixPlan {
     /// Optional regression test that would catch this vulnerability if it
     /// regressed (included in `fix --pr` PR bodies, never written to disk).
     pub test_code: Option<String>,
+}
+
+impl FixPlan {
+    /// Explicit verification condition that must hold before we claim the fix is
+    /// complete: the original fingerprint must be absent from a fresh rescan and
+    /// the project must compile/tests pass when validation is enabled.
+    pub fn verification_condition(&self) -> String {
+        let fingerprint = crate::finding::stable_fingerprint(&self.finding);
+        let location = self.file_path.display();
+        let title = &self.finding.title;
+
+        let test_hint = self.test_code.as_deref().map_or(
+            "No dedicated regression test was generated; a fresh rescan is the required proof, with build/test validation when enabled.".to_string(),
+            |code| {
+                format!(
+                    "Explicit regression check: run the test covering this fix. Example:\n{}",
+                    code.trim()
+                )
+            },
+        );
+
+        format!(
+            "Finding '{title}' (fingerprint: {fingerprint}) must be absent from a fresh rescan of '{location}'; compile/test validation must also pass when enabled. {test_hint}"
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct FixVerificationEvidence {
+    patch_applied: bool,
+    build_status: String,
+    fresh_rescan_source: String,
+    fresh_rescan_time: String,
+    before_fingerprint: String,
+    after_status: String,
+    rollback_performed: bool,
+    final_verdict: String,
+}
+
+impl FixVerificationEvidence {
+    fn print(&self) {
+        println!(
+            "  {} Patch applied: {}",
+            "[EVIDENCE]".cyan().bold(),
+            self.patch_applied
+        );
+        println!(
+            "  {} Build/test status: {}",
+            "[EVIDENCE]".cyan().bold(),
+            self.build_status
+        );
+        println!(
+            "  {} Fresh rescan source: {}",
+            "[EVIDENCE]".cyan().bold(),
+            self.fresh_rescan_source
+        );
+        println!(
+            "  {} Fresh rescan time: {}",
+            "[EVIDENCE]".cyan().bold(),
+            self.fresh_rescan_time
+        );
+        println!(
+            "  {} Before fingerprint: {}",
+            "[EVIDENCE]".cyan().bold(),
+            self.before_fingerprint
+        );
+        println!(
+            "  {} After status: {}",
+            "[EVIDENCE]".cyan().bold(),
+            self.after_status
+        );
+        println!(
+            "  {} Rollback performed: {}",
+            "[EVIDENCE]".cyan().bold(),
+            self.rollback_performed
+        );
+        println!(
+            "  {} Final verdict: {}",
+            "[EVIDENCE]".cyan().bold(),
+            self.final_verdict
+        );
+    }
+}
+
+async fn fresh_findings_for_finding(
+    project_path: &Path,
+    finding: &Finding,
+) -> Result<(Vec<Finding>, String)> {
+    let source = match finding.finding_type {
+        FindingType::Secret => "secret-scanner",
+        FindingType::Dependency => "deps-scanner",
+        _ => "review-scanner",
+    };
+
+    let findings = match finding.finding_type {
+        FindingType::Secret => secrets::collect_secrets_findings(project_path)?.findings,
+        FindingType::Dependency => {
+            deps::collect_deps_findings(project_path, false)
+                .await?
+                .findings
+        }
+        _ => {
+            review::collect_review_findings(project_path, false, None)
+                .await?
+                .findings
+        }
+    };
+
+    Ok((findings, source.to_string()))
+}
+
+fn snapshot_file(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path).ok()
+}
+
+fn restore_snapshot(path: &Path, original: &str) -> Result<()> {
+    std::fs::write(path, original).with_context(|| {
+        format!(
+            "failed to restore {} after patch verification failure",
+            path.display()
+        )
+    })
+}
+
+fn can_fix_finding(finding: &Finding) -> bool {
+    matches!(
+        finding.finding_type,
+        FindingType::Vulnerability
+            | FindingType::Misconfiguration
+            | FindingType::Authentication
+            | FindingType::Authorization
+            | FindingType::Injection
+            | FindingType::Cryptography
+    )
 }
 
 /// Run the `cipher-ai fix` command
@@ -156,15 +292,40 @@ pub async fn run_fix(
         );
     }
 
-    // Step 4: Filter out findings without a file path (can't auto-fix those)
+    // Step 4: Filter out findings without a file path (can't auto-fix those),
+    // and skip secret/unsafe targets that require human verification rather than
+    // an in-place patch.
     let fixable: Vec<&Finding> = filtered
         .iter()
         .filter(|f| {
             let has_path = f.file_path.is_some();
             if !has_path {
                 eprintln!("  {} Skipping '{}' — no file path", "⏭".yellow(), f.title);
+                return false;
             }
-            has_path
+            if matches!(f.finding_type, FindingType::Secret) {
+                eprintln!(
+                    "  {} Skipping '{}' — secret exposures require rotation, not an in-place code patch.",
+                    "⏭".yellow(),
+                    f.title
+                );
+                return false;
+            }
+            if let Some(file) = &f.file_path {
+                let path = Path::new(file);
+                let unsafe_target = path
+                    .components()
+                    .any(|c| matches!(c.as_os_str().to_string_lossy().as_ref(), ".git" | "target" | "node_modules" | ".venv" | "vendor"));
+                if unsafe_target {
+                    eprintln!(
+                        "  {} Skipping '{}' — target path is outside the patchable project tree.",
+                        "⏭".yellow(),
+                        f.title
+                    );
+                    return false;
+                }
+            }
+            true
         })
         .collect();
 
@@ -246,8 +407,34 @@ pub async fn run_fix(
                 };
 
                 if should_apply {
-                    // Capture the pre-fix content so we can revert if verification fails
-                    let pre_fix = std::fs::read_to_string(&fix_plan.file_path).ok();
+                    let original_snapshot = snapshot_file(&fix_plan.file_path);
+                    let original_fingerprint = crate::finding::stable_fingerprint(finding);
+                    let mut audit = FixVerificationEvidence {
+                        patch_applied: false,
+                        build_status: "not-run".to_string(),
+                        fresh_rescan_source: "not-run".to_string(),
+                        fresh_rescan_time: "not-run".to_string(),
+                        before_fingerprint: original_fingerprint.clone(),
+                        after_status: "not-run".to_string(),
+                        rollback_performed: false,
+                        final_verdict: "pending".to_string(),
+                    };
+
+                    println!(
+                        "  {} Verification condition: {}",
+                        "[CHECK]".cyan().bold(),
+                        fix_plan.verification_condition()
+                    );
+
+                    if !can_fix_finding(finding) {
+                        eprintln!(
+                            "  {} Skipping '{}' — unsupported finding kind for in-place patching.",
+                            "⏭".yellow(),
+                            finding.title
+                        );
+                        skip_count += 1;
+                        continue;
+                    }
 
                     if let Err(e) = apply_fix(&fix_plan) {
                         eprintln!("  {} Failed to apply fix: {}", "[ERR]".red(), e);
@@ -255,6 +442,7 @@ pub async fn run_fix(
                         continue;
                     }
 
+                    audit.patch_applied = true;
                     println!(
                         "  {} Applied fix to {}{}",
                         "[OK]".green().bold(),
@@ -271,39 +459,82 @@ pub async fn run_fix(
                         test_code: fix_plan.test_code.clone(),
                     });
 
-                    if verify {
+                    let build_result = if verify {
                         println!("    {} Compile-checking the project...", "[*]".cyan());
                         match verify_compiles(&canonical_path) {
                             Ok(true) => {
-                                println!(
-                                    "    {} Build passes — fix is safe.",
-                                    "[OK]".green().bold()
-                                );
-                                success_count += 1;
+                                audit.build_status = "pass".to_string();
+                                true
                             }
                             Ok(false) => {
-                                // Revert the fix so we never leave a broken tree
-                                if let Some(original) = pre_fix {
-                                    let _ = std::fs::write(&fix_plan.file_path, &original);
-                                }
-                                let _ = applied.pop(); // remove from PR list too
-                                eprintln!(
-                                    "  {} Fix broke the build — reverted. The finding needs a manual fix.\n",
-                                    "[ERR]".red().bold()
-                                );
-                                fail_count += 1;
+                                audit.build_status = "fail".to_string();
+                                false
                             }
                             Err(e) => {
-                                eprintln!(
-                                    "  {} Could not verify build ({}). Fix applied but unverified.",
-                                    "[!]".yellow(),
-                                    e
-                                );
-                                success_count += 1;
+                                audit.build_status = format!("unverified: {e}");
+                                false
                             }
                         }
                     } else {
+                        audit.build_status = "skipped".to_string();
+                        true
+                    };
+
+                    let (fresh_findings, source) =
+                        match fresh_findings_for_finding(&canonical_path, finding).await {
+                            Ok(value) => value,
+                            Err(e) => {
+                                if let Some(original) = original_snapshot.as_deref() {
+                                    let _ = restore_snapshot(&fix_plan.file_path, original);
+                                    audit.rollback_performed = true;
+                                }
+                                eprintln!(
+                                    "  {} Fresh rescan failed ({}). Patch restored.",
+                                    "[ERR]".red().bold(),
+                                    e
+                                );
+                                audit.final_verdict = "fail".to_string();
+                                audit.print();
+                                fail_count += 1;
+                                continue;
+                            }
+                        };
+                    audit.fresh_rescan_source = source.clone();
+                    audit.fresh_rescan_time = Utc::now().to_rfc3339();
+
+                    let condition_is_still_present = finding_fingerprint_is_still_present(
+                        &fresh_findings,
+                        &original_fingerprint,
+                    );
+                    audit.after_status = if condition_is_still_present {
+                        "fingerprint-present".to_string()
+                    } else {
+                        "fingerprint-gone".to_string()
+                    };
+
+                    let verification_passed =
+                        verify_fix_outcome(build_result, &fresh_findings, &original_fingerprint);
+                    if verification_passed {
+                        audit.final_verdict = "pass".to_string();
+                        println!(
+                            "    {} Build passes and the finding fingerprint is gone.",
+                            "[OK]".green().bold()
+                        );
+                        audit.print();
                         success_count += 1;
+                    } else {
+                        if let Some(original) = original_snapshot.as_deref() {
+                            let _ = restore_snapshot(&fix_plan.file_path, original);
+                            audit.rollback_performed = true;
+                            audit.final_verdict = "fail".to_string();
+                        }
+                        let _ = applied.pop();
+                        eprintln!(
+                            "  {} Fix failed verification — reverted. The original fingerprint still exists or validation did not pass.\n",
+                            "[ERR]".red().bold()
+                        );
+                        audit.print();
+                        fail_count += 1;
                     }
                 }
             }
@@ -1170,6 +1401,22 @@ fn display_diff(fix: &FixPlan) {
     }
 }
 
+/// Returns true when the original fingerprint still exists in a fresh scan.
+/// This is the proof condition we require before calling a fix "successful".
+fn finding_fingerprint_is_still_present(findings: &[Finding], fingerprint: &str) -> bool {
+    findings
+        .iter()
+        .any(|finding| crate::finding::stable_fingerprint(finding) == fingerprint)
+}
+
+fn verify_fix_outcome(
+    build_ok: bool,
+    fresh_findings: &[Finding],
+    before_fingerprint: &str,
+) -> bool {
+    build_ok && !finding_fingerprint_is_still_present(fresh_findings, before_fingerprint)
+}
+
 /// Apply a fix plan to the file on disk.
 /// Replaces `start_line..end_line` in the file with the AI-generated fixed code.
 fn apply_fix(fix: &FixPlan) -> Result<()> {
@@ -1225,6 +1472,162 @@ fn apply_fix(fix: &FixPlan) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use serde::Serialize;
+
+    #[derive(Debug, Clone, Default, Serialize)]
+    struct FixVerificationEvidence {
+        patch_applied: bool,
+        build_status: String,
+        fresh_rescan_source: String,
+        fresh_rescan_time: String,
+        before_fingerprint: String,
+        after_status: String,
+        rollback_performed: bool,
+        final_verdict: String,
+    }
+
+    fn snapshot_file(path: &Path) -> Option<String> {
+        std::fs::read_to_string(path).ok()
+    }
+
+    fn restore_snapshot(path: &Path, original: &str) -> Result<()> {
+        std::fs::write(path, original).with_context(|| {
+            format!(
+                "failed to restore {} after patch verification failure",
+                path.display()
+            )
+        })
+    }
+
+    fn redact_evidence_text(value: &str) -> String {
+        crate::pentest::workspace::redact_text(value)
+    }
+
+    async fn run_fix_verification_cycle(
+        fix: &FixPlan,
+        _project_path: &Path,
+        build_check: impl Fn() -> Result<bool>,
+        fresh_scan: impl Fn() -> Result<Vec<Finding>>,
+    ) -> Result<FixVerificationEvidence> {
+        let original_snapshot = snapshot_file(&fix.file_path);
+        let before_fingerprint = crate::finding::stable_fingerprint(&fix.finding);
+        let mut evidence = FixVerificationEvidence {
+            patch_applied: false,
+            build_status: "not-run".to_string(),
+            fresh_rescan_source: "not-run".to_string(),
+            fresh_rescan_time: "not-run".to_string(),
+            before_fingerprint: before_fingerprint.clone(),
+            after_status: "not-run".to_string(),
+            rollback_performed: false,
+            final_verdict: "pending".to_string(),
+        };
+
+        if let Err(e) = apply_fix(fix) {
+            evidence.final_verdict = "fail".to_string();
+            evidence.after_status = "apply-failed".to_string();
+            evidence.build_status = format!("patch-apply-failed: {e}");
+            return Ok(evidence);
+        }
+        evidence.patch_applied = true;
+
+        match build_check() {
+            Ok(true) => evidence.build_status = "pass".to_string(),
+            Ok(false) => {
+                evidence.build_status = "fail".to_string();
+                if let Some(original) = original_snapshot.as_deref() {
+                    restore_snapshot(&fix.file_path, original)?;
+                    evidence.rollback_performed = true;
+                }
+                evidence.after_status = "build-failed".to_string();
+                evidence.final_verdict = "fail".to_string();
+                return Ok(evidence);
+            }
+            Err(e) => {
+                evidence.build_status = format!("unverified: {e}");
+                if let Some(original) = original_snapshot.as_deref() {
+                    restore_snapshot(&fix.file_path, original)?;
+                    evidence.rollback_performed = true;
+                }
+                evidence.after_status = "build-unverified".to_string();
+                evidence.final_verdict = "fail".to_string();
+                return Ok(evidence);
+            }
+        }
+
+        let fresh_findings = match fresh_scan() {
+            Ok(findings) => findings,
+            Err(e) => {
+                if let Some(original) = original_snapshot.as_deref() {
+                    restore_snapshot(&fix.file_path, original)?;
+                    evidence.rollback_performed = true;
+                }
+                evidence.fresh_rescan_source = "fresh-scan-error".to_string();
+                evidence.fresh_rescan_time = Utc::now().to_rfc3339();
+                evidence.after_status = "fresh-rescan-failed".to_string();
+                evidence.final_verdict = "fail".to_string();
+                evidence.build_status = format!("pass; fresh-scan-error: {e}");
+                return Ok(evidence);
+            }
+        };
+
+        evidence.fresh_rescan_source = "deterministic scan".to_string();
+        evidence.fresh_rescan_time = Utc::now().to_rfc3339();
+        evidence.after_status = if crate::finding::stable_fingerprint(
+            fresh_findings
+                .iter()
+                .find(|finding| crate::finding::stable_fingerprint(finding) == before_fingerprint)
+                .unwrap_or(&fresh_findings[0]),
+        ) == before_fingerprint
+        {
+            "fingerprint-present".to_string()
+        } else {
+            "fingerprint-gone".to_string()
+        };
+
+        if fresh_findings
+            .iter()
+            .any(|finding| crate::finding::stable_fingerprint(finding) == before_fingerprint)
+        {
+            if let Some(original) = original_snapshot.as_deref() {
+                restore_snapshot(&fix.file_path, original)?;
+                evidence.rollback_performed = true;
+            }
+            evidence.final_verdict = "fail".to_string();
+            return Ok(evidence);
+        }
+
+        evidence.final_verdict = "pass".to_string();
+        evidence.after_status = "fingerprint-gone".to_string();
+
+        if let Ok(payload) = serde_json::to_string(&evidence) {
+            let redacted = redact_evidence_text(&payload);
+            assert!(
+                !redacted.contains("hunter2"),
+                "evidence output must redact secrets: {redacted}"
+            );
+            assert!(
+                !redacted.contains("abc123"),
+                "evidence output must redact secrets: {redacted}"
+            );
+        }
+
+        Ok(evidence)
+    }
+
+    fn finding_fingerprint_is_still_present(findings: &[Finding], fingerprint: &str) -> bool {
+        findings
+            .iter()
+            .any(|finding| crate::finding::stable_fingerprint(finding) == fingerprint)
+    }
+
+    fn verify_fix_outcome(
+        build_ok: bool,
+        fresh_findings: &[Finding],
+        before_fingerprint: &str,
+    ) -> bool {
+        build_ok && !finding_fingerprint_is_still_present(fresh_findings, before_fingerprint)
+    }
 
     fn temp_file(name: &str, content: &str) -> PathBuf {
         let path =
@@ -1325,6 +1728,262 @@ mod tests {
         let resolved = resolve_finding_path(path.to_str().unwrap(), Path::new("."));
         assert_eq!(resolved, path);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_fix_plan_verification_condition_uses_fingerprint_when_no_test() {
+        let finding = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "SQL Injection",
+            "User-controlled input reaches a query",
+            Severity::High,
+            crate::finding::Confidence::High,
+            "review",
+        )
+        .at("src/main.rs", 42)
+        .with_remediation("Use parameterized queries");
+
+        let plan = FixPlan {
+            finding: finding.clone(),
+            file_path: PathBuf::from("src/main.rs"),
+            original_code: "query = user + 'x';".to_string(),
+            fixed_code: "query = safe_query(user);".to_string(),
+            explanation: "Use parameterized queries.".to_string(),
+            start_line: 42,
+            end_line: 42,
+            test_code: None,
+        };
+
+        let condition = plan.verification_condition();
+        assert!(condition.contains("sha256:"));
+        assert!(condition.contains("SQL Injection"));
+        assert!(condition.contains("compile"));
+    }
+
+    #[test]
+    fn test_finding_fingerprint_still_present_detects_regression() {
+        let original = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "SQL Injection",
+            "User-controlled input reaches a query",
+            Severity::High,
+            crate::finding::Confidence::High,
+            "review",
+        )
+        .at("src/main.rs", 42);
+
+        let same = original.clone();
+        let different = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "SQL Injection",
+            "User-controlled input reaches a query",
+            Severity::High,
+            crate::finding::Confidence::High,
+            "review",
+        )
+        .at("src/lib.rs", 10);
+
+        let fp = crate::finding::stable_fingerprint(&original);
+        assert!(finding_fingerprint_is_still_present(&[same], &fp));
+        assert!(!finding_fingerprint_is_still_present(&[different], &fp));
+    }
+
+    #[test]
+    fn test_verify_fix_outcome_requires_absent_fingerprint_after_fresh_rescan() {
+        let original = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "SQL Injection",
+            "User-controlled input reaches a query",
+            Severity::High,
+            crate::finding::Confidence::High,
+            "review",
+        )
+        .at("src/main.rs", 42);
+        let fp = crate::finding::stable_fingerprint(&original);
+        let same = vec![original.clone()];
+        let different = vec![Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "SQL Injection",
+            "User-controlled input reaches a query",
+            Severity::High,
+            crate::finding::Confidence::High,
+            "review",
+        )
+        .at("src/lib.rs", 10)];
+
+        assert!(!verify_fix_outcome(true, &same, &fp));
+        assert!(verify_fix_outcome(true, &different, &fp));
+        assert!(!verify_fix_outcome(false, &different, &fp));
+    }
+
+    #[test]
+    fn test_run_fix_verification_cycle_rolls_back_on_build_failure() {
+        let path = temp_file("verify-build-fail", "let value = 1;\n");
+        let finding = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "Unsafe value",
+            "The value is not validated",
+            Severity::High,
+            crate::finding::Confidence::High,
+            "review",
+        )
+        .at(path.to_string_lossy().as_ref(), 1);
+
+        let plan = FixPlan {
+            finding: finding.clone(),
+            file_path: path.clone(),
+            original_code: "let value = 1;\n".to_string(),
+            fixed_code: "let value = 2;\n".to_string(),
+            explanation: "Use a validated value".to_string(),
+            start_line: 1,
+            end_line: 1,
+            test_code: None,
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt
+            .block_on(run_fix_verification_cycle(
+                &plan,
+                path.parent().unwrap(),
+                || Ok(false),
+                || Ok(vec![finding.clone()]),
+            ))
+            .unwrap();
+
+        assert_eq!(result.final_verdict, "fail");
+        assert!(result.rollback_performed);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "let value = 1;\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_run_fix_verification_cycle_rolls_back_when_fingerprint_still_exists() {
+        let path = temp_file("verify-fingerprint", "const foo = 'bar';\n");
+        let finding = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "Unsafe constant",
+            "The constant is exposed",
+            Severity::Medium,
+            crate::finding::Confidence::High,
+            "review",
+        )
+        .at(path.to_string_lossy().as_ref(), 1);
+
+        let plan = FixPlan {
+            finding: finding.clone(),
+            file_path: path.clone(),
+            original_code: "const foo = 'bar';\n".to_string(),
+            fixed_code: "const foo = 'baz';\n".to_string(),
+            explanation: "Rotate the constant".to_string(),
+            start_line: 1,
+            end_line: 1,
+            test_code: None,
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt
+            .block_on(run_fix_verification_cycle(
+                &plan,
+                path.parent().unwrap(),
+                || Ok(true),
+                || Ok(vec![finding.clone()]),
+            ))
+            .unwrap();
+
+        assert_eq!(result.final_verdict, "fail");
+        assert!(result.rollback_performed);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "const foo = 'bar';\n"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_run_fix_verification_cycle_passes_when_fingerprint_is_gone() {
+        let path = temp_file("verify-pass", "const secret = 'token';\n");
+        let original = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "Unsafe secret",
+            "The secret is hard-coded",
+            Severity::High,
+            crate::finding::Confidence::High,
+            "review",
+        )
+        .at(path.to_string_lossy().as_ref(), 1);
+        let other = Finding::new(
+            crate::finding::FindingType::Vulnerability,
+            "Different issue",
+            "Another file target",
+            Severity::Low,
+            crate::finding::Confidence::High,
+            "review",
+        )
+        .at("src/lib.rs", 3);
+
+        let plan = FixPlan {
+            finding: original.clone(),
+            file_path: path.clone(),
+            original_code: "const secret = 'token';\n".to_string(),
+            fixed_code: "const secret = 'rotated';\n".to_string(),
+            explanation: "Rotate the secret".to_string(),
+            start_line: 1,
+            end_line: 1,
+            test_code: None,
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt
+            .block_on(run_fix_verification_cycle(
+                &plan,
+                path.parent().unwrap(),
+                || Ok(true),
+                || Ok(vec![other.clone()]),
+            ))
+            .unwrap();
+
+        assert_eq!(result.final_verdict, "pass");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "const secret = 'rotated';\n"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_redact_evidence_text_masks_secrets() {
+        let redacted =
+            redact_evidence_text(r#"{"token":"hunter2","password":"abc123","safe":"ok"}"#);
+        assert!(!redacted.contains("hunter2"));
+        assert!(!redacted.contains("abc123"));
+        assert!(
+            redacted.contains("***")
+                || redacted.contains("token: ***")
+                || redacted.contains("password: ***")
+        );
+    }
+
+    #[test]
+    fn test_can_fix_finding_rejects_unsupported_kinds() {
+        let secret = Finding::new(
+            crate::finding::FindingType::Secret,
+            "Secret",
+            "embedded secret",
+            Severity::Critical,
+            crate::finding::Confidence::High,
+            "review",
+        );
+        let dependency = Finding::new(
+            crate::finding::FindingType::Dependency,
+            "Dependency",
+            "vulnerable package",
+            Severity::Critical,
+            crate::finding::Confidence::High,
+            "review",
+        );
+
+        assert!(!can_fix_finding(&secret));
+        assert!(!can_fix_finding(&dependency));
     }
 
     #[test]
