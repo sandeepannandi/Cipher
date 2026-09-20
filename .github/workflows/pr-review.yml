@@ -39,6 +39,7 @@ jobs:
         with:
           name: cipher-ai-policy-baseline-${{ github.run_id }}
           path: .cipher-ai-policy.yml
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
