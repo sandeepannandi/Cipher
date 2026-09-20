@@ -14,7 +14,18 @@ CipherAI indexes your codebase, scans for vulnerabilities and secrets, discovers
 
 ---
 
-## Quick start
+## Install
+
+Prebuilt binaries for Linux (x86_64/aarch64), macOS (Intel/Apple silicon), and Windows (x86_64) ship with every [release](https://github.com/sandeepannandi/Cipher/releases). The installer picks the right artifact for your platform, downloads it **with the release's `SHA256SUMS.txt`, and refuses to install unless the checksum verifies**:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sandeepannandi/Cipher/master/install.sh -o install.sh
+sh install.sh                 # latest release, into ~/.local/bin
+```
+
+Pin a version or a different prefix explicitly: `sh install.sh --version v1.0.0 --prefix /usr/local/bin`. Then run `cipher-ai setup`.
+
+## Quick start (from source)
 
 ```sh
 git clone https://github.com/sandeepannandi/Cipher.git

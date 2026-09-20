@@ -75,8 +75,17 @@ jobs:
         with:
           path: artifacts
 
+      - name: Flatten artifacts
+        run: find artifacts -type f -name 'cipher-ai-*' -exec mv -v {} . \;
+
+      - name: Generate SHA256 checksums
+        # install.sh verifies the downloaded binary against this file.
+        run: sha256sum cipher-ai-* > SHA256SUMS.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            cipher-ai-*
+            SHA256SUMS.txt
           generate_release_notes: true
