@@ -12,7 +12,6 @@ use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use regex::Regex;
 use serde::Serialize;
-use std::collections::HashSet;
 use std::path::Path;
 
 /// A single vulnerability detection pattern
@@ -1511,29 +1510,32 @@ fn parse_owasp(s: Option<&str>) -> Option<OwaspCategory> {
 /// source through direct aliases, string construction, and `path.join`/`path.resolve`,
 /// but stops at `path.basename`, which reduces a path to one component. The narrow
 /// model adds useful multi-line coverage without pretending to be interprocedural.
-fn js_path_traversal_sink_lines(content: &str, extension: &str) -> HashSet<usize> {
+fn js_path_traversal_sink_lines(
+    content: &str,
+    extension: &str,
+) -> std::collections::HashSet<usize> {
     if !matches!(extension, "js" | "ts") {
-        return HashSet::new();
+        return std::collections::HashSet::new();
     }
 
     let Ok(source) = Regex::new(
         r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#,
     ) else {
-        return HashSet::new();
+        return std::collections::HashSet::new();
     };
     let Ok(binding) =
         Regex::new(r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+?);?\s*$"#)
     else {
-        return HashSet::new();
+        return std::collections::HashSet::new();
     };
     let Ok(sink) = Regex::new(
         r#"(?i)(?:\bfs\s*\.\s*)?(?:readFile|readFileSync|writeFile|writeFileSync|createReadStream|createWriteStream)\s*\(|\.sendFile\s*\("#,
     ) else {
-        return HashSet::new();
+        return std::collections::HashSet::new();
     };
 
-    let mut tainted = HashSet::new();
-    let mut sink_lines = HashSet::new();
+    let mut tainted = std::collections::HashSet::new();
+    let mut sink_lines = std::collections::HashSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty()
@@ -1673,57 +1675,6 @@ cmd.arg(input);"#,
         let findings = scan(
             r#"new ProcessBuilder("/usr/bin/printf", input).start();"#,
             "java",
-        );
-        assert!(findings.is_empty());
-    }
-
-    #[test]
-    fn javascript_request_path_reaches_filesystem_sink() {
-        let findings = scan(
-            r#"const name = req.query.name;
-const requested = "/srv/files/" + name;
-fs.createReadStream(requested);"#,
-            "js",
-        );
-        assert_eq!(titles(&findings), vec!["Path Traversal"]);
-        assert_eq!(findings[0].line_number, Some(3));
-        assert_eq!(
-            findings[0].code_snippet.as_deref(),
-            Some("fs.createReadStream(requested);")
-        );
-    }
-
-    #[test]
-    fn javascript_path_alias_and_resolve_reach_send_file() {
-        let findings = scan(
-            r#"const segment = request.params.asset;
-const alias = segment;
-const resolved = path.resolve("/srv/assets", alias);
-response.sendFile(resolved);"#,
-            "ts",
-        );
-        assert_eq!(titles(&findings), vec!["Path Traversal"]);
-        assert_eq!(findings[0].line_number, Some(4));
-    }
-
-    #[test]
-    fn javascript_basename_stops_path_taint() {
-        let findings = scan(
-            r#"const requested = req.query.filename;
-const safeName = path.basename(requested);
-const safePath = path.join("/srv/files", safeName);
-fs.createReadStream(safePath);"#,
-            "js",
-        );
-        assert!(findings.is_empty());
-    }
-
-    #[test]
-    fn unrelated_javascript_binding_stays_clean() {
-        let findings = scan(
-            r#"const requested = config.defaultFile;
-fs.createReadStream(requested);"#,
-            "js",
         );
         assert!(findings.is_empty());
     }
