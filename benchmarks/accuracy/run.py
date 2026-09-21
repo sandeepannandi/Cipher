@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import time
@@ -71,6 +72,10 @@ def validate_manifest(manifest):
         if not fixture_path.exists():
             raise ValueError(f"case {case_id} points to a missing fixture: {rel_path}")
 
+        project = case.get("project", "focused-corpus")
+        if not isinstance(project, str) or not project.strip():
+            raise ValueError(f"case {case_id} project must be a non-empty string")
+
         family = case.get("family")
         if family not in VALID_FAMILIES:
             raise ValueError(f"case {case_id} has invalid family: {family!r}")
@@ -86,12 +91,46 @@ def validate_manifest(manifest):
         expected = case.get("expected")
         if not isinstance(expected, bool):
             raise ValueError(f"case {case_id} expected must be boolean")
+        expected_findings = case.get("expected_findings")
+        if expected_findings is not None:
+            if not isinstance(expected_findings, list) or not expected_findings:
+                raise ValueError(f"case {case_id} expected_findings must be a non-empty list")
+            if not expected:
+                raise ValueError(f"negative case {case_id} cannot include expected_findings")
+            for finding_index, finding in enumerate(expected_findings):
+                if not isinstance(finding, dict):
+                    raise ValueError(
+                        f"case {case_id} expected finding at index {finding_index} is not an object"
+                    )
+                title = finding.get("title")
+                if not isinstance(title, str) or not title.strip():
+                    raise ValueError(
+                        f"case {case_id} expected finding at index {finding_index} is missing a title"
+                    )
+                for field in ("cwe", "file"):
+                    value = finding.get(field)
+                    if value is not None and (not isinstance(value, str) or not value.strip()):
+                        raise ValueError(
+                            f"case {case_id} expected finding field {field!r} must be a non-empty string"
+                        )
+                line = finding.get("line")
+                if line is not None and (not isinstance(line, int) or isinstance(line, bool) or line < 1):
+                    raise ValueError(
+                        f"case {case_id} expected finding line must be a positive integer"
+                    )
+
         if expected:
             expected_title = case.get("expected_title")
-            if not isinstance(expected_title, str) or not expected_title.strip():
-                raise ValueError(f"positive case {case_id} must include expected_title")
+            if expected_findings is None and (
+                not isinstance(expected_title, str) or not expected_title.strip()
+            ):
+                raise ValueError(
+                    f"positive case {case_id} must include expected_title or expected_findings"
+                )
             fix_terms = case.get("fix_terms", [])
-            if not isinstance(fix_terms, list) or not fix_terms:
+            if not isinstance(fix_terms, list):
+                raise ValueError(f"positive case {case_id} fix_terms must be a list")
+            if expected_findings is None and not fix_terms:
                 raise ValueError(f"positive case {case_id} must include a non-empty fix_terms list")
 
         if family != "handpicked":
@@ -152,56 +191,118 @@ def summarize_group(rows, key_name):
     return result
 
 
-def score_case(case, findings, elapsed_ms, returncode, error):
-    titles = [finding.get("title") for finding in findings]
-    expected = bool(case.get("expected"))
-    expected_title = case.get("expected_title")
+def canonical_finding_cwe(finding):
+    return str(finding.get("cwe_id") or finding.get("cwe") or "").strip().upper()
 
-    if expected:
-        matched = [
-            finding
-            for finding in findings
-            if normalize_title(finding.get("title")) == normalize_title(expected_title)
-        ]
-        wrong = [
-            finding
-            for finding in findings
-            if normalize_title(finding.get("title")) != normalize_title(expected_title)
-        ]
-        tp = 1 if matched else 0
-        fp = len(wrong)
-        fn = 0 if matched else 1
-        tn = 0
-        evidence = bool(matched and matched[0].get("file_path") and matched[0].get("line_number") and matched[0].get("code_snippet"))
-        remediation = (matched or [{}])[0].get("remediation", "")
-        fix_terms = case.get("fix_terms", [])
-        if matched:
-            fix_quality = "actionable" if remediation and all(term.lower() in remediation.lower() for term in fix_terms) else "missing_or_generic"
-        else:
-            fix_quality = "not_applicable"
+
+def expected_specs(case):
+    configured = case.get("expected_findings")
+    if configured is not None:
+        return configured
+    if not case.get("expected"):
+        return []
+    # Preserve schema-v2 focused-corpus behavior: legacy expectations match by
+    # title only. Broader project cases opt into stricter CWE/file/line matching
+    # through expected_findings.
+    return [{"title": case["expected_title"]}]
+
+
+def finding_matches(spec, finding):
+    if normalize_title(finding.get("title")) != normalize_title(spec.get("title")):
+        return False
+    if spec.get("cwe") and canonical_finding_cwe(finding) != str(spec["cwe"]).strip().upper():
+        return False
+    if spec.get("file"):
+        actual_path = pathlib.PurePosixPath(str(finding.get("file_path", "")).replace("\\", "/"))
+        expected_path = pathlib.PurePosixPath(spec["file"].replace("\\", "/"))
+        if actual_path != expected_path and not str(actual_path).endswith("/" + str(expected_path)):
+            return False
+    if spec.get("line") is not None and finding.get("line_number") != spec["line"]:
+        return False
+    return True
+
+
+def match_findings(specs, findings):
+    unmatched = set(range(len(findings)))
+    matched = []
+    for spec in specs:
+        match_index = next(
+            (index for index in sorted(unmatched) if finding_matches(spec, findings[index])),
+            None,
+        )
+        if match_index is not None:
+            unmatched.remove(match_index)
+            matched.append(findings[match_index])
+    return matched, [findings[index] for index in sorted(unmatched)]
+
+
+def score_case(case, findings, elapsed_ms, returncode, error):
+    specs = expected_specs(case)
+    matched, unexpected = match_findings(specs, findings)
+    tp = len(matched)
+    fn = len(specs) - tp
+    fp = len(unexpected)
+    tn = 1 if not specs and not findings else 0
+
+    evidence = all(
+        finding.get("file_path")
+        and finding.get("line_number")
+        and finding.get("code_snippet")
+        for finding in matched
+    ) if matched else False
+    fix_terms = case.get("fix_terms", [])
+    remediation = matched[0].get("remediation", "") if matched else ""
+    if matched and fix_terms:
+        fix_quality = (
+            "actionable"
+            if remediation and all(term.lower() in remediation.lower() for term in fix_terms)
+            else "missing_or_generic"
+        )
+    elif matched:
+        fix_quality = "not_assessed"
     else:
-        tp = 0
-        fp = len(findings)
-        fn = 0
-        tn = 1 if not findings else 0
-        evidence = False
-        remediation = ""
         fix_quality = "not_applicable"
+
+    if error:
+        outcome = "ERROR"
+    elif fn:
+        outcome = "FN" if not fp else "FN+FP"
+    elif fp:
+        outcome = "FP"
+    elif tp:
+        outcome = "TP"
+    else:
+        outcome = "TN"
 
     return {
         **case,
+        "project": case.get("project", "focused-corpus"),
         "TP": tp,
         "FP": fp,
         "FN": fn,
         "TN": tn,
-        "outcome": "TP" if tp else "FN" if fn else "FP" if fp else "TN",
-        "reported_titles": titles,
+        "outcome": outcome,
+        "reported_titles": [finding.get("title") for finding in findings],
+        "matched_findings": len(matched),
+        "unexpected_findings": len(unexpected),
         "runtime_ms": elapsed_ms,
         "evidence_complete": evidence,
         "fix_quality": fix_quality,
         "exit_code": returncode,
         "error": error,
     }
+
+
+def compute_macro_metrics(groups):
+    if not groups:
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0, "false_positive_rate": 0.0, "groups": 0}
+    metric_names = ("precision", "recall", "f1", "false_positive_rate")
+    result = {
+        name: round(sum(group[name] for group in groups.values()) / len(groups), 4)
+        for name in metric_names
+    }
+    result["groups"] = len(groups)
+    return result
 
 
 def evaluate_thresholds(summary, thresholds):
@@ -256,15 +357,19 @@ def main():
     for case in manifest["cases"]:
         src = ROOT / "fixtures" / case["file"]
         with tempfile.TemporaryDirectory(prefix="cipher-bench-") as td:
-            dst = pathlib.Path(td) / src.name
-            dst.write_bytes(src.read_bytes())
+            scan_root = pathlib.Path(td) / "source"
+            if src.is_dir():
+                shutil.copytree(src, scan_root)
+            else:
+                scan_root.mkdir()
+                shutil.copy2(src, scan_root / src.name)
             raw = pathlib.Path(td) / "result.json"
             started = time.perf_counter()
             command = [
                 args.cipher,
                 "review",
                 "--path",
-                td,
+                str(scan_root),
                 "--format",
                 "json",
                 "--max-findings",
@@ -286,11 +391,13 @@ def main():
                 report = {"findings": []}
                 error = f"invalid JSON report: {exc}"
 
-        findings = [
-            finding
-            for finding in report.get("findings", [])
-            if pathlib.Path(str(finding.get("file_path", ""))).name == src.name
-        ]
+        findings = report.get("findings", [])
+        if src.is_file():
+            findings = [
+                finding
+                for finding in findings
+                if pathlib.Path(str(finding.get("file_path", ""))).name == src.name
+            ]
         case_result = score_case(case, findings, elapsed_ms, cp.returncode, error)
         rows.append(case_result)
         if error:
@@ -304,6 +411,8 @@ def main():
 
     grouped_languages = summarize_group(rows, "language")
     grouped_classes = summarize_group(rows, "vulnerability_class")
+    grouped_families = summarize_group(rows, "family")
+    grouped_projects = summarize_group(rows, "project")
     family_counts = {}
     for case in manifest["cases"]:
         family_counts[case["family"]] = family_counts.get(case["family"], 0) + 1
@@ -314,7 +423,17 @@ def main():
         "cipher": args.cipher,
         "thresholds": manifest.get("thresholds", {}),
         "overall": overall,
-        "groups": {"language": grouped_languages, "vulnerability_class": grouped_classes},
+        "aggregates": {
+            "micro": overall,
+            "macro_language": compute_macro_metrics(grouped_languages),
+            "macro_project": compute_macro_metrics(grouped_projects),
+        },
+        "groups": {
+            "language": grouped_languages,
+            "vulnerability_class": grouped_classes,
+            "family": grouped_families,
+            "project": grouped_projects,
+        },
         "family_counts": family_counts,
         "execution_errors": {"total": len(execution_errors), "cases": execution_errors},
         "cases": rows,
