@@ -9,7 +9,11 @@ The manifest uses schema version 2 and records metadata for each case:
 - `family`: `handpicked`, `extracted`, `mutation`, or `control`
 - `vulnerability_class`: the canonical class used for grouping and regression checks
 - `provenance`: required for non-handpicked cases; for extracted cases it includes the verified public suite page, pinned archive URL, upstream suite/version, and original ID
-- `expected_title`: required for positive cases so title matching is explicit and deterministic
+- `project`: optional project identifier; defaults to `focused-corpus`
+- `expected_title`: legacy single-finding expectation, retained for the focused corpus
+- `expected_findings`: exact project-case expectations, matched one-for-one by title and optionally CWE, relative file, and line
+
+A case may point to one source file or a project directory. Directory cases are copied into an isolated scan root and run once, so interactions and unrelated findings are measured rather than hidden by per-file execution. Unexpected findings count as false positives; unmatched expectations count as false negatives. Results include micro totals plus macro averages and breakdowns by language, vulnerability class, family, and project.
 
 The extracted Java cases are small normalized/extracted CWE-pattern fixtures derived from the public Juliet Java suite, not byte-for-byte copies of upstream source files unless source-path verification was explicitly performed. This benchmark is intentionally a realism check for deterministic rule coverage, not a perfect reproduction of every upstream source artifact.
 
@@ -30,4 +34,4 @@ python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai
 
 The script validates the manifest, runs each fixture through the review path, and writes `benchmarks/accuracy/results/latest.json`. It exits non-zero if the manifest is invalid, any execution error occurs, or a configured threshold for precision/recall/F1 or execution errors is missed.
 
-This benchmark is intentionally small. It measures the deterministic `review` path, not AI verification, interprocedural data flow, dependency scanning, or real-world precision. Expand it with pinned public benchmark subsets after stable rule IDs and line-level expected-result matching are in place.
+The focused corpus remains intentionally small and measures the deterministic `review` path, not AI verification, interprocedural data flow, or dependency scanning. The runner now supports pinned public project subsets with exact finding labels; those realism cases belong in a separate manifest and CI job so their measured baseline cannot weaken the focused regression gate.
