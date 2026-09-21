@@ -72,3 +72,101 @@ class BenchmarkRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BroaderBenchmarkContractTests(unittest.TestCase):
+    def test_expected_findings_match_title_cwe_file_and_line(self):
+        case = {
+            "id": "REAL-PY-001",
+            "file": "python/weak_md5.py",
+            "language": "python",
+            "project": "example-project",
+            "expected": True,
+            "expected_findings": [
+                {
+                    "title": "Weak Hash Algorithm — MD5",
+                    "cwe": "CWE-328",
+                    "file": "src/hash.py",
+                    "line": 7,
+                }
+            ],
+            "family": "extracted",
+            "vulnerability_class": "weak_hash",
+            "provenance": {
+                "source_url": "https://example.invalid/source",
+                "archive_url": "https://example.invalid/archive",
+                "upstream_suite": "example",
+                "upstream_version": "abc123",
+                "original_id": "REAL-PY-001",
+                "origin": "example fixture",
+            },
+        }
+        findings = [
+            {
+                "title": "Weak Hash Algorithm — MD5",
+                "cwe_id": "CWE-328",
+                "file_path": "/tmp/source/src/hash.py",
+                "line_number": 7,
+                "code_snippet": "hashlib.md5(data)",
+                "remediation": "Use SHA-256",
+            },
+            {
+                "title": "Hardcoded Credentials",
+                "cwe_id": "CWE-798",
+                "file_path": "/tmp/source/src/config.py",
+                "line_number": 3,
+                "code_snippet": "password = 'test'",
+            },
+        ]
+        result = benchmark_run.score_case(case, findings, 10.0, 0, None)
+        self.assertEqual((result["TP"], result["FP"], result["FN"]), (1, 1, 0))
+        self.assertEqual(result["project"], "example-project")
+
+    def test_multiple_expected_findings_are_matched_once_each(self):
+        case = {
+            "id": "MULTI",
+            "file": "python/weak_md5.py",
+            "language": "python",
+            "expected": True,
+            "expected_findings": [
+                {"title": "Weak Hash Algorithm — MD5", "file": "a.py"},
+                {"title": "Weak Hash Algorithm — MD5", "file": "b.py"},
+            ],
+            "family": "handpicked",
+            "vulnerability_class": "weak_hash",
+        }
+        findings = [
+            {"title": "Weak Hash Algorithm — MD5", "file_path": "/tmp/a.py"},
+            {"title": "Weak Hash Algorithm — MD5", "file_path": "/tmp/b.py"},
+        ]
+        result = benchmark_run.score_case(case, findings, 1.0, 0, None)
+        self.assertEqual((result["TP"], result["FP"], result["FN"]), (2, 0, 0))
+
+    def test_macro_metrics_average_group_rates(self):
+        groups = {
+            "python": benchmark_run.compute_metrics(3, 1, 1, 5),
+            "java": benchmark_run.compute_metrics(1, 0, 3, 4),
+        }
+        macro = benchmark_run.compute_macro_metrics(groups)
+        self.assertEqual(macro["groups"], 2)
+        self.assertEqual(macro["precision"], 0.875)
+        self.assertEqual(macro["recall"], 0.5)
+
+    def test_negative_case_cannot_declare_expected_findings(self):
+        manifest = {
+            "schema_version": 2,
+            "suite": "invalid-negative",
+            "cases": [
+                {
+                    "id": "NEG",
+                    "file": "python/safe_hash.py",
+                    "language": "python",
+                    "expected": False,
+                    "expected_findings": [{"title": "Weak Hash Algorithm — MD5"}],
+                    "family": "handpicked",
+                    "vulnerability_class": "weak_hash",
+                }
+            ],
+        }
+        with self.assertRaises(ValueError):
+            benchmark_run.validate_manifest(manifest)
