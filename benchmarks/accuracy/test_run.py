@@ -69,6 +69,11 @@ class BenchmarkRunTests(unittest.TestCase):
         self.assertFalse(checks[0]["passed"])
         self.assertEqual(len(failures), 1)
 
+    def test_custom_manifest_argument_is_available(self):
+        parser_source = (self.root / "run.py").read_text()
+        self.assertIn('p.add_argument("--manifest"', parser_source)
+        self.assertIn('manifest_path = pathlib.Path(args.manifest)', parser_source)
+
 
 if __name__ == "__main__":
     unittest.main()
