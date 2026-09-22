@@ -392,6 +392,7 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
         Err(_) => return findings,
     };
     let js_path_traversal_sinks = js_path_traversal_sink_lines(&content, &ext);
+    let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
 
     for (line_num, line) in content.lines().enumerate() {
         let line_number = line_num + 1;
@@ -417,7 +418,9 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
             let pattern_matches = pattern.pattern.is_match(line)
                 || (pattern.name == "JWT Secret Hardcoded" && contextual_jwt_secret)
                 || (pattern.name == "Path Traversal"
-                    && js_path_traversal_sinks.contains(&line_number));
+                    && js_path_traversal_sinks.contains(&line_number))
+                || (pattern.name == "Weak Hash Algorithm — MD5"
+                    && python_md5_alias_calls.contains(&line_number));
             if !pattern_matches {
                 continue;
             }
@@ -1626,6 +1629,72 @@ cmd.arg(input);"#,
         );
         assert_eq!(titles(&findings), vec!["Weak Hash Algorithm — MD5"]);
     }
+
+    #[test]
+    fn python_md5_callable_alias_is_reported() {
+        let findings = scan(
+            r#"import hashlib
+algorithm = hashlib.md5
+return algorithm(payload).hexdigest()"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec!["Weak Hash Algorithm — MD5"]);
+    }
+
+    #[test]
+    fn python_sha256_callable_alias_is_clean() {
+        let findings = scan(
+            r#"import hashlib
+algorithm = hashlib.sha256
+return algorithm(payload).hexdigest()"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+}
+
+/// Find calls through local Python aliases bound directly to `hashlib.md5`.
+///
+/// This intentionally stays narrow: it follows only direct callable bindings in
+/// the same file and reports an invocation of that identifier. Secure hash
+/// aliases and unrelated callables remain clean.
+#[allow(clippy::items_after_test_module)]
+fn python_md5_alias_call_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    if extension != "py" {
+        return std::collections::HashSet::new();
+    }
+
+    let Ok(binding) =
+        Regex::new(r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:hashlib\s*\.\s*md5|md5)\s*$"#)
+    else {
+        return std::collections::HashSet::new();
+    };
+
+    let mut aliases = std::collections::HashSet::new();
+    let mut call_lines = std::collections::HashSet::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let code = line.split('#').next().unwrap_or("").trim();
+        if code.is_empty() {
+            continue;
+        }
+
+        if let Some(alias) = binding
+            .captures(code)
+            .and_then(|captures| captures.get(1))
+            .map(|capture| capture.as_str().to_string())
+        {
+            aliases.insert(alias);
+            continue;
+        }
+
+        if aliases.iter().any(|alias| {
+            Regex::new(&format!(r"\b{}\s*\(", regex::escape(alias)))
+                .is_ok_and(|call| call.is_match(code))
+        }) {
+            call_lines.insert(line_index + 1);
+        }
+    }
+    call_lines
 }
 
 /// Find JavaScript/TypeScript filesystem sinks reached by a request-path value.
