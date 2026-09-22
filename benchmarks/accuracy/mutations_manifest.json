@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "suite": "cipher-real-project-mutations-v1",
+  "thresholds": {"min_precision": 1.0, "min_recall": 0.5, "min_f1": 0.6666, "max_execution_errors": 0},
+  "cases": [
+    {
+      "id": "REAL-MUT-PY-001", "file": "real_mutations/python/md5_alias.py", "project": "kcyap/python-vuln-demo@30801ba:md5-alias", "language": "python", "expected": true,
+      "expected_findings": [{"title": "Weak Hash Algorithm — MD5", "cwe": "CWE-328", "file": "md5_alias.py"}],
+      "family": "mutation", "vulnerability_class": "weak_hash",
+      "provenance": {"source_url": "https://github.com/kcyap/python-vuln-demo/blob/30801ba7f10c55087c0ffde26a189433603270db/main.py", "archive_url": "https://github.com/kcyap/python-vuln-demo/archive/30801ba7f10c55087c0ffde26a189433603270db.tar.gz", "upstream_suite": "kcyap/python-vuln-demo", "upstream_version": "30801ba7f10c55087c0ffde26a189433603270db", "original_id": "main.py:weak_hash", "origin": "recipe: replace direct hashlib.md5 call with a local callable alias"}
+    },
+    {
+      "id": "REAL-CTRL-PY-001", "file": "real_mutations/python/sha256_control.py", "project": "kcyap/python-vuln-demo@30801ba:sha256-control", "language": "python", "expected": false,
+      "family": "control", "vulnerability_class": "weak_hash",
+      "provenance": {"source_url": "https://github.com/kcyap/python-vuln-demo/blob/30801ba7f10c55087c0ffde26a189433603270db/main.py", "archive_url": "https://github.com/kcyap/python-vuln-demo/archive/30801ba7f10c55087c0ffde26a189433603270db.tar.gz", "upstream_suite": "kcyap/python-vuln-demo", "upstream_version": "30801ba7f10c55087c0ffde26a189433603270db", "original_id": "main.py:weak_hash", "origin": "paired control: replace MD5 with SHA-256"}
+    },
+    {
+      "id": "REAL-MUT-JS-001", "file": "real_mutations/javascript/path_alias.js", "project": "alexm-acsa/vulnerable-node-api@1f8fed3:path-alias", "language": "javascript", "expected": true,
+      "expected_findings": [{"title": "Path Traversal", "cwe": "CWE-22", "file": "path_alias.js"}],
+      "family": "mutation", "vulnerability_class": "path_traversal",
+      "provenance": {"source_url": "https://github.com/alexm-acsa/vulnerable-node-api/blob/1f8fed353712940752a7bd9d7ddff06a65fb4791/src/controller/index.js", "archive_url": "https://github.com/alexm-acsa/vulnerable-node-api/archive/1f8fed353712940752a7bd9d7ddff06a65fb4791.tar.gz", "upstream_suite": "alexm-acsa/vulnerable-node-api", "upstream_version": "1f8fed353712940752a7bd9d7ddff06a65fb4791", "original_id": "src/controller/index.js:getFile", "origin": "recipe: rename locals and use path.resolve while preserving request-to-readFile flow"}
+    },
+    {
+      "id": "REAL-CTRL-JS-001", "file": "real_mutations/javascript/path_basename_control.js", "project": "alexm-acsa/vulnerable-node-api@1f8fed3:basename-control", "language": "javascript", "expected": false,
+      "family": "control", "vulnerability_class": "path_traversal",
+      "provenance": {"source_url": "https://github.com/alexm-acsa/vulnerable-node-api/blob/1f8fed353712940752a7bd9d7ddff06a65fb4791/src/controller/index.js", "archive_url": "https://github.com/alexm-acsa/vulnerable-node-api/archive/1f8fed353712940752a7bd9d7ddff06a65fb4791.tar.gz", "upstream_suite": "alexm-acsa/vulnerable-node-api", "upstream_version": "1f8fed353712940752a7bd9d7ddff06a65fb4791", "original_id": "src/controller/index.js:getFile", "origin": "paired control: sanitize request value with path.basename"}
+    }
+  ]
+}
