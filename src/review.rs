@@ -1659,17 +1659,14 @@ return algorithm(payload).hexdigest()"#,
 /// the same file and reports an invocation of that identifier. Secure hash
 /// aliases and unrelated callables remain clean.
 #[allow(clippy::items_after_test_module)]
-fn python_md5_alias_call_lines(
-    content: &str,
-    extension: &str,
-) -> std::collections::HashSet<usize> {
+fn python_md5_alias_call_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
     if extension != "py" {
         return std::collections::HashSet::new();
     }
 
-    let Ok(binding) = Regex::new(
-        r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:hashlib\s*\.\s*md5|md5)\s*$"#,
-    ) else {
+    let Ok(binding) =
+        Regex::new(r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:hashlib\s*\.\s*md5|md5)\s*$"#)
+    else {
         return std::collections::HashSet::new();
     };
 
