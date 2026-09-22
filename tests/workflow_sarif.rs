@@ -69,6 +69,6 @@ fn committed_policy_is_a_unique_versioned_baseline() {
     let fingerprints = value["baseline"]["fingerprints"].as_sequence().unwrap();
     let unique: std::collections::BTreeSet<_> =
         fingerprints.iter().map(|v| v.as_str().unwrap()).collect();
-    assert_eq!(fingerprints.len(), 54);
+    assert_eq!(fingerprints.len(), 60);
     assert_eq!(unique.len(), fingerprints.len());
 }
