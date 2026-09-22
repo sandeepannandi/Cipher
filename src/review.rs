@@ -1792,8 +1792,8 @@ fn python_path_traversal_sink_lines(
             }
         }
 
-        let tainted_open = open_sink.is_match(code)
-            && tainted.iter().any(|name| identifier_in(code, name));
+        let tainted_open =
+            open_sink.is_match(code) && tainted.iter().any(|name| identifier_in(code, name));
         let tainted_method = method_sink.captures_iter(code).any(|captures| {
             captures
                 .get(1)
@@ -1891,4 +1891,4 @@ fn js_path_traversal_sink_lines(
 fn identifier_in(text: &str, identifier: &str) -> bool {
     Regex::new(&format!(r"\b{}\b", regex::escape(identifier)))
         .is_ok_and(|reference| reference.is_match(text))
-    }
+}
