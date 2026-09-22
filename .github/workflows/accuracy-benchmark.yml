@@ -14,7 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  deterministic-baseline:
+  build-runner:
+    name: Build and validate runner
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -23,12 +24,100 @@ jobs:
         run: cargo build --release --locked
       - name: Run benchmark unit tests
         run: python3 -m unittest discover -s benchmarks/accuracy -p 'test_*.py'
-      - name: Run accuracy baseline
-        run: python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai --output /tmp/cipher-accuracy.json
-      - name: Upload result
+      - name: Upload Cipher binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipher-accuracy-binary
+          path: target/release/cipher-ai
+          if-no-files-found: error
+
+  focused-corpus:
+    name: Focused corpus gate
+    needs: build-runner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: cipher-accuracy-binary
+          path: target/release
+      - run: chmod +x target/release/cipher-ai
+      - name: Run focused corpus gate
+        run: python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai --manifest benchmarks/accuracy/manifest.json --output /tmp/focused.json
+      - name: Upload focused result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cipher-accuracy-result
-          path: /tmp/cipher-accuracy.json
+          name: accuracy-focused-result
+          path: /tmp/focused.json
+          if-no-files-found: error
+
+  real-projects:
+    name: Real-project corpus gate
+    needs: build-runner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: cipher-accuracy-binary
+          path: target/release
+      - run: chmod +x target/release/cipher-ai
+      - name: Run real-project corpus gate
+        run: python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai --manifest benchmarks/accuracy/real_projects_manifest.json --output /tmp/real-projects.json
+      - name: Upload real-project result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-real-projects-result
+          path: /tmp/real-projects.json
+          if-no-files-found: error
+
+  mutations:
+    name: Mutation corpus gate
+    needs: build-runner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: cipher-accuracy-binary
+          path: target/release
+      - run: chmod +x target/release/cipher-ai
+      - name: Run mutation corpus gate
+        run: python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai --manifest benchmarks/accuracy/mutations_manifest.json --output /tmp/mutations.json
+      - name: Upload mutation result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-mutations-result
+          path: /tmp/mutations.json
+          if-no-files-found: error
+
+  report:
+    name: Accuracy report
+    if: always()
+    needs: [focused-corpus, real-projects, mutations]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download suite results
+        uses: actions/download-artifact@v5
+        with:
+          pattern: accuracy-*-result
+          path: /tmp/accuracy-results
+          merge-multiple: true
+      - name: Render report
+        run: |
+          python3 benchmarks/accuracy/report.py \
+            /tmp/accuracy-results/focused.json \
+            /tmp/accuracy-results/real-projects.json \
+            /tmp/accuracy-results/mutations.json \
+            --output /tmp/accuracy-report.md
+          cat /tmp/accuracy-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipher-accuracy-report
+          path: /tmp/accuracy-report.md
           if-no-files-found: error
