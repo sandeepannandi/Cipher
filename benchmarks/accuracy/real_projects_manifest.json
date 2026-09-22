@@ -1,0 +1,116 @@
+{
+  "schema_version": 2,
+  "suite": "cipher-real-projects-mit-v1",
+  "thresholds": {
+    "min_precision": 0.5,
+    "min_recall": 0.5,
+    "min_f1": 0.5,
+    "max_execution_errors": 0
+  },
+  "cases": [
+    {
+      "id": "REAL-PY-001",
+      "file": "real_projects/python-vuln-demo",
+      "project": "kcyap/python-vuln-demo@30801ba",
+      "language": "python",
+      "expected": true,
+      "expected_findings": [
+        {
+          "title": "Insecure Deserialization",
+          "cwe": "CWE-502",
+          "file": "main.py",
+          "line": 14
+        },
+        {
+          "title": "Weak Hash Algorithm \u2014 MD5",
+          "cwe": "CWE-328",
+          "file": "main.py",
+          "line": 24
+        },
+        {
+          "title": "Debug Mode Enabled",
+          "cwe": "CWE-489",
+          "file": "main.py",
+          "line": 27
+        }
+      ],
+      "family": "extracted",
+      "vulnerability_class": "multi-class-real-project",
+      "provenance": {
+        "source_url": "https://github.com/kcyap/python-vuln-demo/tree/30801ba7f10c55087c0ffde26a189433603270db",
+        "archive_url": "https://github.com/kcyap/python-vuln-demo/archive/30801ba7f10c55087c0ffde26a189433603270db.tar.gz",
+        "upstream_suite": "kcyap/python-vuln-demo",
+        "upstream_version": "30801ba7f10c55087c0ffde26a189433603270db",
+        "original_id": "main.py",
+        "origin": "verbatim MIT-licensed source snapshot"
+      }
+    },
+    {
+      "id": "REAL-JS-001",
+      "file": "real_projects/vulnerable-node-api",
+      "project": "alexm-acsa/vulnerable-node-api@1f8fed3",
+      "language": "javascript",
+      "expected": true,
+      "expected_findings": [
+        {
+          "title": "Hardcoded Credentials",
+          "cwe": "CWE-798",
+          "file": "src/service/index.js",
+          "line": 5
+        },
+        {
+          "title": "Weak Hash Algorithm \u2014 MD5",
+          "cwe": "CWE-328",
+          "file": "src/service/index.js",
+          "line": 38
+        },
+        {
+          "title": "Weak Hash Algorithm \u2014 MD5",
+          "cwe": "CWE-328",
+          "file": "src/service/index.js",
+          "line": 40
+        },
+        {
+          "title": "Weak Hash Algorithm \u2014 MD5",
+          "cwe": "CWE-328",
+          "file": "src/service/index.js",
+          "line": 42
+        },
+        {
+          "title": "Weak Hash Algorithm \u2014 MD5",
+          "cwe": "CWE-328",
+          "file": "src/service/index.js",
+          "line": 55
+        },
+        {
+          "title": "Weak Hash Algorithm \u2014 MD5",
+          "cwe": "CWE-328",
+          "file": "src/service/index.js",
+          "line": 69
+        },
+        {
+          "title": "Command Injection",
+          "cwe": "CWE-78",
+          "file": "src/controller/index.js",
+          "line": 131
+        },
+        {
+          "title": "Path Traversal",
+          "cwe": "CWE-22",
+          "file": "src/controller/index.js",
+          "line": 155
+        }
+      ],
+      "family": "extracted",
+      "vulnerability_class": "multi-class-real-project",
+      "provenance": {
+        "source_url": "https://github.com/alexm-acsa/vulnerable-node-api/tree/1f8fed353712940752a7bd9d7ddff06a65fb4791",
+        "archive_url": "https://github.com/alexm-acsa/vulnerable-node-api/archive/1f8fed353712940752a7bd9d7ddff06a65fb4791.tar.gz",
+        "upstream_suite": "alexm-acsa/vulnerable-node-api",
+        "upstream_version": "1f8fed353712940752a7bd9d7ddff06a65fb4791",
+        "original_id": "src/service/index.js+src/controller/index.js",
+        "origin": "verbatim MIT-licensed source snapshot"
+      }
+    }
+  ]
+}
