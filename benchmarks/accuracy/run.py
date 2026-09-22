@@ -346,10 +346,12 @@ def evaluate_thresholds(summary, thresholds):
 def main():
     p = argparse.ArgumentParser(description="Run Cipher's deterministic accuracy baseline")
     p.add_argument("--cipher", default=os.environ.get("CIPHER_BIN", "cipher-ai"))
+    p.add_argument("--manifest", default=str(ROOT / "manifest.json"))
     p.add_argument("--output", default=str(ROOT / "results" / "latest.json"))
     args = p.parse_args()
 
-    manifest = json.loads((ROOT / "manifest.json").read_text())
+    manifest_path = pathlib.Path(args.manifest)
+    manifest = json.loads(manifest_path.read_text())
     validate_manifest(manifest)
 
     rows = []
@@ -421,6 +423,7 @@ def main():
         "schema_version": manifest["schema_version"],
         "suite": manifest.get("suite"),
         "cipher": args.cipher,
+        "manifest": str(manifest_path),
         "thresholds": manifest.get("thresholds", {}),
         "overall": overall,
         "aggregates": {
