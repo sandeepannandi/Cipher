@@ -175,3 +175,24 @@ class BroaderBenchmarkContractTests(unittest.TestCase):
         }
         with self.assertRaises(ValueError):
             benchmark_run.validate_manifest(manifest)
+
+
+class MutationCorpusTests(unittest.TestCase):
+    def test_real_mutation_manifest_is_valid_and_paired(self):
+        import json
+
+        manifest = json.loads((pathlib.Path(__file__).resolve().parent / "mutations_manifest.json").read_text())
+        benchmark_run.validate_manifest(manifest)
+        pairs = {}
+        for case in manifest["cases"]:
+            pairs.setdefault((case["language"], case["vulnerability_class"]), set()).add(
+                case["family"]
+            )
+            self.assertIn("recipe:", case["provenance"]["origin"] if case["family"] == "mutation" else "recipe: paired")
+        self.assertEqual(
+            pairs,
+            {
+                ("python", "weak_hash"): {"mutation", "control"},
+                ("javascript", "path_traversal"): {"mutation", "control"},
+            },
+        )
