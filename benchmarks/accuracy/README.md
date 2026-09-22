@@ -35,3 +35,21 @@ python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai
 The script validates the manifest, runs each fixture through the review path, and writes `benchmarks/accuracy/results/latest.json`. It exits non-zero if the manifest is invalid, any execution error occurs, or a configured threshold for precision/recall/F1 or execution errors is missed.
 
 The focused corpus remains intentionally small and measures the deterministic `review` path, not AI verification, interprocedural data flow, or dependency scanning. The runner now supports pinned public project subsets with exact finding labels; those realism cases belong in a separate manifest and CI job so their measured baseline cannot weaken the focused regression gate.
+
+## CI gates and report
+
+CI keeps the three suites as separate required signals:
+
+- focused corpus (`manifest.json`)
+- pinned MIT real projects (`real_projects_manifest.json`)
+- deterministic mutations and controls (`mutations_manifest.json`)
+
+Each gate writes and uploads its own JSON result, so a strong suite cannot hide a regression in another suite. The final reporting job renders `report.py` output into the GitHub Actions step summary and uploads the same Markdown as `cipher-accuracy-report`.
+
+To render the combined report locally after running all suites:
+
+```bash
+python3 benchmarks/accuracy/report.py \
+  /tmp/focused.json /tmp/real-projects.json /tmp/mutations.json \
+  --output /tmp/accuracy-report.md
+```
