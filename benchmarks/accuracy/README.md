@@ -19,9 +19,10 @@ The extracted Java cases are small normalized/extracted CWE-pattern fixtures der
 
 ### Selected-language depth case
 
-The JavaScript/TypeScript path-traversal cases exercise a narrow local data-flow
-model: request path input, aliases or path construction, and a filesystem sink.
-The clean control uses `path.basename` before construction. This was chosen over
+The JavaScript/TypeScript and Python path-traversal cases exercise narrow local
+models: request path input, aliases or path construction, and a filesystem sink.
+The clean controls use basename-style sanitizers before construction. This was
+chosen over
 adding more language breadth because path traversal was already a supported,
 high-severity class, but its previous rule only recognized a same-line string
 concatenation at `readFile`/`writeFile`.
