@@ -392,6 +392,7 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
         Err(_) => return findings,
     };
     let js_path_traversal_sinks = js_path_traversal_sink_lines(&content, &ext);
+    let python_path_traversal_sinks = python_path_traversal_sink_lines(&content, &ext);
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
 
     for (line_num, line) in content.lines().enumerate() {
@@ -418,7 +419,8 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
             let pattern_matches = pattern.pattern.is_match(line)
                 || (pattern.name == "JWT Secret Hardcoded" && contextual_jwt_secret)
                 || (pattern.name == "Path Traversal"
-                    && js_path_traversal_sinks.contains(&line_number))
+                    && (js_path_traversal_sinks.contains(&line_number)
+                        || python_path_traversal_sinks.contains(&line_number)))
                 || (pattern.name == "Weak Hash Algorithm — MD5"
                     && python_md5_alias_calls.contains(&line_number));
             if !pattern_matches {
@@ -1622,6 +1624,34 @@ cmd.arg(input);"#,
     }
 
     #[test]
+    fn python_request_path_reaching_open_is_reported() {
+        let findings = scan(
+            r#"from flask import request
+import os
+requested = request.args.get("file")
+target = os.path.join("uploads", requested)
+with open(target, "rb") as handle:
+    return handle.read()"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec!["Path Traversal"]);
+    }
+
+    #[test]
+    fn python_basename_sanitized_path_is_clean() {
+        let findings = scan(
+            r#"from flask import request
+import os
+requested = os.path.basename(request.args.get("file"))
+target = os.path.join("uploads", requested)
+with open(target, "rb") as handle:
+    return handle.read()"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
     fn md5_function_call_is_still_reported() {
         let findings = scan(
             r#"return hashlib.md5(value.encode("utf-8")).hexdigest();"#,
@@ -1695,6 +1725,91 @@ fn python_md5_alias_call_lines(content: &str, extension: &str) -> std::collectio
         }
     }
     call_lines
+}
+
+/// Find Python filesystem sinks reached by a request-path value.
+///
+/// This intentionally models only straight-line local bindings. It follows Flask
+/// and Django request path input through aliases and path construction, but stops
+/// at basename-style sanitizers. The narrow model does not claim interprocedural
+/// coverage.
+#[allow(clippy::items_after_test_module)]
+fn python_path_traversal_sink_lines(
+    content: &str,
+    extension: &str,
+) -> std::collections::HashSet<usize> {
+    if extension != "py" {
+        return std::collections::HashSet::new();
+    }
+
+    let Ok(source) = Regex::new(
+        r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:request\.(?:args|form|values|GET|POST)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(binding) = Regex::new(r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$"#) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(open_sink) = Regex::new(r#"(?i)\bopen\s*\("#) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(method_sink) = Regex::new(
+        r#"(?i)\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:read_text|read_bytes|write_text|write_bytes|open)\s*\("#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+
+    let mut tainted = std::collections::HashSet::new();
+    let mut sink_lines = std::collections::HashSet::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let code = line.split('#').next().unwrap_or("").trim();
+        if code.is_empty() {
+            continue;
+        }
+
+        if let Some(name) = source
+            .captures(code)
+            .and_then(|captures| captures.get(1))
+            .map(|capture| capture.as_str().to_string())
+        {
+            if !contains_python_path_sanitizer(code) {
+                tainted.insert(name);
+            }
+            continue;
+        }
+
+        if let Some(captures) = binding.captures(code) {
+            let lhs = captures.get(1).map(|capture| capture.as_str());
+            let rhs = captures
+                .get(2)
+                .map(|capture| capture.as_str())
+                .unwrap_or("");
+            let derives_from_taint = tainted.iter().any(|name| identifier_in(rhs, name));
+            if derives_from_taint && !contains_python_path_sanitizer(rhs) {
+                if let Some(lhs) = lhs {
+                    tainted.insert(lhs.to_string());
+                }
+            }
+        }
+
+        let tainted_open = open_sink.is_match(code)
+            && tainted.iter().any(|name| identifier_in(code, name));
+        let tainted_method = method_sink.captures_iter(code).any(|captures| {
+            captures
+                .get(1)
+                .is_some_and(|receiver| tainted.contains(receiver.as_str()))
+        });
+        if (tainted_open || tainted_method) && !contains_python_path_sanitizer(code) {
+            sink_lines.insert(line_index + 1);
+        }
+    }
+    sink_lines
+}
+
+#[allow(clippy::items_after_test_module)]
+fn contains_python_path_sanitizer(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("os.path.basename") || lower.contains("path.basename")
 }
 
 /// Find JavaScript/TypeScript filesystem sinks reached by a request-path value.
@@ -1776,4 +1891,4 @@ fn js_path_traversal_sink_lines(
 fn identifier_in(text: &str, identifier: &str) -> bool {
     Regex::new(&format!(r"\b{}\b", regex::escape(identifier)))
         .is_ok_and(|reference| reference.is_match(text))
-}
+    }
