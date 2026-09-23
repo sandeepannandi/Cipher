@@ -33,7 +33,7 @@ jobs:
             cipherai-watch-
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Build cipher-ai
         run: cargo build --release --locked --target x86_64-unknown-linux-gnu
