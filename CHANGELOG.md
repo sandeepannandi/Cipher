@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Position-independent policy fingerprints** — `stable_fingerprint` now keys on rule, file, finding type and the whitespace-normalized flagged line instead of the line number, so unrelated edits no longer re-key accepted baseline findings. Repeated identical findings in one file get ordinal-salted fingerprints so a baseline entry cannot cover a new copy; snippet-less findings keep the line-based key. The committed `.cipher-ai-policy.yml` baseline was regenerated, dropping stale entries. One-time effect: existing baselines, suppressions and GitHub Code Scanning alerts re-key once. `src/finding.rs`, `src/policy.rs`, `src/review.rs`
+
 ### Fixed
 
 - **`pentest --blackbox` never checkpointed `session.json`** — black-box runs opened a workspace but never saved the session, so `--point-retest` and `--resume` could not find black-box/browser-fuzz findings. The black-box path now persists the full session (stage, guided proofs incl. browser-fuzz specs, findings, summary) before writing the report
