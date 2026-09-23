@@ -1,6 +1,6 @@
 //! Repository policy for classifying and gating stable security findings.
 
-use crate::finding::{stable_fingerprint, Confidence, Finding, Severity};
+use crate::finding::{stable_fingerprints, Confidence, Finding, Severity};
 use anyhow::{bail, Context, Result};
 use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -176,8 +176,8 @@ impl Policy {
             below_threshold: 0,
             findings: Vec::with_capacity(findings.len()),
         };
-        for finding in findings {
-            let fingerprint = stable_fingerprint(finding);
+        let fingerprints = stable_fingerprints(findings);
+        for (finding, fingerprint) in findings.iter().zip(fingerprints) {
             let threshold = finding.severity.score() >= min_severity.score()
                 && finding.confidence.score() >= min_confidence.score();
             let (state, reason, expires) = match suppressions.get(fingerprint.as_str()) {
@@ -214,7 +214,7 @@ impl Policy {
     }
 
     pub fn baseline_from(findings: &[Finding]) -> Self {
-        let mut fingerprints: Vec<String> = findings.iter().map(stable_fingerprint).collect();
+        let mut fingerprints: Vec<String> = stable_fingerprints(findings);
         fingerprints.sort();
         fingerprints.dedup();
         Self {
@@ -264,7 +264,7 @@ fn parse_confidence(value: &str) -> Result<Confidence> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::finding::{FindingType, Severity};
+    use crate::finding::{stable_fingerprint, FindingType, Severity};
 
     fn finding(severity: Severity, confidence: Confidence, line: usize) -> Finding {
         Finding::new(
@@ -328,6 +328,48 @@ mod tests {
                 FindingState::Expired
             ]
         );
+    }
+
+    fn pattern_finding(line: usize, code: &str) -> Finding {
+        Finding::new(
+            FindingType::Vulnerability,
+            "Path Traversal",
+            "test",
+            Severity::High,
+            Confidence::High,
+            "security-review",
+        )
+        .at("src/files.rs", line)
+        .with_code(code)
+        .with_cwe("CWE-22")
+    }
+
+    #[test]
+    fn baseline_survives_line_shift_and_still_gates_new_copies() {
+        let accepted = vec![pattern_finding(10, "fs::read(dir + &name)")];
+        let policy = Policy::baseline_from(&accepted);
+        let today = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+
+        // Code inserted above moves the finding; it stays accepted.
+        let shifted = vec![pattern_finding(57, "fs::read(dir + &name)")];
+        let result = policy.evaluate_at(&shifted, today).unwrap();
+        assert_eq!((result.new, result.baseline), (0, 1));
+        assert!(!result.gate_failed);
+
+        // A second identical vulnerable line in the same file is new.
+        let duplicated = vec![
+            pattern_finding(57, "fs::read(dir + &name)"),
+            pattern_finding(90, "fs::read(dir + &name)"),
+        ];
+        let result = policy.evaluate_at(&duplicated, today).unwrap();
+        assert_eq!((result.new, result.baseline), (1, 1));
+        assert!(result.gate_failed);
+
+        // Changing the flagged line itself is new.
+        let edited = vec![pattern_finding(57, "fs::read(dir + &other)")];
+        let result = policy.evaluate_at(&edited, today).unwrap();
+        assert_eq!((result.new, result.baseline), (1, 0));
+        assert!(result.gate_failed);
     }
 
     #[test]
