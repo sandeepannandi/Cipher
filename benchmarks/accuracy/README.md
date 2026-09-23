@@ -29,6 +29,15 @@ adding more language breadth because path traversal was already a supported,
 high-severity class, but its previous rule only recognized a same-line string
 concatenation at `readFile`/`writeFile`.
 
+### SQL injection data-flow cases
+
+The `DF-*-SQLI-001` cases carry request input through a local query-string
+binding (f-string, template literal, concatenation, `fmt.Sprintf`) into a SQL
+sink in each of Python, JavaScript, Java, and Go. Each `CTRL-*-SQLI-001` control
+uses the same request value as a bind parameter of a parameterized query
+(`?`, `$1`, `PreparedStatement.setString`) and must stay clean. These are
+self-written fixtures, not upstream corpus files.
+
 ## Run
 
 ```bash
