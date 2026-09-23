@@ -53,6 +53,15 @@ pub fn should_exclude(path: &Path) -> bool {
             if path_str.ends_with(ext) {
                 return true;
             }
+        } else if *exclude == ".git" {
+            // Match the `.git` directory as a whole path component so
+            // `.github/workflows`, `.gitlab-ci.yml` etc. are still scanned.
+            if path
+                .components()
+                .any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))
+            {
+                return true;
+            }
         } else if path_str.contains(&exclude.to_lowercase()) {
             return true;
         }
@@ -94,6 +103,15 @@ mod tests {
     #[test]
     fn test_should_exclude_git() {
         assert!(should_exclude(Path::new("/project/.git/config")));
+    }
+
+    #[test]
+    fn test_github_workflows_are_not_excluded_as_git() {
+        assert!(!should_exclude(Path::new(
+            "/project/.github/workflows/ci.yml"
+        )));
+        assert!(!should_exclude(Path::new("/project/.gitlab-ci.yml")));
+        assert!(should_exclude(Path::new("/project/.git/hooks/pre-commit")));
     }
 
     #[test]

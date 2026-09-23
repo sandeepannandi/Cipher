@@ -391,6 +391,9 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
         Ok(c) => c,
         Err(_) => return findings,
     };
+    if crate::workflow::is_github_workflow(path, &content) {
+        findings.extend(crate::workflow::scan_workflow(path, &content));
+    }
     let js_path_traversal_sinks = js_path_traversal_sink_lines(&content, &ext);
     let python_path_traversal_sinks = python_path_traversal_sink_lines(&content, &ext);
     let java_path_traversal_sinks = java_path_traversal_sink_lines(&content, &ext);
@@ -1538,6 +1541,20 @@ mod scanner_regression_tests {
             .iter()
             .map(|finding| finding.title.as_str())
             .collect()
+    }
+
+    #[test]
+    fn github_workflow_yaml_gets_workflow_checks() {
+        let findings = scan(
+            "on: issues\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo \"${{ github.event.issue.title }}\"\n",
+            "yml",
+        );
+        assert!(titles(&findings).contains(&crate::workflow::SCRIPT_INJECTION_TITLE));
+        let plain = scan(
+            "name: app\nrun: echo ${{ github.event.issue.title }}\n",
+            "yml",
+        );
+        assert!(!titles(&plain).contains(&crate::workflow::SCRIPT_INJECTION_TITLE));
     }
 
     #[test]

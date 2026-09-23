@@ -26,4 +26,5 @@ pub mod setup;
 pub mod trace;
 pub mod verify;
 pub mod watch;
+pub mod workflow;
 pub mod zeroday;
