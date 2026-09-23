@@ -4,6 +4,7 @@
 
 ### Added
 
+- **SQL injection data flow (JS/TS, Python, Java, Go)** — `review` now follows request input (the same sources as the path-traversal models, plus JS destructuring from `req.query`/`req.body`/`req.params`) through local aliases and string construction (concatenation, template literals, f-strings, `format`/`String.format`/`fmt.Sprintf`) into SQL query sinks (`cursor.execute`, `db.query`/`prepare`, `executeQuery`/`prepareStatement`/`createQuery`, `db.Query`/`Exec` and their `*Context` forms). Taint must reach the query argument, so parameterized queries with a request value as a bind parameter stay clean; numeric conversions stop the flow, and identifiers that only appear inside plain string text do not count. Same-file, straight-line only; no interprocedural claim. Eight paired focused-corpus cases (4 vulnerable, 4 parameterized controls). `src/review.rs`
 - **GitHub Actions workflow checks** — `review` now scans workflow YAML for untrusted PR-head checkout under `pull_request_target`/`workflow_run`, script injection from attacker-controlled `${{ github.event.* }}` text in `run:`/`script:`, third-party actions not pinned to a commit SHA, `permissions: write-all`, and `toJSON(secrets)`. Nine paired focused-corpus cases (5 vulnerable, 4 clean controls). `src/workflow.rs`, `src/review.rs`
 
 ### Changed
