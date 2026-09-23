@@ -114,6 +114,17 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Never pass user input directly to template engines. Use context-aware escaping and sandboxed templates."
     );
 
+    add_vuln!(
+        "Server-Side Request Forgery (SSRF)",
+        "An outbound HTTP request uses a URL taken from user input, letting an attacker reach internal services or cloud metadata endpoints.",
+        Severity::High, Confidence::Medium, Some(OwaspCategory::A10SSRF),
+        // Same-line shape only: request input passed straight into an HTTP
+        // client call. Multi-line flows are found by `ssrf_sink_lines`.
+        r#"(?i)\b(?:requests\s*\.\s*(?:get|post|put|delete|head|patch)|urlopen|fetch|axios\s*\.\s*(?:get|post|put|delete)|http\s*\.\s*Get)\s*\(\s*(?:request\s*\.\s*(?:args|form|values|GET|POST|getParameter)|req\s*\.\s*(?:query|body|params)|r\s*\.\s*URL\s*\.\s*Query)"#,
+        &["py", "js", "ts", "java", "go"],
+        "Validate outbound URLs against an allowlist of hosts and schemes, block private and metadata addresses, and never pass user input directly as the request URL."
+    );
+
     // -- Cryptography --
 
     add_vuln!(
@@ -401,6 +412,7 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
     let sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
     let command_injection_sinks = command_injection_sink_lines(&content, &ext);
+    let ssrf_sinks = ssrf_sink_lines(&content, &ext);
 
     for (line_num, line) in content.lines().enumerate() {
         let line_number = line_num + 1;
@@ -435,7 +447,9 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
                 || (pattern.name == "SQL Injection — String Concatenation"
                     && sql_injection_sinks.contains(&line_number))
                 || (pattern.name == "Command Injection"
-                    && command_injection_sinks.contains(&line_number));
+                    && command_injection_sinks.contains(&line_number))
+                || (pattern.name == "Server-Side Request Forgery (SSRF)"
+                    && ssrf_sinks.contains(&line_number));
             if !pattern_matches {
                 continue;
             }
@@ -2005,6 +2019,94 @@ out, err := exec.Command("ping", "-c", "1", host).Output()"#,
         );
         assert!(findings.is_empty());
     }
+
+    const SSRF: &str = "Server-Side Request Forgery (SSRF)";
+
+    #[test]
+    fn python_request_url_reaching_requests_get_is_reported() {
+        let findings = scan(
+            r#"target = request.args.get("url")
+endpoint = target + "/status"
+resp = requests.get(endpoint, timeout=5)"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SSRF]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn python_request_value_as_query_param_of_fixed_url_is_clean() {
+        let findings = scan(
+            r#"term = request.args.get("q")
+resp = requests.get("https://api.example.com/search", params={"q": term})"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_request_url_reaching_fetch_is_reported() {
+        let findings = scan(
+            r#"const target = req.query.url;
+const endpoint = `${target}/status`;
+const resp = await fetch(endpoint);"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SSRF]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn js_request_value_in_body_of_fixed_url_is_clean() {
+        let findings = scan(
+            r#"const term = req.query.q;
+const resp = await fetch("https://api.example.com/search", { method: "POST", body: term });"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_request_url_reaching_new_url_is_reported() {
+        let findings = scan(
+            r#"String target = request.getParameter("url");
+URL endpoint = new URL(target);
+HttpURLConnection conn = (HttpURLConnection) endpoint.openConnection();"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec![SSRF]);
+        assert_eq!(findings[0].line_number, Some(2));
+    }
+
+    #[test]
+    fn java_request_value_posted_to_fixed_url_is_clean() {
+        let findings = scan(
+            r#"String term = request.getParameter("q");
+String body = restTemplate.postForObject("https://api.example.com/search", term, String.class);"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn go_request_url_reaching_new_request_is_reported() {
+        let findings = scan(
+            r#"target := r.URL.Query().Get("url")
+req, err := http.NewRequestWithContext(ctx, "GET", target, nil)"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec![SSRF]);
+    }
+
+    #[test]
+    fn go_request_value_in_body_of_fixed_url_is_clean() {
+        let findings = scan(
+            r#"term := r.URL.Query().Get("q")
+req, err := http.NewRequest("POST", "https://api.example.com/search", strings.NewReader(term))"#,
+            "go",
+        );
+        assert!(findings.is_empty());
+    }
 }
 
 /// Find calls through local Python aliases bound directly to `hashlib.md5`.
@@ -2566,8 +2668,8 @@ struct FlowSink {
 /// dangerous value.
 type FlowArguments = fn(&str) -> Vec<usize>;
 
-/// Straight-line, same-file request flow shared by the SQL injection and
-/// command injection models.
+/// Straight-line, same-file request flow shared by the SQL injection,
+/// command injection, and SSRF models.
 ///
 /// Tracks request-input variables through direct aliases and string
 /// construction, drops taint when a variable is rebound to a sanitized or
@@ -2879,4 +2981,61 @@ fn command_injection_sink_lines(
         })
         .collect();
     request_flow_sink_lines(content, language, &sinks, contains_command_sanitizer)
+}
+
+#[allow(clippy::items_after_test_module)]
+fn outbound_url_argument(name: &str) -> Vec<usize> {
+    match name {
+        "request" | "NewRequest" => vec![1],
+        "NewRequestWithContext" => vec![2],
+        _ => vec![0],
+    }
+}
+
+/// Find outbound HTTP requests whose URL is built from request input in the
+/// same file.
+///
+/// Sources and propagation match the SQL injection model. Only the URL
+/// argument counts: Python `requests`/`httpx` calls and `urlopen`; JS
+/// `fetch`, `axios`, `got`, and `http(s).get/request`; Java `new URL`,
+/// `URI.create`, and `RestTemplate` calls; Go `http.Get/Post/Head/PostForm`
+/// and `http.NewRequest*`. A request value sent only as a query parameter,
+/// body, or header of a fixed URL is not reported. Host allowlists are not
+/// modeled as sanitizers; numeric conversions stop the flow. Same-file and
+/// straight-line only; no interprocedural claim.
+#[allow(clippy::items_after_test_module)]
+fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let Some(language) = flow_language(extension) else {
+        return std::collections::HashSet::new();
+    };
+    let patterns: &[&str] = match language {
+        FlowLanguage::Python => &[
+            r#"\b(?:requests|httpx|session|client)\s*\.\s*(get|post|put|delete|head|patch|options|request)\s*\("#,
+            r#"\b(?:urllib\s*\.\s*request\s*\.\s*)?(urlopen)\s*\("#,
+        ],
+        FlowLanguage::JavaScript => &[
+            r#"(?:^|[^.\w$])(fetch|got|axios)\s*\("#,
+            r#"\baxios\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
+            r#"\bhttps?\s*\.\s*(get|request)\s*\("#,
+        ],
+        FlowLanguage::Java => &[
+            r#"\bnew\s+(URL)\s*\("#,
+            r#"\bURI\s*\.\s*(create)\s*\("#,
+            r#"\b[A-Za-z_]*[Rr]est[Tt]emplate\s*\.\s*(getForObject|getForEntity|postForObject|postForEntity|exchange)\s*\("#,
+        ],
+        FlowLanguage::Go => {
+            &[r#"\bhttp\s*\.\s*(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\("#]
+        }
+    };
+    let sinks: Vec<FlowSink> = patterns
+        .iter()
+        .filter_map(|pattern| {
+            Regex::new(pattern).ok().map(|call| FlowSink {
+                call,
+                arguments: outbound_url_argument,
+                line_requires: None,
+            })
+        })
+        .collect();
+    request_flow_sink_lines(content, language, &sinks, contains_numeric_conversion)
 }

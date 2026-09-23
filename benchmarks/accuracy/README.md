@@ -47,6 +47,15 @@ Python, JavaScript, Java, and Go. Each `CTRL-*-CMDI-001` control passes the same
 request value as one element of an argument vector with no shell and must stay
 clean. These are self-written fixtures, not upstream corpus files.
 
+### SSRF data-flow cases
+
+The `DF-*-SSRF-001` cases carry a request-supplied URL through a local binding
+into the URL argument of an HTTP client (`requests.get`, `fetch`, `new URL`,
+`http.Get`) in each of Python, JavaScript, Java, and Go. Each `CTRL-*-SSRF-001`
+control sends the request value only as a query parameter or body of a fixed
+URL and must stay clean. These are self-written fixtures, not upstream corpus
+files.
+
 ## Run
 
 ```bash
