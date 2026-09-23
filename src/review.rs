@@ -400,6 +400,7 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     let go_path_traversal_sinks = go_path_traversal_sink_lines(&content, &ext);
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
     let sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
+    let command_injection_sinks = command_injection_sink_lines(&content, &ext);
 
     for (line_num, line) in content.lines().enumerate() {
         let line_number = line_num + 1;
@@ -432,7 +433,9 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
                 || (pattern.name == "Weak Hash Algorithm — MD5"
                     && python_md5_alias_calls.contains(&line_number))
                 || (pattern.name == "SQL Injection — String Concatenation"
-                    && sql_injection_sinks.contains(&line_number));
+                    && sql_injection_sinks.contains(&line_number))
+                || (pattern.name == "Command Injection"
+                    && command_injection_sinks.contains(&line_number));
             if !pattern_matches {
                 continue;
             }
@@ -1880,6 +1883,128 @@ rows, err := db.Query(query)"#,
         );
         assert!(findings.is_empty());
     }
+
+    const CMDI: &str = "Command Injection";
+
+    #[test]
+    fn python_request_value_reaching_popen_is_reported() {
+        let findings = scan(
+            r#"host = request.args.get("host")
+cmd = "ping -c 1 " + host
+return os.popen(cmd).read()"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![CMDI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn python_subprocess_shell_true_is_reported() {
+        let findings = scan(
+            r#"host = request.args.get("host")
+cmd = f"ping -c 1 {host}"
+subprocess.run(cmd, shell=True, check=True)"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![CMDI]);
+    }
+
+    #[test]
+    fn python_argument_vector_without_shell_is_clean() {
+        let findings = scan(
+            r#"host = request.args.get("host")
+subprocess.run(["ping", "-c", "1", host], check=True)"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn python_shlex_quoted_value_is_clean() {
+        let findings = scan(
+            r#"host = shlex.quote(request.args.get("host"))
+cmd = "ping -c 1 " + host
+os.system(cmd)"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_request_value_reaching_exec_is_reported() {
+        let findings = scan(
+            r#"const target = req.query.host;
+const cmd = "ping -c 1 " + target;
+exec(cmd, (err, out) => res.send(out));"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![CMDI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn js_exec_file_argument_vector_is_clean() {
+        let findings = scan(
+            r#"const target = req.query.host;
+execFile("ping", ["-c", "1", target], (err, out) => res.send(out));"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_regex_exec_method_is_not_a_command_sink() {
+        let findings = scan(
+            r#"const target = req.query.host;
+const match = pattern.exec(target);"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_request_value_in_shell_process_builder_is_reported() {
+        let findings = scan(
+            r#"String host = request.getParameter("host");
+String cmd = "ping -c 1 " + host;
+Process p = new ProcessBuilder("sh", "-c", cmd).start();"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec![CMDI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn java_request_value_in_process_builder_argument_vector_is_clean() {
+        let findings = scan(
+            r#"String host = request.getParameter("host");
+Process p = new ProcessBuilder("ping", "-c", "1", host).start();"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn go_request_value_in_shell_command_is_reported() {
+        let findings = scan(
+            r#"host := r.URL.Query().Get("host")
+cmd := "ping -c 1 " + host
+out, err := exec.Command("sh", "-c", cmd).Output()"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec![CMDI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn go_argument_vector_command_is_clean() {
+        let findings = scan(
+            r#"host := r.URL.Query().Get("host")
+out, err := exec.Command("ping", "-c", "1", host).Output()"#,
+            "go",
+        );
+        assert!(findings.is_empty());
+    }
 }
 
 /// Find calls through local Python aliases bound directly to `hashlib.md5`.
@@ -2432,13 +2557,17 @@ fn flow_binding_regex(language: FlowLanguage) -> Option<Regex> {
 struct FlowSink {
     call: Regex,
     arguments: FlowArguments,
+    /// Optional whole-line condition checked against the raw code (string
+    /// literals included), e.g. `shell=True` or a `"sh", "-c"` prefix.
+    line_requires: Option<Regex>,
 }
 
 /// Maps a matched sink name to the argument positions that carry the
 /// dangerous value.
 type FlowArguments = fn(&str) -> Vec<usize>;
 
-/// Straight-line, same-file request flow shared by the SQL injection model.
+/// Straight-line, same-file request flow shared by the SQL injection and
+/// command injection models.
 ///
 /// Tracks request-input variables through direct aliases and string
 /// construction, drops taint when a variable is rebound to a sanitized or
@@ -2531,6 +2660,13 @@ fn request_flow_sink_lines(
         }
 
         let reaches_sink = sinks.iter().any(|sink| {
+            if sink
+                .line_requires
+                .as_ref()
+                .is_some_and(|required| !required.is_match(code))
+            {
+                return false;
+            }
             sink.call.captures_iter(&visible).any(|captures| {
                 let Some(whole) = captures.get(0) else {
                     return false;
@@ -2643,8 +2779,104 @@ fn sql_injection_sink_lines(content: &str, extension: &str) -> std::collections:
             Regex::new(pattern).ok().map(|call| FlowSink {
                 call,
                 arguments: *arguments,
+                line_requires: None,
             })
         })
         .collect();
     request_flow_sink_lines(content, language, &sinks, contains_numeric_conversion)
+}
+
+#[allow(clippy::items_after_test_module)]
+fn shell_command_argument(name: &str) -> Vec<usize> {
+    match name {
+        "Command" => vec![2],
+        "CommandContext" => vec![3],
+        _ => vec![2],
+    }
+}
+
+#[allow(clippy::items_after_test_module)]
+fn contains_command_sanitizer(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("shlex.quote(")
+        || lower.contains("pipes.quote(")
+        || contains_numeric_conversion(text)
+}
+
+/// Find OS command sinks whose command text is built from request input in
+/// the same file.
+///
+/// Sources and propagation match the SQL injection model. Sinks are calls that
+/// hand a command string to a shell: Python `os.system`/`os.popen`,
+/// `subprocess.getoutput`, and `subprocess` calls with `shell=True`; Node
+/// `child_process` `exec`/`execSync`; Java `Runtime.exec` and
+/// `ProcessBuilder("sh", "-c", ...)`; Go `exec.Command("sh", "-c", ...)`.
+/// Argument-vector process calls without a shell are not sinks.
+/// `shlex.quote` and numeric conversions stop the flow. Same-file and
+/// straight-line only; no interprocedural claim.
+#[allow(clippy::items_after_test_module)]
+fn command_injection_sink_lines(
+    content: &str,
+    extension: &str,
+) -> std::collections::HashSet<usize> {
+    let Some(language) = flow_language(extension) else {
+        return std::collections::HashSet::new();
+    };
+    let shell_prefix = r#""(?:/bin/)?(?:sh|bash|zsh)"\s*,\s*"-c"|"cmd(?:\.exe)?"\s*,\s*"/c""#;
+    let patterns: &[(&str, FlowArguments, Option<&str>)] = match language {
+        FlowLanguage::Python => &[
+            (r#"\bos\s*\.\s*(system|popen)\s*\("#, first_argument, None),
+            (
+                r#"\b(?:subprocess|commands)\s*\.\s*(getoutput|getstatusoutput)\s*\("#,
+                first_argument,
+                None,
+            ),
+            (
+                r#"\bsubprocess\s*\.\s*(run|call|check_call|check_output|Popen)\s*\("#,
+                first_argument,
+                Some(r#"\bshell\s*=\s*True\b"#),
+            ),
+        ],
+        FlowLanguage::JavaScript => &[
+            (r#"(?:^|[^.\w$])(exec|execSync)\s*\("#, first_argument, None),
+            (
+                r#"\b(?:child_process|childProcess|cp)\s*\.\s*(exec|execSync)\s*\("#,
+                first_argument,
+                None,
+            ),
+        ],
+        FlowLanguage::Java => &[
+            (
+                r#"\bRuntime\s*\.\s*getRuntime\s*\(\s*\)\s*\.\s*(exec)\s*\("#,
+                first_argument,
+                None,
+            ),
+            (
+                r#"\bnew\s+(ProcessBuilder)\s*\("#,
+                shell_command_argument,
+                Some(shell_prefix),
+            ),
+        ],
+        FlowLanguage::Go => &[(
+            r#"\bexec\s*\.\s*(Command|CommandContext)\s*\("#,
+            shell_command_argument,
+            Some(shell_prefix),
+        )],
+    };
+    let sinks: Vec<FlowSink> = patterns
+        .iter()
+        .filter_map(|(pattern, arguments, requires)| {
+            let call = Regex::new(pattern).ok()?;
+            let line_requires = match requires {
+                Some(required) => Some(Regex::new(required).ok()?),
+                None => None,
+            };
+            Some(FlowSink {
+                call,
+                arguments: *arguments,
+                line_requires,
+            })
+        })
+        .collect();
+    request_flow_sink_lines(content, language, &sinks, contains_command_sanitizer)
 }
