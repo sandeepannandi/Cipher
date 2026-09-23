@@ -480,8 +480,16 @@ mod tests {
 
     #[test]
     fn env_indirection_and_numeric_fields_are_safe() {
-        let src = "on: issues\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - env:\n          TITLE: ${{ github.event.issue.title }}\n        run: |\n          echo \"$TITLE\"\n          echo ${{ github.event.issue.number }}\n          # echo ${{ github.event.issue.title }}\n";
+        let src = "on: issues\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - env:\n          TITLE: ${{ github.event.issue.title }}\n        run: |\n          echo \"$TITLE\"\n          echo ${{ github.event.issue.number }}\n";
         assert!(scan(src).is_empty());
+    }
+
+    #[test]
+    fn expression_in_shell_comment_is_still_flagged() {
+        // GitHub expands ${{ }} before the shell runs, so a newline in the
+        // value escapes a shell comment.
+        let src = "on: issues\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          # ${{ github.event.issue.title }}\n          echo ok\n";
+        assert_eq!(scan(src), vec![(SCRIPT_INJECTION_TITLE.to_string(), 7)]);
     }
 
     #[test]
