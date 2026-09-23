@@ -154,6 +154,17 @@ cargo clippy --all-targets
 
 MIT — see [LICENSE](LICENSE).
 
+## GitHub Actions workflow checks
+
+`cipher-ai review` also checks GitHub Actions workflow files (YAML under `.github/workflows/`, or any YAML with top-level `on:` and `jobs:`). Checks are local to one workflow file:
+
+- **Untrusted checkout in a privileged workflow** (Critical, CWE-829): `pull_request_target` or `workflow_run` plus a checkout `ref`/`repository` pointing at the PR head, or `gh pr checkout` in a run step.
+- **Script injection** (High, CWE-94): `${{ }}` with attacker-controlled text (issue/PR/comment/review/discussion title or body, `head_ref`, commit messages and author names, `workflow_run.head_branch`) expanded inside `run:` or `actions/github-script` `script:`. Numeric fields such as `pull_request.number`, and values passed through `env:`, are not flagged.
+- **Unpinned third-party action** (Medium, CWE-829): `uses: owner/repo@ref` where `ref` is not a full 40-character commit SHA. Local `./` actions and GitHub-owned `actions/*` and `github/*` are not flagged.
+- **Write-all token permissions** (High, CWE-732) and **all secrets exposed** via `toJSON(secrets)` (High, CWE-200).
+
+A missing `permissions:` block is not flagged, because the repository's default token setting decides its effect.
+
 ## Repository policy
 
 Copy `.cipher-ai-policy.example.yml` to `.cipher-ai-policy.yml` to make review outcomes deterministic in CI. Policy evaluation uses the stable finding fingerprints already emitted in JSON and SARIF. Display flags such as `--max-findings` and `--min-severity` never weaken the policy gate.
