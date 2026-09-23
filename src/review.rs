@@ -394,6 +394,7 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     let js_path_traversal_sinks = js_path_traversal_sink_lines(&content, &ext);
     let python_path_traversal_sinks = python_path_traversal_sink_lines(&content, &ext);
     let java_path_traversal_sinks = java_path_traversal_sink_lines(&content, &ext);
+    let go_path_traversal_sinks = go_path_traversal_sink_lines(&content, &ext);
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
 
     for (line_num, line) in content.lines().enumerate() {
@@ -422,7 +423,8 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
                 || (pattern.name == "Path Traversal"
                     && (js_path_traversal_sinks.contains(&line_number)
                         || python_path_traversal_sinks.contains(&line_number)
-                        || java_path_traversal_sinks.contains(&line_number)))
+                        || java_path_traversal_sinks.contains(&line_number)
+                        || go_path_traversal_sinks.contains(&line_number)))
                 || (pattern.name == "Weak Hash Algorithm — MD5"
                     && python_md5_alias_calls.contains(&line_number));
             if !pattern_matches {
@@ -1676,6 +1678,28 @@ FileInputStream in = new FileInputStream(target);"#,
     }
 
     #[test]
+    fn go_request_path_reaching_read_file_is_reported() {
+        let findings = scan(
+            r#"requested := r.URL.Query().Get("file")
+target := filepath.Join("uploads", requested)
+data, err := os.ReadFile(target)"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec!["Path Traversal"]);
+    }
+
+    #[test]
+    fn go_base_sanitized_path_is_clean() {
+        let findings = scan(
+            r#"requested := filepath.Base(r.URL.Query().Get("file"))
+target := filepath.Join("uploads", requested)
+data, err := os.ReadFile(target)"#,
+            "go",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
     fn md5_function_call_is_still_reported() {
         let findings = scan(
             r#"return hashlib.md5(value.encode("utf-8")).hexdigest();"#,
@@ -1915,6 +1939,90 @@ fn contains_java_path_sanitizer(text: &str) -> bool {
     lower.contains(".getfilename(")
         || lower.contains("filenameutils.getname(")
         || lower.contains(".getname()")
+}
+
+/// Find Go filesystem sinks reached by a `net/http` request-path value.
+///
+/// This intentionally models only straight-line local bindings. It follows
+/// query, form, and URL path input through aliases, string construction, and
+/// `filepath.Join`/`path.Join`, but stops at `filepath.Base`/`path.Base`.
+/// `filepath.Clean` is not treated as a sanitizer because it keeps leading
+/// `../` segments. The narrow model does not claim interprocedural coverage.
+#[allow(clippy::items_after_test_module)]
+fn go_path_traversal_sink_lines(
+    content: &str,
+    extension: &str,
+) -> std::collections::HashSet<usize> {
+    if extension != "go" {
+        return std::collections::HashSet::new();
+    }
+
+    let Ok(source) = Regex::new(
+        r#"^\s*(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+string)?\s*(?::=|=)\s*(?:r|req|request)\s*\.\s*(?:URL\s*\.\s*Query\s*\(\s*\)\s*\.\s*Get\s*\(|FormValue\s*\(|PostFormValue\s*\(|URL\s*\.\s*Path\b)"#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(binding) = Regex::new(
+        r#"^\s*(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)?(?:\s+[A-Za-z_][A-Za-z0-9_.]*)?\s*(?::=|=)\s*([^=].*?)\s*$"#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(sink) = Regex::new(
+        r#"\b(?:os\s*\.\s*(?:Open|OpenFile|ReadFile|WriteFile|Create)|ioutil\s*\.\s*(?:ReadFile|WriteFile)|http\s*\.\s*ServeFile)\s*\("#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+
+    let mut tainted = std::collections::HashSet::new();
+    let mut sink_lines = std::collections::HashSet::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let code = line.trim();
+        if code.is_empty()
+            || code.starts_with("//")
+            || code.starts_with("/*")
+            || code.starts_with('*')
+        {
+            continue;
+        }
+
+        if let Some(name) = source
+            .captures(code)
+            .and_then(|captures| captures.get(1))
+            .map(|capture| capture.as_str().to_string())
+        {
+            if !contains_go_path_sanitizer(code) {
+                tainted.insert(name);
+            }
+            continue;
+        }
+
+        if let Some(captures) = binding.captures(code) {
+            let lhs = captures.get(1).map(|capture| capture.as_str());
+            let rhs = captures
+                .get(2)
+                .map(|capture| capture.as_str())
+                .unwrap_or("");
+            let derives_from_taint = tainted.iter().any(|name| identifier_in(rhs, name));
+            if derives_from_taint && !contains_go_path_sanitizer(rhs) {
+                if let Some(lhs) = lhs {
+                    tainted.insert(lhs.to_string());
+                }
+            }
+        }
+
+        if sink.is_match(code)
+            && tainted.iter().any(|name| identifier_in(code, name))
+            && !contains_go_path_sanitizer(code)
+        {
+            sink_lines.insert(line_index + 1);
+        }
+    }
+    sink_lines
+}
+
+#[allow(clippy::items_after_test_module)]
+fn contains_go_path_sanitizer(text: &str) -> bool {
+    text.contains("filepath.Base(") || text.contains("path.Base(")
 }
 
 #[allow(clippy::items_after_test_module)]
