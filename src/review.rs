@@ -100,7 +100,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "File operations using user-controlled paths can allow directory traversal attacks.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A01BrokenAccessControl),
         r#"(?i)(?:read_to_string|read_file|File::open|fs::read|fs::write|file_get_contents)\s*\([^)]*\$\{|(?:readFile|writeFile)\s*\([^)]*\+"#,
-        &["rs", "py", "js", "ts", "go", "rb", "php"],
+        &["rs", "py", "js", "ts", "go", "rb", "php", "java"],
         "Validate and sanitize file paths. Use allowlists for permitted paths and reject '..' sequences."
     );
 
@@ -393,6 +393,7 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     };
     let js_path_traversal_sinks = js_path_traversal_sink_lines(&content, &ext);
     let python_path_traversal_sinks = python_path_traversal_sink_lines(&content, &ext);
+    let java_path_traversal_sinks = java_path_traversal_sink_lines(&content, &ext);
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
 
     for (line_num, line) in content.lines().enumerate() {
@@ -420,7 +421,8 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
                 || (pattern.name == "JWT Secret Hardcoded" && contextual_jwt_secret)
                 || (pattern.name == "Path Traversal"
                     && (js_path_traversal_sinks.contains(&line_number)
-                        || python_path_traversal_sinks.contains(&line_number)))
+                        || python_path_traversal_sinks.contains(&line_number)
+                        || java_path_traversal_sinks.contains(&line_number)))
                 || (pattern.name == "Weak Hash Algorithm — MD5"
                     && python_md5_alias_calls.contains(&line_number));
             if !pattern_matches {
@@ -1652,6 +1654,28 @@ with open(target, "rb") as handle:
     }
 
     #[test]
+    fn java_request_path_reaching_file_stream_is_reported() {
+        let findings = scan(
+            r#"String requested = request.getParameter("file");
+File target = new File("uploads", requested);
+FileInputStream in = new FileInputStream(target);"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec!["Path Traversal"]);
+    }
+
+    #[test]
+    fn java_file_name_sanitized_path_is_clean() {
+        let findings = scan(
+            r#"String requested = Paths.get(request.getParameter("file")).getFileName().toString();
+File target = new File("uploads", requested);
+FileInputStream in = new FileInputStream(target);"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
     fn md5_function_call_is_still_reported() {
         let findings = scan(
             r#"return hashlib.md5(value.encode("utf-8")).hexdigest();"#,
@@ -1804,6 +1828,93 @@ fn python_path_traversal_sink_lines(
         }
     }
     sink_lines
+}
+
+/// Find Java filesystem sinks reached by a servlet request-path value.
+///
+/// This intentionally models only straight-line local bindings. It follows
+/// `getParameter`/`getHeader`/`getPathInfo` input through aliases, string
+/// construction, `new File`, `Paths.get`/`Path.of`, and `resolve`, but stops at
+/// file-name sanitizers such as `getFileName()`. The narrow model does not claim
+/// interprocedural coverage.
+#[allow(clippy::items_after_test_module)]
+fn java_path_traversal_sink_lines(
+    content: &str,
+    extension: &str,
+) -> std::collections::HashSet<usize> {
+    if extension != "java" {
+        return std::collections::HashSet::new();
+    }
+
+    let Ok(source) = Regex::new(
+        r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo)\s*\("#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(binding) = Regex::new(
+        r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^=].*?);?\s*$"#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(sink) = Regex::new(
+        r#"(?i)\bnew\s+(?:FileInputStream|FileOutputStream|FileReader|FileWriter|RandomAccessFile)\s*\(|\bFiles\s*\.\s*(?:readAllBytes|readString|readAllLines|lines|newInputStream|newBufferedReader|newBufferedWriter|newOutputStream|write|writeString)\s*\("#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+
+    let mut tainted = std::collections::HashSet::new();
+    let mut sink_lines = std::collections::HashSet::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let code = line.trim();
+        if code.is_empty()
+            || code.starts_with("//")
+            || code.starts_with("/*")
+            || code.starts_with('*')
+        {
+            continue;
+        }
+
+        if let Some(name) = source
+            .captures(code)
+            .and_then(|captures| captures.get(1))
+            .map(|capture| capture.as_str().to_string())
+        {
+            if !contains_java_path_sanitizer(code) {
+                tainted.insert(name);
+            }
+            continue;
+        }
+
+        if let Some(captures) = binding.captures(code) {
+            let lhs = captures.get(1).map(|capture| capture.as_str());
+            let rhs = captures
+                .get(2)
+                .map(|capture| capture.as_str())
+                .unwrap_or("");
+            let derives_from_taint = tainted.iter().any(|name| identifier_in(rhs, name));
+            if derives_from_taint && !contains_java_path_sanitizer(rhs) {
+                if let Some(lhs) = lhs {
+                    tainted.insert(lhs.to_string());
+                }
+            }
+        }
+
+        if sink.is_match(code)
+            && tainted.iter().any(|name| identifier_in(code, name))
+            && !contains_java_path_sanitizer(code)
+        {
+            sink_lines.insert(line_index + 1);
+        }
+    }
+    sink_lines
+}
+
+#[allow(clippy::items_after_test_module)]
+fn contains_java_path_sanitizer(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains(".getfilename(")
+        || lower.contains("filenameutils.getname(")
+        || lower.contains(".getname()")
 }
 
 #[allow(clippy::items_after_test_module)]
