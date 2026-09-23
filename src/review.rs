@@ -1,5 +1,5 @@
 use crate::finding::{
-    stable_fingerprint, stable_rule_id, Confidence, Finding, FindingReport, FindingType,
+    stable_fingerprints, stable_rule_id, Confidence, Finding, FindingReport, FindingType,
     OwaspCategory, RemediationEffort, Severity,
 };
 use crate::groq::GroqClient;
@@ -1258,10 +1258,12 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
         });
     }
 
+    let fingerprints = stable_fingerprints(&report.findings);
     let results: Vec<SarifResult> = report
         .findings
         .iter()
-        .map(|f| {
+        .zip(fingerprints)
+        .map(|(f, fingerprint)| {
             let file_uri = f
                 .file_path
                 .as_ref()
@@ -1305,7 +1307,7 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
                     },
                 }],
                 partial_fingerprints: Some(SarifFingerprint {
-                    primary_location_line_hash: stable_fingerprint(f),
+                    primary_location_line_hash: fingerprint,
                 }),
             }
         })
