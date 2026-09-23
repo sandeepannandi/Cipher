@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The watch state (.cipher-ai/watch-state.json) records what was found in
       # the previous scan. Fresh checkouts would reset the baseline every night,
@@ -25,7 +25,7 @@ jobs:
       # every run (run_id) while restore-keys falls back to the most recent
       # previous run — otherwise the baseline would be pinned to run #1 forever.
       - name: Cache watch state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cipher-ai/watch-state.json
           key: cipherai-watch-${{ github.run_id }}
@@ -57,7 +57,7 @@ jobs:
 
       - name: Retain SARIF artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cipher-ai-security-watch-sarif-${{ github.run_id }}
           path: .cipher-ai-results/security-watch.sarif

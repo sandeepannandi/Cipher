@@ -18,14 +18,14 @@ jobs:
     name: Build and validate runner
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Build Cipher
         run: cargo build --release --locked
       - name: Run benchmark unit tests
         run: python3 -m unittest discover -s benchmarks/accuracy -p 'test_*.py'
       - name: Upload Cipher binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cipher-accuracy-binary
           path: target/release/cipher-ai
@@ -36,8 +36,8 @@ jobs:
     needs: build-runner
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: cipher-accuracy-binary
           path: target/release
@@ -46,7 +46,7 @@ jobs:
         run: python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai --manifest benchmarks/accuracy/manifest.json --output /tmp/focused.json
       - name: Upload focused result
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: accuracy-focused-result
           path: /tmp/focused.json
@@ -57,8 +57,8 @@ jobs:
     needs: build-runner
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: cipher-accuracy-binary
           path: target/release
@@ -67,7 +67,7 @@ jobs:
         run: python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai --manifest benchmarks/accuracy/real_projects_manifest.json --output /tmp/real-projects.json
       - name: Upload real-project result
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: accuracy-real-projects-result
           path: /tmp/real-projects.json
@@ -78,8 +78,8 @@ jobs:
     needs: build-runner
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: cipher-accuracy-binary
           path: target/release
@@ -88,7 +88,7 @@ jobs:
         run: python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai --manifest benchmarks/accuracy/mutations_manifest.json --output /tmp/mutations.json
       - name: Upload mutation result
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: accuracy-mutations-result
           path: /tmp/mutations.json
@@ -100,9 +100,9 @@ jobs:
     needs: [focused-corpus, real-projects, mutations]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Download suite results
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: accuracy-*-result
           path: /tmp/accuracy-results
@@ -116,7 +116,7 @@ jobs:
             --output /tmp/accuracy-report.md
           cat /tmp/accuracy-report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cipher-accuracy-report
           path: /tmp/accuracy-report.md
