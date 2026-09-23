@@ -461,7 +461,15 @@ impl FindingReport {
 
     /// Explicit versioned output projection for a whole report.
     pub fn to_envelope(&self) -> Vec<FindingEnvelope> {
-        self.findings.iter().map(Finding::to_envelope).collect()
+        let fingerprints = stable_fingerprints(&self.findings);
+        self.findings
+            .iter()
+            .zip(fingerprints)
+            .map(|(f, fingerprint)| FindingEnvelope {
+                fingerprint,
+                ..Finding::to_envelope(f)
+            })
+            .collect()
     }
 
     /// Sort findings by risk score (highest first)
@@ -625,16 +633,68 @@ pub fn stable_rule_id(f: &Finding) -> String {
 
 /// Deterministic fingerprint for a finding, suitable for change detection and
 /// partial SARIF fingerprints without tying to a random UUID or mutable prose.
+///
+/// When the finding carries the flagged source line (`code_snippet`), the
+/// fingerprint is keyed on that line's whitespace-normalized content instead
+/// of its line number, so unrelated edits above a finding do not re-key it.
+/// Findings without a snippet fall back to the line number.
 pub fn stable_fingerprint(f: &Finding) -> String {
-    use sha2::{Digest, Sha256};
+    fingerprint_with_ordinal(f, 0)
+}
 
-    let normalized = format!(
+/// Fingerprints for a whole finding set, in input order.
+///
+/// Identical findings (same rule, file, type and normalized line) would share
+/// one fingerprint. To keep a policy baseline from silently covering a new
+/// copy of an accepted finding, every repeat after the first (ordered by line)
+/// gets its own ordinal-salted fingerprint. The first occurrence always equals
+/// `stable_fingerprint`.
+pub fn stable_fingerprints(findings: &[Finding]) -> Vec<String> {
+    use std::collections::HashMap;
+
+    let keys: Vec<String> = findings.iter().map(fingerprint_input).collect();
+    let mut order: Vec<usize> = (0..findings.len()).collect();
+    order.sort_by_key(|&i| (keys[i].clone(), findings[i].line_number.unwrap_or(0), i));
+
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    let mut ordinals = vec![0usize; findings.len()];
+    for i in order {
+        let count = seen.entry(keys[i].as_str()).or_insert(0);
+        ordinals[i] = *count;
+        *count += 1;
+    }
+    findings
+        .iter()
+        .zip(ordinals)
+        .map(|(f, ordinal)| fingerprint_with_ordinal(f, ordinal))
+        .collect()
+}
+
+fn fingerprint_input(f: &Finding) -> String {
+    let location = match f.code_snippet.as_deref().map(normalize_snippet) {
+        Some(snippet) if !snippet.is_empty() => format!("code:{snippet}"),
+        _ => f.line_number.map(|ln| ln.max(1)).unwrap_or(1).to_string(),
+    };
+    format!(
         "{}|{}|{}|{}",
         stable_rule_id(f),
         f.file_path.as_deref().unwrap_or(""),
-        f.line_number.map(|ln| ln.max(1)).unwrap_or(1),
+        location,
         f.finding_type
-    );
+    )
+}
+
+fn normalize_snippet(snippet: &str) -> String {
+    snippet.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn fingerprint_with_ordinal(f: &Finding, ordinal: usize) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut normalized = fingerprint_input(f);
+    if ordinal > 0 {
+        normalized.push_str(&format!("|#{ordinal}"));
+    }
     let mut hasher = Sha256::new();
     hasher.update(normalized.as_bytes());
     let digest = hasher.finalize();
@@ -1107,6 +1167,83 @@ mod tests {
 
         assert_eq!(stable_rule_id(&a), stable_rule_id(&b));
         assert_eq!(stable_fingerprint(&a), stable_fingerprint(&b));
+    }
+
+    #[test]
+    fn test_fingerprint_survives_line_shift_but_not_code_change() {
+        let a = Finding::new(
+            FindingType::Vulnerability,
+            "Path Traversal",
+            "Untrusted input reaches a file read.",
+            Severity::High,
+            Confidence::Medium,
+            "security-review",
+        )
+        .at("src/files.rs", 12)
+        .with_code("    let body = fs::read(dir + &name)?;")
+        .with_cwe("CWE-22");
+
+        let mut moved = a.clone();
+        moved.line_number = Some(240);
+        moved.code_snippet = Some("let body  = fs::read(dir + &name)?;\t".to_string());
+        assert_eq!(stable_fingerprint(&a), stable_fingerprint(&moved));
+
+        let mut changed = a.clone();
+        changed.code_snippet = Some("let body = fs::read(dir + &other)?;".to_string());
+        assert_ne!(stable_fingerprint(&a), stable_fingerprint(&changed));
+
+        let mut other_file = a.clone();
+        other_file.file_path = Some("src/other.rs".to_string());
+        assert_ne!(stable_fingerprint(&a), stable_fingerprint(&other_file));
+    }
+
+    #[test]
+    fn test_fingerprint_without_snippet_still_uses_line() {
+        let a = Finding::new(
+            FindingType::Injection,
+            "SQL Injection",
+            "AI finding without a snippet.",
+            Severity::High,
+            Confidence::High,
+            "ai-review",
+        )
+        .at("src/app.py", 10)
+        .with_cwe("CWE-89");
+        let mut b = a.clone();
+        b.line_number = Some(11);
+        assert_ne!(stable_fingerprint(&a), stable_fingerprint(&b));
+    }
+
+    #[test]
+    fn test_stable_fingerprints_keep_duplicates_distinct() {
+        let base = Finding::new(
+            FindingType::Vulnerability,
+            "Path Traversal",
+            "Untrusted input reaches a file read.",
+            Severity::High,
+            Confidence::Medium,
+            "security-review",
+        )
+        .at("src/files.rs", 20)
+        .with_code("fs::read(dir + &name)")
+        .with_cwe("CWE-22");
+        let mut earlier = base.clone();
+        earlier.line_number = Some(5);
+        let mut unrelated = base.clone();
+        unrelated.code_snippet = Some("fs::read(dir + &other)".to_string());
+
+        let fps = stable_fingerprints(&[base.clone(), unrelated.clone(), earlier.clone()]);
+        // The earliest copy by line keeps the plain fingerprint.
+        assert_eq!(fps[2], stable_fingerprint(&earlier));
+        assert_ne!(fps[0], fps[2]);
+        assert_eq!(fps[1], stable_fingerprint(&unrelated));
+        let unique: std::collections::BTreeSet<_> = fps.iter().collect();
+        assert_eq!(unique.len(), 3);
+        // Unique findings match the single-finding form.
+        assert_eq!(
+            stable_fingerprints(&[base.clone()]),
+            vec![stable_fingerprint(&base)]
+        );
     }
 
     #[test]
