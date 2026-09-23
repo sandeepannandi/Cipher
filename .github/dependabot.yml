@@ -1,0 +1,16 @@
+# Keep the SHA-pinned GitHub Actions in .github/workflows current.
+# Dependabot updates the pinned commit SHA and its version comment together.
+# Cargo is intentionally not listed: Cargo.lock is committed and CI is pinned to
+# Rust 1.88.0, so routine crate bumps could raise the required Rust version.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
