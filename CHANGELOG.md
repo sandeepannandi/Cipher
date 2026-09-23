@@ -2,12 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub Actions workflow checks** — `review` now scans workflow YAML for untrusted PR-head checkout under `pull_request_target`/`workflow_run`, script injection from attacker-controlled `${{ github.event.* }}` text in `run:`/`script:`, third-party actions not pinned to a commit SHA, `permissions: write-all`, and `toJSON(secrets)`. Nine paired focused-corpus cases (5 vulnerable, 4 clean controls). `src/workflow.rs`, `src/review.rs`
+
 ### Changed
 
 - **Position-independent policy fingerprints** — `stable_fingerprint` now keys on rule, file, finding type and the whitespace-normalized flagged line instead of the line number, so unrelated edits no longer re-key accepted baseline findings. Repeated identical findings in one file get ordinal-salted fingerprints so a baseline entry cannot cover a new copy; snippet-less findings keep the line-based key. The committed `.cipher-ai-policy.yml` baseline was regenerated, dropping stale entries. One-time effect: existing baselines, suppressions and GitHub Code Scanning alerts re-key once. `src/finding.rs`, `src/policy.rs`, `src/review.rs`
 
 ### Fixed
 
+- **`.github/` was never scanned** — the `.git` exclusion matched by substring, so `.github/workflows` (and `.gitlab-ci.yml`) were silently skipped. `.git` is now matched as a whole path component. `src/scan.rs`
 - **`pentest --blackbox` never checkpointed `session.json`** — black-box runs opened a workspace but never saved the session, so `--point-retest` and `--resume` could not find black-box/browser-fuzz findings. The black-box path now persists the full session (stage, guided proofs incl. browser-fuzz specs, findings, summary) before writing the report
 - **`pentest --point-retest` of a browser-fuzz proof replayed raw HTTP** — which cannot observe in-browser marker execution, so a sanitizing fix could look `FIXED` while the payload still executed. Browser-fuzz proofs now persist their rendered page + input (`ProofSpec.browser`, serde-back-compatible) and re-test by **re-driving the exact form in headless Chrome** (`exploit::replay_browser_fuzz`): `STILL VULNERABLE` when the marker executes, `FIXED` when it does not, and an explicit "NOT verified as fixed" when no drivable browser exists. The WSL+Windows-Chrome skip path also prints an actionable install/`CIPHER_AI_CHROME` hint (`cdp::browser_unavailable_hint`)
 - **TUI `postinstall.js` release version** — binary download version is now derived from `tui/package.json` (was hardcoded to the stale `v0.1.0`, which had no matching release assets), so `npm install` fetches a real binary and stays in sync with future releases
