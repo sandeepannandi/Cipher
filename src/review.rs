@@ -399,6 +399,7 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     let java_path_traversal_sinks = java_path_traversal_sink_lines(&content, &ext);
     let go_path_traversal_sinks = go_path_traversal_sink_lines(&content, &ext);
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
+    let sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
 
     for (line_num, line) in content.lines().enumerate() {
         let line_number = line_num + 1;
@@ -429,7 +430,9 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
                         || java_path_traversal_sinks.contains(&line_number)
                         || go_path_traversal_sinks.contains(&line_number)))
                 || (pattern.name == "Weak Hash Algorithm — MD5"
-                    && python_md5_alias_calls.contains(&line_number));
+                    && python_md5_alias_calls.contains(&line_number))
+                || (pattern.name == "SQL Injection — String Concatenation"
+                    && sql_injection_sinks.contains(&line_number));
             if !pattern_matches {
                 continue;
             }
@@ -1748,6 +1751,135 @@ return algorithm(payload).hexdigest()"#,
         );
         assert!(findings.is_empty());
     }
+
+    const SQLI: &str = "SQL Injection — String Concatenation";
+
+    #[test]
+    fn python_request_value_built_into_executed_query_is_reported() {
+        let findings = scan(
+            r#"user_id = request.args.get("id")
+query = f"SELECT * FROM users WHERE id = '{user_id}'"
+cursor.execute(query)"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn python_parameterized_query_with_request_value_is_clean() {
+        let findings = scan(
+            r#"user_id = request.args.get("id")
+query = "SELECT * FROM users WHERE id = %s"
+cursor.execute(query, (user_id,))"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn python_int_converted_request_value_is_clean() {
+        let findings = scan(
+            r#"user_id = request.args.get("id")
+user_id = int(user_id)
+query = "SELECT * FROM users WHERE id = " + str(user_id)
+cursor.execute(query)"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn python_identifier_only_inside_plain_string_is_clean() {
+        let findings = scan(
+            r#"name = request.args.get("name")
+query = "SELECT name FROM users"
+cursor.execute(query)"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_destructured_request_value_in_template_query_is_reported() {
+        let findings = scan(
+            r#"const { name } = req.query;
+const sql = `SELECT * FROM products WHERE name = '${name}'`;
+const rows = db.query(sql);"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn js_placeholder_query_with_request_value_is_clean() {
+        let findings = scan(
+            r#"const name = req.query.name;
+const sql = "SELECT * FROM products WHERE name = ?";
+const rows = db.query(sql, [name]);"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_request_value_concatenated_into_statement_is_reported() {
+        let findings = scan(
+            r#"String name = request.getParameter("name");
+String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+ResultSet rs = stmt.executeQuery(sql);"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn java_prepared_statement_bind_value_is_clean() {
+        let findings = scan(
+            r#"String name = request.getParameter("name");
+PreparedStatement ps = conn.prepareStatement("SELECT * FROM users WHERE name = ?");
+ps.setString(1, name);
+ResultSet rs = ps.executeQuery();"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn go_sprintf_request_value_in_query_is_reported() {
+        let findings = scan(
+            r#"name := r.URL.Query().Get("name")
+query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+rows, err := db.QueryContext(ctx, query)"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn go_placeholder_query_with_request_value_is_clean() {
+        let findings = scan(
+            r#"name := r.URL.Query().Get("name")
+rows, err := db.QueryContext(ctx, "SELECT * FROM users WHERE name = $1", name)"#,
+            "go",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn go_atoi_converted_request_value_is_clean() {
+        let findings = scan(
+            r#"raw := r.URL.Query().Get("id")
+id, err := strconv.Atoi(raw)
+query := fmt.Sprintf("SELECT * FROM users WHERE id = %d", id)
+rows, err := db.Query(query)"#,
+            "go",
+        );
+        assert!(findings.is_empty());
+    }
 }
 
 /// Find calls through local Python aliases bound directly to `hashlib.md5`.
@@ -2129,4 +2261,390 @@ fn js_path_traversal_sink_lines(
 fn identifier_in(text: &str, identifier: &str) -> bool {
     Regex::new(&format!(r"\b{}\b", regex::escape(identifier)))
         .is_ok_and(|reference| reference.is_match(text))
+}
+
+/// Language family for the shared same-file request-flow engine.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FlowLanguage {
+    JavaScript,
+    Python,
+    Java,
+    Go,
+}
+
+#[allow(clippy::items_after_test_module)]
+fn flow_language(extension: &str) -> Option<FlowLanguage> {
+    match extension {
+        "js" | "ts" => Some(FlowLanguage::JavaScript),
+        "py" => Some(FlowLanguage::Python),
+        "java" => Some(FlowLanguage::Java),
+        "go" => Some(FlowLanguage::Go),
+        _ => None,
+    }
+}
+
+/// Blank out the contents of plain string literals so identifiers that only
+/// appear inside quoted text are not mistaken for data flow. Interpolated
+/// parts (`${...}` in JS template literals, `{...}` in Python f-strings) are
+/// kept because they do carry values into the string.
+#[allow(clippy::items_after_test_module)]
+fn blank_plain_strings(text: &str, language: FlowLanguage) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let is_quote = c == '"'
+            || c == '\''
+            || (c == '`' && matches!(language, FlowLanguage::JavaScript | FlowLanguage::Go));
+        if !is_quote {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let python_fstring = language == FlowLanguage::Python
+            && i > 0
+            && matches!(chars[i - 1], 'f' | 'F')
+            && (i < 2
+                || !(chars[i - 2].is_ascii_alphanumeric() || chars[i - 2] == '_')
+                || matches!(chars[i - 2], 'r' | 'R'));
+        let js_template = language == FlowLanguage::JavaScript && c == '`';
+        out.push(c);
+        i += 1;
+        let mut depth = 0usize;
+        while i < chars.len() {
+            let ch = chars[i];
+            if ch == '\\' && c != '`' {
+                out.push(' ');
+                i += 1;
+                if i < chars.len() {
+                    out.push(' ');
+                    i += 1;
+                }
+                continue;
+            }
+            if depth == 0 && ch == c {
+                break;
+            }
+            let opens = (python_fstring && ch == '{')
+                || (js_template && ch == '$' && chars.get(i + 1) == Some(&'{'));
+            if opens {
+                if js_template {
+                    out.push(' ');
+                    i += 1;
+                }
+                depth += 1;
+                out.push(' ');
+                i += 1;
+                continue;
+            }
+            if depth > 0 && ch == '}' {
+                depth -= 1;
+                out.push(' ');
+                i += 1;
+                continue;
+            }
+            out.push(if depth > 0 { ch } else { ' ' });
+            i += 1;
+        }
+        if i < chars.len() {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Split the argument list of the call whose opening parenthesis is at
+/// `open` (a byte index into `text`) into top-level arguments.
+#[allow(clippy::items_after_test_module)]
+fn call_arguments(text: &str, open: usize) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    for ch in text[open + 1..].chars() {
+        match ch {
+            '(' | '[' | '{' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' | ']' | '}' if depth == 0 => {
+                args.push(current.trim().to_string());
+                return args;
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                args.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    args.push(current.trim().to_string());
+    args
+}
+
+/// Request-input sources for each language, matching the ones proven in the
+/// path-traversal flow models.
+#[allow(clippy::items_after_test_module)]
+fn flow_source_regex(language: FlowLanguage) -> Option<Regex> {
+    let pattern = match language {
+        FlowLanguage::JavaScript => {
+            r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#
+        }
+        FlowLanguage::Python => {
+            r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:request\.(?:args|form|values|GET|POST)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#
+        }
+        FlowLanguage::Java => {
+            r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo)\s*\("#
+        }
+        FlowLanguage::Go => {
+            r#"^\s*(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+string)?\s*(?::=|=)\s*(?:r|req|request)\s*\.\s*(?:URL\s*\.\s*Query\s*\(\s*\)\s*\.\s*Get\s*\(|FormValue\s*\(|PostFormValue\s*\(|URL\s*\.\s*Path\b)"#
+        }
+    };
+    Regex::new(pattern).ok()
+}
+
+/// Plain local bindings (`lhs = rhs`) for each language.
+#[allow(clippy::items_after_test_module)]
+fn flow_binding_regex(language: FlowLanguage) -> Option<Regex> {
+    let pattern = match language {
+        FlowLanguage::JavaScript => {
+            r#"^\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([^=].*?);?\s*$"#
+        }
+        FlowLanguage::Python => r#"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^=].*?)\s*$"#,
+        FlowLanguage::Java => {
+            r#"^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^=].*?);?\s*$"#
+        }
+        FlowLanguage::Go => {
+            r#"^\s*(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)?(?:\s+[A-Za-z_][A-Za-z0-9_.]*)?\s*(?::=|=)\s*([^=].*?)\s*$"#
+        }
+    };
+    Regex::new(pattern).ok()
+}
+
+/// A sink for the shared flow engine: a call pattern whose match ends at the
+/// call's opening parenthesis, and which argument positions carry the
+/// dangerous value.
+struct FlowSink {
+    call: Regex,
+    arguments: FlowArguments,
+}
+
+/// Maps a matched sink name to the argument positions that carry the
+/// dangerous value.
+type FlowArguments = fn(&str) -> Vec<usize>;
+
+/// Straight-line, same-file request flow shared by the SQL injection model.
+///
+/// Tracks request-input variables through direct aliases and string
+/// construction, drops taint when a variable is rebound to a sanitized or
+/// untainted value, and reports a sink line only when a tainted identifier
+/// appears in one of the sink's dangerous argument positions. Plain string
+/// literal contents are ignored so text that merely looks like a variable
+/// name does not count. This does not follow function calls, returns,
+/// branches, or other files.
+#[allow(clippy::items_after_test_module)]
+fn request_flow_sink_lines(
+    content: &str,
+    language: FlowLanguage,
+    sinks: &[FlowSink],
+    sanitized: fn(&str) -> bool,
+) -> std::collections::HashSet<usize> {
+    let mut sink_lines = std::collections::HashSet::new();
+    let (Some(source), Some(binding)) = (flow_source_regex(language), flow_binding_regex(language))
+    else {
+        return sink_lines;
+    };
+    let destructure = Regex::new(
+        r#"^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:req|request)\s*\.\s*(?:params|query|body)\s*;?\s*$"#,
+    )
+    .ok();
+
+    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let raw = if language == FlowLanguage::Python {
+            line.split('#').next().unwrap_or("")
+        } else {
+            line
+        };
+        let code = raw.trim();
+        if code.is_empty()
+            || code.starts_with("//")
+            || code.starts_with("/*")
+            || code.starts_with('*')
+        {
+            continue;
+        }
+
+        if language == FlowLanguage::JavaScript {
+            if let Some(names) = destructure
+                .as_ref()
+                .and_then(|re| re.captures(code))
+                .and_then(|captures| captures.get(1))
+            {
+                for part in names.as_str().split(',') {
+                    let local = part.split('=').next().unwrap_or("");
+                    let local = local.rsplit(':').next().unwrap_or("").trim();
+                    if !local.is_empty()
+                        && local
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+                    {
+                        tainted.insert(local.to_string());
+                    }
+                }
+                continue;
+            }
+        }
+
+        if let Some(name) = source
+            .captures(code)
+            .and_then(|captures| captures.get(1))
+            .map(|capture| capture.as_str().to_string())
+        {
+            if sanitized(code) {
+                tainted.remove(&name);
+            } else {
+                tainted.insert(name);
+            }
+            continue;
+        }
+
+        let visible = blank_plain_strings(code, language);
+        if let Some(captures) = binding.captures(&visible) {
+            if let (Some(lhs), Some(rhs)) = (captures.get(1), captures.get(2)) {
+                let rhs = rhs.as_str();
+                let derives = tainted.iter().any(|name| identifier_in(rhs, name));
+                if derives && !sanitized(rhs) {
+                    tainted.insert(lhs.as_str().to_string());
+                } else {
+                    tainted.remove(lhs.as_str());
+                }
+            }
+        }
+        if tainted.is_empty() {
+            continue;
+        }
+
+        let reaches_sink = sinks.iter().any(|sink| {
+            sink.call.captures_iter(&visible).any(|captures| {
+                let Some(whole) = captures.get(0) else {
+                    return false;
+                };
+                let name = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+                let args = call_arguments(&visible, whole.end() - 1);
+                (sink.arguments)(name).into_iter().any(|position| {
+                    args.get(position).is_some_and(|arg| {
+                        !sanitized(arg) && tainted.iter().any(|name| identifier_in(arg, name))
+                    })
+                })
+            })
+        });
+        if reaches_sink {
+            sink_lines.insert(line_index + 1);
+        }
+    }
+    sink_lines
+}
+
+#[allow(clippy::items_after_test_module)]
+fn first_argument(_name: &str) -> Vec<usize> {
+    vec![0]
+}
+
+#[allow(clippy::items_after_test_module)]
+fn go_sql_query_argument(name: &str) -> Vec<usize> {
+    if name.ends_with("Context") {
+        vec![1]
+    } else {
+        vec![0]
+    }
+}
+
+#[allow(clippy::items_after_test_module)]
+fn contains_numeric_conversion(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "int(",
+        "float(",
+        "number(",
+        "parseint(",
+        "parsefloat(",
+        "integer.parseint(",
+        "integer.valueof(",
+        "long.parselong(",
+        "long.valueof(",
+        "uuid.fromstring(",
+        "strconv.atoi(",
+        "strconv.parseint(",
+        "strconv.parseuint(",
+        "strconv.parsefloat(",
+    ]
+    .iter()
+    .any(|marker| {
+        lower.match_indices(marker).any(|(index, _)| {
+            index == 0 || {
+                let before = lower.as_bytes()[index - 1];
+                !(before.is_ascii_alphanumeric() || before == b'_')
+            }
+        })
+    })
+}
+
+/// Find SQL query sinks whose query argument is built from request input in
+/// the same file.
+///
+/// Sources are the request inputs used by the path-traversal models (plus JS
+/// destructuring from `req.query`/`req.body`/`req.params`). Taint follows
+/// aliases and string construction (concatenation, template literals,
+/// f-strings, `format`/`String.format`/`fmt.Sprintf`) and is stopped by
+/// numeric conversions. A tainted value passed only as a bind parameter of a
+/// parameterized query is not reported. The model is same-file and
+/// straight-line only; it makes no interprocedural claim.
+#[allow(clippy::items_after_test_module)]
+fn sql_injection_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let Some(language) = flow_language(extension) else {
+        return std::collections::HashSet::new();
+    };
+    let patterns: &[(&str, FlowArguments)] = match language {
+        FlowLanguage::Python => &[
+            (
+                r#"\b[A-Za-z_][A-Za-z0-9_]*\s*\.\s*(execute|executemany|executescript)\s*\("#,
+                first_argument,
+            ),
+            (r#"\.\s*objects\s*\.\s*(raw)\s*\("#, first_argument),
+        ],
+        FlowLanguage::JavaScript => &[(
+            r#"\b(?:db|conn|connection|pool|client|knex|sequelize|database|sql|tx|trx)\s*\.\s*(query|execute|prepare|exec|raw)\s*\("#,
+            first_argument,
+        )],
+        FlowLanguage::Java => &[
+            (
+                r#"\.\s*(executeQuery|executeUpdate|executeLargeUpdate|execute|addBatch|prepareStatement|prepareCall|create(?:Native|SQL)?Query)\s*\("#,
+                first_argument,
+            ),
+            (
+                r#"\b[A-Za-z_]*[Jj]dbc[Tt]emplate\s*\.\s*(query[A-Za-z]*|update|execute)\s*\("#,
+                first_argument,
+            ),
+        ],
+        FlowLanguage::Go => &[(
+            r#"\b[A-Za-z_][A-Za-z0-9_]*\s*\.\s*(Query|QueryRow|QueryContext|QueryRowContext|Exec|ExecContext|Prepare|PrepareContext)\s*\("#,
+            go_sql_query_argument,
+        )],
+    };
+    let sinks: Vec<FlowSink> = patterns
+        .iter()
+        .filter_map(|(pattern, arguments)| {
+            Regex::new(pattern).ok().map(|call| FlowSink {
+                call,
+                arguments: *arguments,
+            })
+        })
+        .collect();
+    request_flow_sink_lines(content, language, &sinks, contains_numeric_conversion)
 }
