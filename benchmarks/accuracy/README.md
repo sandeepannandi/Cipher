@@ -38,6 +38,15 @@ uses the same request value as a bind parameter of a parameterized query
 (`?`, `$1`, `PreparedStatement.setString`) and must stay clean. These are
 self-written fixtures, not upstream corpus files.
 
+### Command injection data-flow cases
+
+The `DF-*-CMDI-001` cases carry request input through a local command-string
+binding into a shell sink (`subprocess.run(..., shell=True)`, `exec`,
+`ProcessBuilder("sh", "-c", ...)`, `exec.Command("sh", "-c", ...)`) in each of
+Python, JavaScript, Java, and Go. Each `CTRL-*-CMDI-001` control passes the same
+request value as one element of an argument vector with no shell and must stay
+clean. These are self-written fixtures, not upstream corpus files.
+
 ## Run
 
 ```bash

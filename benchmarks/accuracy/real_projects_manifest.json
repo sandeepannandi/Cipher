@@ -22,6 +22,12 @@
           "line": 14
         },
         {
+          "title": "Command Injection",
+          "cwe": "CWE-78",
+          "file": "main.py",
+          "line": 20
+        },
+        {
           "title": "Weak Hash Algorithm \u2014 MD5",
           "cwe": "CWE-328",
           "file": "main.py",
