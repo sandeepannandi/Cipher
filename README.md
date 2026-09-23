@@ -166,4 +166,6 @@ cipher-ai review --write-policy-baseline .cipher-ai-policy.yml --path .
 
 A baseline accepts only the listed fingerprints. Suppressions are separate, require a non-empty reason, and may include an ISO date expiry. Expired suppressions become gate-eligible again. No policy file means no findings are silently accepted; `--fail-on-policy` refuses to run without an explicit `--policy` or repository `.cipher-ai-policy.yml`. Policy schema errors, unknown keys, duplicate fingerprints, and invalid thresholds fail closed.
 
+Fingerprints are keyed on the rule, file, finding type and the whitespace-normalized flagged line, not the line number, so edits elsewhere in a file do not re-key accepted findings. Changing the flagged line itself produces a new fingerprint. A repeated identical finding in the same file gets its own fingerprint, so a baseline entry never covers a new copy. Findings without a source snippet fall back to the line number.
+
 For CI, run `cipher-ai review --format sarif --output results.sarif --max-findings 0 --fail-on-policy --path .`. SARIF is written before a failing exit so the complete scan remains available for upload and debugging.
