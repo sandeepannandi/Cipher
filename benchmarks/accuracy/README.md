@@ -66,8 +66,19 @@ a `self.` method call into a `shell=True` helper. The expected finding is the
 sink line inside the callee. Each `CTRL-IP-*` control keeps the same call shape
 but the helper uses a bind parameter, the caller converts the value to an
 integer, or the caller quotes it with `shlex.quote`, and must stay clean. These
-are self-written fixtures, not upstream corpus files. Cross-file calls are not
-followed yet.
+are self-written fixtures, not upstream corpus files. Cross-file calls are covered
+by the cases below.
+
+### Cross-file data-flow cases
+
+`XF-JS-SQLI-001` and `XF-PY-SQLI-001` are small project cases. A route or view
+file reads request input and calls a function exported by another file it
+imports (`require('../services/users')`, `from .repository import
+find_orders`). That function builds and runs the SQL. The expected finding is
+the sink line in the imported file. `CTRL-XF-JS-SQLI-001` keeps the same call
+but the service uses a bind parameter. `CTRL-XF-PY-SQLI-001` converts the value
+to an integer before the call. Both must stay clean. These are self-written
+fixtures, not upstream corpus files.
 
 ## Run
 
@@ -77,7 +88,7 @@ python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai
 
 The script validates the manifest, runs each fixture through the review path, and writes `benchmarks/accuracy/results/latest.json`. It exits non-zero if the manifest is invalid, any execution error occurs, or a configured threshold for precision/recall/F1 or execution errors is missed.
 
-The focused corpus remains intentionally small and measures the deterministic `review` path, not AI verification, cross-file data flow, or dependency scanning. The runner now supports pinned public project subsets with exact finding labels; those realism cases belong in a separate manifest and CI job so their measured baseline cannot weaken the focused regression gate.
+The focused corpus remains intentionally small and measures the deterministic `review` path, not AI verification, Java/Go cross-file data flow, or dependency scanning. The runner now supports pinned public project subsets with exact finding labels; those realism cases belong in a separate manifest and CI job so their measured baseline cannot weaken the focused regression gate.
 
 ## CI gates and report
 

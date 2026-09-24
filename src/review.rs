@@ -394,7 +394,18 @@ fn is_contextual_jwt_secret(content: &str, assignment_line: &str) -> bool {
 }
 
 /// Scan a single file for vulnerability patterns
+#[cfg(test)]
 fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    scan_file_for_vulns_with(path, patterns, None)
+}
+
+/// Scan one file, also reporting sink lines that other project files reach
+/// through cross-file calls (see [`cross_file_flow_sinks`]).
+fn scan_file_for_vulns_with(
+    path: &Path,
+    patterns: &[VulnPattern],
+    cross_file: Option<&CrossFileSinkLines>,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     let ext = file_extension(path);
 
@@ -410,9 +421,14 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     let java_path_traversal_sinks = java_path_traversal_sink_lines(&content, &ext);
     let go_path_traversal_sinks = go_path_traversal_sink_lines(&content, &ext);
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
-    let sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
-    let command_injection_sinks = command_injection_sink_lines(&content, &ext);
-    let ssrf_sinks = ssrf_sink_lines(&content, &ext);
+    let mut sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
+    let mut command_injection_sinks = command_injection_sink_lines(&content, &ext);
+    let mut ssrf_sinks = ssrf_sink_lines(&content, &ext);
+    if let Some(cross_file) = cross_file {
+        sql_injection_sinks.extend(cross_file.sql.iter().copied());
+        command_injection_sinks.extend(cross_file.command.iter().copied());
+        ssrf_sinks.extend(cross_file.ssrf.iter().copied());
+    }
 
     for (line_num, line) in content.lines().enumerate() {
         let line_number = line_num + 1;
@@ -537,9 +553,9 @@ pub(crate) async fn collect_review_findings(
         .max_depth(Some(scan::MAX_WALK_DEPTH))
         .build();
 
-    let mut file_count = 0;
+    let mut files = Vec::new();
     for result in walker {
-        if file_count >= scan::MAX_SCAN_FILES {
+        if files.len() >= scan::MAX_SCAN_FILES {
             eprintln!(
                 "  {} Reached scan limit of {} files. Some files may not be checked.",
                 "[!]".yellow(),
@@ -553,12 +569,16 @@ pub(crate) async fn collect_review_findings(
             if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
                 let ext = file_extension(path);
                 if !ext.is_empty() && is_supported_extension(&ext) {
-                    let findings = scan_file_for_vulns(path, &patterns);
-                    report.extend(findings);
-                    file_count += 1;
+                    files.push(path.to_path_buf());
                 }
             }
         }
+    }
+
+    let cross_file = cross_file_flow_sinks(&files, &canonical_path);
+    for path in &files {
+        let findings = scan_file_for_vulns_with(path, &patterns, cross_file.get(path));
+        report.extend(findings);
     }
 
     // AI-powered deep analysis
@@ -2421,6 +2441,222 @@ func handler(w http.ResponseWriter, r *http.Request) {
         );
         assert!(findings.is_empty());
     }
+
+    /// Write a small project and return `(relative path, title, line)` for
+    /// every flow-family finding the review path produces across its files.
+    fn scan_project(files: &[(&str, &str)]) -> Vec<(String, String, usize)> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-xfile-{nonce}"));
+        let mut paths = Vec::new();
+        for (relative, source) in files {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            fs::write(&path, source).expect("write fixture");
+            paths.push(path);
+        }
+        let cross_file = cross_file_flow_sinks(&paths, &root);
+        let patterns = build_vuln_patterns();
+        let mut found = Vec::new();
+        for path in &paths {
+            for finding in scan_file_for_vulns_with(path, &patterns, cross_file.get(path)) {
+                // Only the flow families; unrelated pattern rules (IDOR on
+                // `id` lookups, etc.) are covered by their own tests.
+                if ![SQLI_FLOW, CMDI, SSRF].contains(&finding.title.as_str()) {
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(&root)
+                    .expect("relative")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                found.push((
+                    relative,
+                    finding.title.clone(),
+                    finding.line_number.unwrap_or(0),
+                ));
+            }
+        }
+        fs::remove_dir_all(&root).expect("cleanup");
+        found.sort();
+        found
+    }
+
+    const JS_USERS_SERVICE: &str = r#"const db = require('../db');
+
+function findByName(name) {
+    const sql = `SELECT id FROM users WHERE name = '${name}'`;
+    return db.prepare(sql).all();
+}
+
+function findById(id) {
+    return db.prepare('SELECT id FROM users WHERE id = ?').get(id);
+}
+
+module.exports = { findByName, findById };"#;
+
+    #[test]
+    fn js_controller_to_service_module_call_is_reported_in_service() {
+        let found = scan_project(&[
+            (
+                "src/routes/users.js",
+                r#"const users = require('../services/users');
+
+exports.search = (req, res) => {
+    const { name } = req.query;
+    return res.json(users.findByName(name));
+};"#,
+            ),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_named_import_and_destructured_require_resolve() {
+        for import in [
+            "import { findByName as lookup } from '../services/users';",
+            "const { findByName: lookup } = require('../services/users');",
+        ] {
+            let route = format!(
+                "{import}\n\nexports.search = (req, res) => {{\n    const name = req.query.name;\n    return res.json(lookup(name));\n}};"
+            );
+            let found = scan_project(&[
+                ("src/routes/users.js", route.as_str()),
+                ("src/services/users.js", JS_USERS_SERVICE),
+            ]);
+            assert_eq!(found.len(), 1, "{import}");
+            assert_eq!(found[0].2, 5, "{import}");
+        }
+    }
+
+    #[test]
+    fn js_parameterized_service_function_stays_clean() {
+        let found = scan_project(&[
+            (
+                "src/routes/users.js",
+                r#"const users = require('../services/users');
+
+exports.get = (req, res) => {
+    const id = req.params.id;
+    return res.json(users.findById(id));
+};"#,
+            ),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn js_unexported_or_package_functions_are_not_resolved() {
+        let found = scan_project(&[
+            (
+                "src/routes/users.js",
+                r#"const users = require('../services/users');
+const pkg = require('users');
+
+exports.search = (req, res) => {
+    const { name } = req.query;
+    pkg.findByName(name);
+    return res.json(users.findHidden(name));
+};"#,
+            ),
+            (
+                "src/services/users.js",
+                r#"const db = require('../db');
+
+function findHidden(name) {
+    return db.prepare(`SELECT id FROM users WHERE name = '${name}'`).all();
+}
+
+module.exports = {};"#,
+            ),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn js_service_called_only_with_constants_stays_clean() {
+        let found = scan_project(&[
+            (
+                "src/routes/users.js",
+                r#"const users = require('../services/users');
+
+exports.admins = (req, res) => {
+    const { page } = req.query;
+    return res.json(users.findByName('admin'));
+};"#,
+            ),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn python_relative_import_into_repository_is_reported() {
+        let repository = r#"import sqlite3
+
+
+def find_orders(customer):
+    conn = sqlite3.connect("shop.db")
+    query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+    return conn.execute(query).fetchall()"#;
+        for (import, call) in [
+            (
+                "from .repository import find_orders",
+                "find_orders(customer)",
+            ),
+            (
+                "from . import repository",
+                "repository.find_orders(customer)",
+            ),
+        ] {
+            let views = format!(
+                "{import}\n\n\n@app.route(\"/orders\")\ndef orders():\n    customer = request.args.get(\"customer\")\n    return {{\"orders\": {call}}}\n"
+            );
+            let found = scan_project(&[
+                ("app/views.py", views.as_str()),
+                ("app/repository.py", repository),
+            ]);
+            assert_eq!(
+                found,
+                vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 7)],
+                "{import}"
+            );
+        }
+    }
+
+    #[test]
+    fn python_numeric_conversion_before_cross_file_call_is_clean() {
+        let found = scan_project(&[
+            (
+                "app/views.py",
+                r#"from .repository import find_orders
+
+
+@app.route("/orders")
+def orders():
+    customer_id = int(request.args.get("customer_id", "0"))
+    return {"orders": find_orders(customer_id)}"#,
+            ),
+            (
+                "app/repository.py",
+                r#"def find_orders(customer_id):
+    query = "SELECT id FROM orders WHERE customer_id = %d" % customer_id
+    return conn.execute(query).fetchall()"#,
+            ),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
 }
 
 /// Find calls through local Python aliases bound directly to `hashlib.md5`.
@@ -3011,8 +3247,9 @@ fn request_flow_sink_lines(
     let calls = FlowCalls {
         functions: &functions,
         summaries: &summaries,
+        imports: &[],
     };
-    let (mut sink_lines, callee_sink_lines) = flow_pass(
+    let (mut sink_lines, callee_sink_lines, _) = flow_pass(
         &lines,
         0..lines.len(),
         language,
@@ -3045,6 +3282,24 @@ type FlowSummaries = Vec<Vec<std::collections::HashSet<usize>>>;
 struct FlowCalls<'a> {
     functions: &'a [FlowFunction],
     summaries: &'a FlowSummaries,
+    /// Functions in other project files reachable through this file's imports.
+    imports: &'a [ImportedCallee],
+}
+
+/// A function in another project file that a call in this file can resolve
+/// to through an import.
+struct ImportedCallee {
+    /// Module binding for `binding.name(...)` calls; `None` for a function
+    /// imported by name and called bare.
+    receiver: Option<String>,
+    /// Name used at the call site.
+    name: String,
+    /// Index of the file that defines the function.
+    target: usize,
+    /// Parameter count of the target function.
+    params: usize,
+    /// Per parameter, the sink lines it reaches inside the target file.
+    summaries: Vec<std::collections::HashSet<usize>>,
 }
 
 /// Compute parameter-to-sink summaries for every recognized function. Each
@@ -3068,6 +3323,7 @@ fn flow_summaries(
         let calls = FlowCalls {
             functions,
             summaries: &summaries,
+            imports: &[],
         };
         let next: FlowSummaries = functions
             .iter()
@@ -3076,7 +3332,7 @@ fn flow_summaries(
                     .params
                     .iter()
                     .map(|param| {
-                        let (mut reached, via_calls) = flow_pass(
+                        let (mut reached, via_calls, _) = flow_pass(
                             lines,
                             function.body.clone(),
                             language,
@@ -3100,8 +3356,9 @@ fn flow_summaries(
     summaries
 }
 
-/// One flow pass over `range`. Returns the sink lines reached directly and
-/// the callee sink lines reached through same-file calls.
+/// One flow pass over `range`. Returns the sink lines reached directly, the
+/// callee sink lines reached through same-file calls, and `(file index, sink
+/// line)` pairs reached through calls into imported functions.
 #[allow(clippy::items_after_test_module, clippy::too_many_arguments)]
 fn flow_pass(
     lines: &[&str],
@@ -3115,12 +3372,14 @@ fn flow_pass(
 ) -> (
     std::collections::HashSet<usize>,
     std::collections::HashSet<usize>,
+    Vec<(usize, usize)>,
 ) {
     let mut sink_lines = std::collections::HashSet::new();
     let mut callee_sink_lines = std::collections::HashSet::new();
+    let mut imported_sink_lines = Vec::new();
     let (Some(source), Some(binding)) = (flow_source_regex(language), flow_binding_regex(language))
     else {
-        return (sink_lines, callee_sink_lines);
+        return (sink_lines, callee_sink_lines, imported_sink_lines);
     };
     let destructure = Regex::new(
         r#"^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:req|request)\s*\.\s*(?:params|query|body)\s*;?\s*$"#,
@@ -3238,9 +3497,110 @@ fn flow_pass(
                     }
                 }
             }
+            for (import_index, args) in imported_calls(&visible, language, calls) {
+                let callee = &calls.imports[import_index];
+                for (position, arg) in args.iter().enumerate() {
+                    let carries_taint =
+                        !sanitized(arg) && tainted.iter().any(|name| identifier_in(arg, name));
+                    if carries_taint {
+                        if let Some(reached) = callee.summaries.get(position) {
+                            imported_sink_lines
+                                .extend(reached.iter().map(|line| (callee.target, *line)));
+                        }
+                    }
+                }
+            }
         }
     }
-    (sink_lines, callee_sink_lines)
+    (sink_lines, callee_sink_lines, imported_sink_lines)
+}
+
+/// Calls on one line that resolve to an imported function: `binding.name(...)`
+/// for a module binding, or a bare `name(...)` for a function imported by
+/// name. A same-file definition with the same name shadows the import.
+/// Chained receivers, keyword or spread arguments, and extra arguments are
+/// skipped.
+#[allow(clippy::items_after_test_module)]
+fn imported_calls(
+    visible: &str,
+    language: FlowLanguage,
+    calls: &FlowCalls,
+) -> Vec<(usize, Vec<String>)> {
+    let mut found = Vec::new();
+    if calls.imports.is_empty() {
+        return found;
+    }
+    let Ok(call) = Regex::new(r#"([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#) else {
+        return found;
+    };
+    let keyword_argument = Regex::new(r#"^[A-Za-z_][A-Za-z0-9_]*\s*=[^=]"#).ok();
+    let is_word = |ch: char| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$';
+    for captures in call.captures_iter(visible) {
+        let (Some(whole), Some(name)) = (captures.get(0), captures.get(1)) else {
+            continue;
+        };
+        let before = visible[..name.start()].trim_end();
+        let receiver = match before.strip_suffix('.') {
+            Some(rest) => {
+                let rest = rest.trim_end();
+                let word: String = rest
+                    .rsplit(|ch: char| !is_word(ch))
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                if word.is_empty() || rest[..rest.len() - word.len()].trim_end().ends_with('.') {
+                    continue;
+                }
+                Some(word)
+            }
+            None => {
+                if before.chars().last().is_some_and(is_word) {
+                    let keyword: String = before
+                        .rsplit(|ch: char| !is_word(ch))
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+                    if keyword != "return" && keyword != "await" {
+                        continue;
+                    }
+                }
+                if calls
+                    .functions
+                    .iter()
+                    .any(|function| function.name == name.as_str())
+                {
+                    continue;
+                }
+                None
+            }
+        };
+        let Some(import_index) = calls
+            .imports
+            .iter()
+            .position(|callee| callee.receiver == receiver && callee.name == name.as_str())
+        else {
+            continue;
+        };
+        let args = call_arguments(visible, whole.end() - 1);
+        let args: Vec<String> = if args.len() == 1 && args[0].is_empty() {
+            Vec::new()
+        } else {
+            args
+        };
+        let unsupported = args.len() > calls.imports[import_index].params
+            || args.iter().any(|arg| {
+                arg.starts_with('*')
+                    || arg.starts_with("...")
+                    || keyword_argument
+                        .as_ref()
+                        .is_some_and(|re| language == FlowLanguage::Python && re.is_match(arg))
+            });
+        if unsupported {
+            continue;
+        }
+        found.push((import_index, args));
+    }
+    found
 }
 
 /// Calls on one line that resolve to a recognized same-file function,
@@ -3604,6 +3964,511 @@ fn flow_parameters(list: &str, language: FlowLanguage) -> Option<Vec<String>> {
     Some(names)
 }
 
+/// Sink lines found in one file through calls from other project files, per
+/// flow family.
+#[derive(Default)]
+struct CrossFileSinkLines {
+    sql: std::collections::HashSet<usize>,
+    command: std::collections::HashSet<usize>,
+    ssrf: std::collections::HashSet<usize>,
+}
+
+/// How a caller file binds an imported file.
+enum ImportBinding {
+    /// `const service = require('../service')`, `import * as s from`,
+    /// `import service` / `from . import service`: calls look like
+    /// `binding.name(...)`.
+    Module { binding: String, target: usize },
+    /// `const { f } = require(...)`, `import { f as g } from`,
+    /// `from .service import f as g`: calls look like `local(...)`.
+    Function {
+        local: String,
+        exported: String,
+        target: usize,
+    },
+}
+
+/// Cross-file request flow for JS/TS and Python projects.
+///
+/// Each file's functions are summarized with the same per-parameter pass as
+/// the same-file engine. Relative imports are resolved to project files
+/// (`require`/`import` of `./x`, `../x`, `x/index`; Python `from .x import f`,
+/// `from x import f`, `import x as m` resolved next to the importing file or
+/// at the project root). A request-tainted argument passed to an exported
+/// function of an imported file in a position that reaches a sink reports the
+/// sink line in the imported file. One import hop is followed; the callee's
+/// own same-file helpers are included through its summaries. Package
+/// imports, dynamic `require`, re-exports, and default exports are not
+/// resolved.
+#[allow(clippy::items_after_test_module)]
+fn cross_file_flow_sinks(
+    files: &[std::path::PathBuf],
+    project_root: &Path,
+) -> std::collections::HashMap<std::path::PathBuf, CrossFileSinkLines> {
+    let mut result: std::collections::HashMap<std::path::PathBuf, CrossFileSinkLines> =
+        std::collections::HashMap::new();
+    struct Module {
+        path: std::path::PathBuf,
+        language: FlowLanguage,
+        content: String,
+    }
+    let modules: Vec<Module> = files
+        .iter()
+        .filter_map(|path| {
+            let language = flow_language(&file_extension(path))?;
+            if !matches!(language, FlowLanguage::JavaScript | FlowLanguage::Python) {
+                return None;
+            }
+            let content = std::fs::read_to_string(path).ok()?;
+            Some(Module {
+                path: path.clone(),
+                language,
+                content,
+            })
+        })
+        .collect();
+    if modules.len() < 2 {
+        return result;
+    }
+    let index_of: std::collections::HashMap<std::path::PathBuf, usize> = modules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, module)| {
+            std::fs::canonicalize(&module.path)
+                .ok()
+                .map(|canonical| (canonical, index))
+        })
+        .collect();
+    let root = std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+
+    let lines: Vec<Vec<&str>> = modules
+        .iter()
+        .map(|module| module.content.lines().collect())
+        .collect();
+    let functions: Vec<Vec<FlowFunction>> = modules
+        .iter()
+        .zip(&lines)
+        .map(|(module, lines)| flow_functions(lines, module.language))
+        .collect();
+    let exports: Vec<std::collections::HashMap<String, usize>> = modules
+        .iter()
+        .zip(&lines)
+        .zip(&functions)
+        .map(|((module, lines), functions)| flow_exports(lines, module.language, functions))
+        .collect();
+    let bindings: Vec<Vec<ImportBinding>> = modules
+        .iter()
+        .zip(&lines)
+        .map(|(module, lines)| flow_imports(lines, module.language, &module.path, &root, &index_of))
+        .collect();
+    if bindings.iter().all(|found| found.is_empty()) {
+        return result;
+    }
+
+    type Family = (fn(FlowLanguage) -> Vec<FlowSink>, fn(&str) -> bool, u8);
+    let families: [Family; 3] = [
+        (sql_flow_sinks, contains_numeric_conversion, 0),
+        (command_flow_sinks, contains_command_sanitizer, 1),
+        (ssrf_flow_sinks, contains_numeric_conversion, 2),
+    ];
+    for (build_sinks, sanitized, family) in families {
+        let summaries: Vec<FlowSummaries> = modules
+            .iter()
+            .enumerate()
+            .map(|(index, module)| {
+                let sinks = build_sinks(module.language);
+                flow_summaries(
+                    &lines[index],
+                    module.language,
+                    &sinks,
+                    sanitized,
+                    &functions[index],
+                )
+            })
+            .collect();
+        for (caller, module) in modules.iter().enumerate() {
+            let mut imports = Vec::new();
+            for binding in &bindings[caller] {
+                let (receiver, target, pairs): (Option<String>, usize, Vec<(String, usize)>) =
+                    match binding {
+                        ImportBinding::Module { binding, target } => (
+                            Some(binding.clone()),
+                            *target,
+                            exports[*target]
+                                .iter()
+                                .map(|(name, function)| (name.clone(), *function))
+                                .collect(),
+                        ),
+                        ImportBinding::Function {
+                            local,
+                            exported,
+                            target,
+                        } => (
+                            None,
+                            *target,
+                            exports[*target]
+                                .get(exported)
+                                .map(|function| vec![(local.clone(), *function)])
+                                .unwrap_or_default(),
+                        ),
+                    };
+                // Only resolve within one language family.
+                if modules[target].language != module.language {
+                    continue;
+                }
+                for (name, function) in pairs {
+                    let params = functions[target][function].params.len();
+                    let reached = summaries[target][function].clone();
+                    if reached.iter().all(|lines| lines.is_empty()) {
+                        continue;
+                    }
+                    imports.push(ImportedCallee {
+                        receiver: receiver.clone(),
+                        name,
+                        target,
+                        params,
+                        summaries: reached,
+                    });
+                }
+            }
+            if imports.is_empty() {
+                continue;
+            }
+            let sinks = build_sinks(module.language);
+            let calls = FlowCalls {
+                functions: &functions[caller],
+                summaries: &summaries[caller],
+                imports: &imports,
+            };
+            let (_, _, reached) = flow_pass(
+                &lines[caller],
+                0..lines[caller].len(),
+                module.language,
+                &sinks,
+                sanitized,
+                &[],
+                true,
+                Some(&calls),
+            );
+            for (target, line) in reached {
+                let entry = result.entry(modules[target].path.clone()).or_default();
+                match family {
+                    0 => entry.sql.insert(line),
+                    1 => entry.command.insert(line),
+                    _ => entry.ssrf.insert(line),
+                };
+            }
+        }
+    }
+    result
+}
+
+/// Exported function names of a file, mapped to their index in `functions`.
+/// JS/TS: `module.exports = { a, b: c }`, `exports.a = b`, `export function
+/// a`, `export { a, b as c }`. Python: every top-level function.
+#[allow(clippy::items_after_test_module)]
+fn flow_exports(
+    lines: &[&str],
+    language: FlowLanguage,
+    functions: &[FlowFunction],
+) -> std::collections::HashMap<String, usize> {
+    let mut exported = std::collections::HashMap::new();
+    let find = |local: &str| {
+        functions
+            .iter()
+            .position(|function| function.name == local && !function.method)
+    };
+    if language == FlowLanguage::Python {
+        for (index, function) in functions.iter().enumerate() {
+            let top_level = lines
+                .get(function.header)
+                .is_some_and(|line| !line.starts_with(char::is_whitespace));
+            if top_level && !function.method {
+                exported.insert(function.name.clone(), index);
+            }
+        }
+        return exported;
+    }
+    let is_identifier = |text: &str| {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+    };
+    let (Ok(object_start), Ok(property), Ok(export_decl), Ok(export_list)) = (
+        Regex::new(r#"^\s*module\s*\.\s*exports\s*=\s*\{(.*)$"#),
+        Regex::new(
+            r#"^\s*(?:module\s*\.\s*)?exports\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*;?\s*$"#,
+        ),
+        Regex::new(
+            r#"^\s*export\s+(?:async\s+)?(?:function\s*\*?\s*|const\s+|let\s+|var\s+)([A-Za-z_$][A-Za-z0-9_$]*)"#,
+        ),
+        Regex::new(r#"^\s*export\s*\{([^}]*)\}"#),
+    ) else {
+        return exported;
+    };
+    let add_entries =
+        |text: &str, separator: &str, exported: &mut std::collections::HashMap<String, usize>| {
+            for entry in text.split(',') {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                let (left, right) = match entry.split_once(separator) {
+                    Some((left, right)) => (left.trim(), right.trim()),
+                    None => (entry, entry),
+                };
+                // `module.exports = { key: local }` / `export { local as key }`.
+                let (key, local) = if separator == ":" {
+                    (left, right)
+                } else {
+                    (right, left)
+                };
+                if is_identifier(key) && is_identifier(local) {
+                    if let Some(index) = find(local) {
+                        exported.insert(key.to_string(), index);
+                    }
+                }
+            }
+        };
+    let mut in_object = false;
+    for line in lines {
+        let code = line.split("//").next().unwrap_or("");
+        if in_object {
+            let (body, done) = match code.split_once('}') {
+                Some((body, _)) => (body, true),
+                None => (code, false),
+            };
+            add_entries(body, ":", &mut exported);
+            in_object = !done;
+            continue;
+        }
+        if let Some(rest) = object_start.captures(code).and_then(|c| c.get(1)) {
+            let rest = rest.as_str();
+            match rest.split_once('}') {
+                Some((body, _)) => add_entries(body, ":", &mut exported),
+                None => {
+                    add_entries(rest, ":", &mut exported);
+                    in_object = true;
+                }
+            }
+            continue;
+        }
+        if let Some(captures) = property.captures(code) {
+            if let (Some(key), Some(local)) = (captures.get(1), captures.get(2)) {
+                if let Some(index) = find(local.as_str()) {
+                    exported.insert(key.as_str().to_string(), index);
+                }
+            }
+            continue;
+        }
+        if let Some(name) = export_decl.captures(code).and_then(|c| c.get(1)) {
+            if let Some(index) = find(name.as_str()) {
+                exported.insert(name.as_str().to_string(), index);
+            }
+            continue;
+        }
+        if let Some(list) = export_list.captures(code).and_then(|c| c.get(1)) {
+            add_entries(list.as_str(), " as ", &mut exported);
+        }
+    }
+    exported
+}
+
+/// Resolve a file's relative imports to other project files.
+#[allow(clippy::items_after_test_module)]
+fn flow_imports(
+    lines: &[&str],
+    language: FlowLanguage,
+    path: &Path,
+    root: &Path,
+    index_of: &std::collections::HashMap<std::path::PathBuf, usize>,
+) -> Vec<ImportBinding> {
+    let mut bindings = Vec::new();
+    let Some(dir) = path.parent() else {
+        return bindings;
+    };
+    let lookup = |candidate: std::path::PathBuf| {
+        std::fs::canonicalize(candidate)
+            .ok()
+            .and_then(|canonical| index_of.get(&canonical).copied())
+    };
+    let is_identifier = |text: &str| {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+    };
+    match language {
+        FlowLanguage::JavaScript => {
+            let resolve = |spec: &str| -> Option<usize> {
+                if !(spec.starts_with("./") || spec.starts_with("../")) {
+                    return None;
+                }
+                let base = dir.join(spec);
+                let mut candidates = vec![base.clone()];
+                for ext in ["js", "ts", "mjs", "cjs"] {
+                    candidates.push(std::path::PathBuf::from(format!(
+                        "{}.{ext}",
+                        base.to_string_lossy()
+                    )));
+                    candidates.push(base.join(format!("index.{ext}")));
+                }
+                candidates
+                    .into_iter()
+                    .filter(|candidate| candidate.is_file())
+                    .find_map(lookup)
+            };
+            let (Ok(module_require), Ok(named_require), Ok(namespace_import), Ok(named_import)) = (
+                Regex::new(
+                    r#"^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$"#,
+                ),
+                Regex::new(
+                    r#"^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$"#,
+                ),
+                Regex::new(
+                    r#"^\s*import\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$"#,
+                ),
+                Regex::new(r#"^\s*import\s*\{([^}]*)\}\s*from\s+['"]([^'"]+)['"]\s*;?\s*$"#),
+            ) else {
+                return bindings;
+            };
+            for line in lines {
+                for (re, module) in [(&module_require, true), (&namespace_import, true)] {
+                    if let Some(captures) = re.captures(line) {
+                        if let (Some(binding), Some(spec)) = (captures.get(1), captures.get(2)) {
+                            if let Some(target) = resolve(spec.as_str()) {
+                                if module {
+                                    bindings.push(ImportBinding::Module {
+                                        binding: binding.as_str().to_string(),
+                                        target,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                for (re, separator) in [(&named_require, ":"), (&named_import, " as ")] {
+                    if let Some(captures) = re.captures(line) {
+                        if let (Some(names), Some(spec)) = (captures.get(1), captures.get(2)) {
+                            let Some(target) = resolve(spec.as_str()) else {
+                                continue;
+                            };
+                            for entry in names.as_str().split(',') {
+                                let entry = entry.trim();
+                                let (exported, local) = match entry.split_once(separator) {
+                                    Some((left, right)) => (left.trim(), right.trim()),
+                                    None => (entry, entry),
+                                };
+                                if is_identifier(exported) && is_identifier(local) {
+                                    bindings.push(ImportBinding::Function {
+                                        local: local.to_string(),
+                                        exported: exported.to_string(),
+                                        target,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        FlowLanguage::Python => {
+            let resolve_module = |dots: usize, dotted: &str| -> Option<usize> {
+                let relative: std::path::PathBuf =
+                    dotted.split('.').filter(|p| !p.is_empty()).collect();
+                let bases: Vec<std::path::PathBuf> = if dots > 0 {
+                    let mut base = dir.to_path_buf();
+                    for _ in 1..dots {
+                        base = base.parent()?.to_path_buf();
+                    }
+                    vec![base]
+                } else {
+                    vec![dir.to_path_buf(), root.to_path_buf()]
+                };
+                bases.into_iter().find_map(|base| {
+                    let target = base.join(&relative);
+                    [
+                        std::path::PathBuf::from(format!("{}.py", target.to_string_lossy())),
+                        target.join("__init__.py"),
+                    ]
+                    .into_iter()
+                    .filter(|candidate| candidate.is_file())
+                    .find_map(lookup)
+                })
+            };
+            let (Ok(from_import), Ok(plain_import)) = (
+                Regex::new(
+                    r#"^from\s+(\.*)([A-Za-z_][A-Za-z0-9_.]*)?\s+import\s+([A-Za-z_][A-Za-z0-9_,\s]*)$"#,
+                ),
+                Regex::new(
+                    r#"^import\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$"#,
+                ),
+            ) else {
+                return bindings;
+            };
+            for line in lines {
+                let code = line.split('#').next().unwrap_or("").trim_end();
+                if let Some(captures) = from_import.captures(code) {
+                    let dots = captures.get(1).map_or(0, |m| m.as_str().len());
+                    let dotted = captures.get(2).map_or("", |m| m.as_str());
+                    let names = captures.get(3).map_or("", |m| m.as_str());
+                    if dots == 0 && dotted.is_empty() {
+                        continue;
+                    }
+                    let module_target = if dotted.is_empty() {
+                        None
+                    } else {
+                        resolve_module(dots, dotted)
+                    };
+                    for entry in names.split(',') {
+                        let entry = entry.trim();
+                        let (exported, local) = match entry.split_once(" as ") {
+                            Some((left, right)) => (left.trim(), right.trim()),
+                            None => (entry, entry),
+                        };
+                        if !is_identifier(exported) || !is_identifier(local) {
+                            continue;
+                        }
+                        // `from .pkg import service` may name a module.
+                        let submodule = if dotted.is_empty() {
+                            resolve_module(dots, exported)
+                        } else {
+                            resolve_module(dots, &format!("{dotted}.{exported}"))
+                        };
+                        if let Some(target) = submodule {
+                            bindings.push(ImportBinding::Module {
+                                binding: local.to_string(),
+                                target,
+                            });
+                        } else if let Some(target) = module_target {
+                            bindings.push(ImportBinding::Function {
+                                local: local.to_string(),
+                                exported: exported.to_string(),
+                                target,
+                            });
+                        }
+                    }
+                    continue;
+                }
+                if let Some(captures) = plain_import.captures(code) {
+                    let dotted = captures.get(1).map_or("", |m| m.as_str());
+                    let binding = match captures.get(2) {
+                        Some(alias) => alias.as_str().to_string(),
+                        None if !dotted.contains('.') => dotted.to_string(),
+                        None => continue,
+                    };
+                    if let Some(target) = resolve_module(0, dotted) {
+                        bindings.push(ImportBinding::Module { binding, target });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    bindings
+}
+
 #[allow(clippy::items_after_test_module)]
 fn first_argument(_name: &str) -> Vec<usize> {
     vec![0]
@@ -3663,6 +4528,16 @@ fn sql_injection_sink_lines(content: &str, extension: &str) -> std::collections:
     let Some(language) = flow_language(extension) else {
         return std::collections::HashSet::new();
     };
+    request_flow_sink_lines(
+        content,
+        language,
+        &sql_flow_sinks(language),
+        contains_numeric_conversion,
+    )
+}
+
+#[allow(clippy::items_after_test_module)]
+fn sql_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
     let patterns: &[(&str, FlowArguments)] = match language {
         FlowLanguage::Python => &[
             (
@@ -3690,7 +4565,7 @@ fn sql_injection_sink_lines(content: &str, extension: &str) -> std::collections:
             go_sql_query_argument,
         )],
     };
-    let sinks: Vec<FlowSink> = patterns
+    patterns
         .iter()
         .filter_map(|(pattern, arguments)| {
             Regex::new(pattern).ok().map(|call| FlowSink {
@@ -3699,8 +4574,7 @@ fn sql_injection_sink_lines(content: &str, extension: &str) -> std::collections:
                 line_requires: None,
             })
         })
-        .collect();
-    request_flow_sink_lines(content, language, &sinks, contains_numeric_conversion)
+        .collect()
 }
 
 #[allow(clippy::items_after_test_module)]
@@ -3739,6 +4613,16 @@ fn command_injection_sink_lines(
     let Some(language) = flow_language(extension) else {
         return std::collections::HashSet::new();
     };
+    request_flow_sink_lines(
+        content,
+        language,
+        &command_flow_sinks(language),
+        contains_command_sanitizer,
+    )
+}
+
+#[allow(clippy::items_after_test_module)]
+fn command_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
     let shell_prefix = r#""(?:/bin/)?(?:sh|bash|zsh)"\s*,\s*"-c"|"cmd(?:\.exe)?"\s*,\s*"/c""#;
     let patterns: &[(&str, FlowArguments, Option<&str>)] = match language {
         FlowLanguage::Python => &[
@@ -3780,7 +4664,7 @@ fn command_injection_sink_lines(
             Some(shell_prefix),
         )],
     };
-    let sinks: Vec<FlowSink> = patterns
+    patterns
         .iter()
         .filter_map(|(pattern, arguments, requires)| {
             let call = Regex::new(pattern).ok()?;
@@ -3794,8 +4678,7 @@ fn command_injection_sink_lines(
                 line_requires,
             })
         })
-        .collect();
-    request_flow_sink_lines(content, language, &sinks, contains_command_sanitizer)
+        .collect()
 }
 
 #[allow(clippy::items_after_test_module)]
@@ -3823,6 +4706,16 @@ fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<
     let Some(language) = flow_language(extension) else {
         return std::collections::HashSet::new();
     };
+    request_flow_sink_lines(
+        content,
+        language,
+        &ssrf_flow_sinks(language),
+        contains_numeric_conversion,
+    )
+}
+
+#[allow(clippy::items_after_test_module)]
+fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
     let patterns: &[&str] = match language {
         FlowLanguage::Python => &[
             r#"\b(?:requests|httpx|session|client)\s*\.\s*(get|post|put|delete|head|patch|options|request)\s*\("#,
@@ -3842,7 +4735,7 @@ fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<
             &[r#"\bhttp\s*\.\s*(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\("#]
         }
     };
-    let sinks: Vec<FlowSink> = patterns
+    patterns
         .iter()
         .filter_map(|pattern| {
             Regex::new(pattern).ok().map(|call| FlowSink {
@@ -3851,6 +4744,5 @@ fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<
                 line_requires: None,
             })
         })
-        .collect();
-    request_flow_sink_lines(content, language, &sinks, contains_numeric_conversion)
+        .collect()
 }
