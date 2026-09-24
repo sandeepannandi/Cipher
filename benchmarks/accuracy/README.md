@@ -56,6 +56,19 @@ control sends the request value only as a query parameter or body of a fixed
 URL and must stay clean. These are self-written fixtures, not upstream corpus
 files.
 
+### Interprocedural data-flow cases
+
+The `IP-*-SQLI-001` cases pass request input from a handler into a helper
+function defined in the same file, and the helper builds the SQL text and
+runs it (JavaScript goes through a two-function chain, controller-style
+handler -> `lookup` -> `findUserByName`). `IP-PY-CMDI-001` does the same through
+a `self.` method call into a `shell=True` helper. The expected finding is the
+sink line inside the callee. Each `CTRL-IP-*` control keeps the same call shape
+but the helper uses a bind parameter, the caller converts the value to an
+integer, or the caller quotes it with `shlex.quote`, and must stay clean. These
+are self-written fixtures, not upstream corpus files. Cross-file calls are not
+followed yet.
+
 ## Run
 
 ```bash
@@ -64,7 +77,7 @@ python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai
 
 The script validates the manifest, runs each fixture through the review path, and writes `benchmarks/accuracy/results/latest.json`. It exits non-zero if the manifest is invalid, any execution error occurs, or a configured threshold for precision/recall/F1 or execution errors is missed.
 
-The focused corpus remains intentionally small and measures the deterministic `review` path, not AI verification, interprocedural data flow, or dependency scanning. The runner now supports pinned public project subsets with exact finding labels; those realism cases belong in a separate manifest and CI job so their measured baseline cannot weaken the focused regression gate.
+The focused corpus remains intentionally small and measures the deterministic `review` path, not AI verification, cross-file data flow, or dependency scanning. The runner now supports pinned public project subsets with exact finding labels; those realism cases belong in a separate manifest and CI job so their measured baseline cannot weaken the focused regression gate.
 
 ## CI gates and report
 
