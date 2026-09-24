@@ -3349,6 +3349,110 @@ async fn handler(req: HttpRequest) -> HttpResponse {
     }
 
     #[test]
+    fn rust_grouped_use_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{find_user, list_users};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_grouped_use_alias_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{find_user as fetch_user};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    fetch_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_grouped_use_glob_item_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{POOL_ALIAS, *};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_grouped_use_parameterized_store_is_clean() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{find_user, list_users};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let store = r#"use sqlx::{Pool, Postgres};
+
+pub async fn find_user(pool: &Pool<Postgres>, name: &str) -> Option<String> {
+    sqlx::query("SELECT name FROM users WHERE name = $1")
+        .bind(name)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+pub async fn list_users(pool: &Pool<Postgres>) -> Vec<String> {
+    Vec::new()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", store)]);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn rust_nested_group_is_not_resolved() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{inner::{find_user}};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert!(found.is_empty());
+    }
+
+    #[test]
     fn rust_nested_mod_path_call_is_reported_in_store() {
         let main = r#"mod api;
 
@@ -5389,9 +5493,9 @@ enum ImportBinding {
 /// followed; the callee's own same-file helpers are included through its
 /// summaries. Package imports (JS), dynamic `require`, re-exports, default
 /// exports, `_test.go` files, and calls through instance variables are not
-/// resolved, grouped Rust `use a::{b, c}` imports and re-exports are not
-/// resolved, and a callable name offered by two different files resolves to
-/// neither.
+/// resolved, nested Rust groups (`use a::{b::{c, d}}`) and re-exports are
+/// not resolved, and a callable name offered by two different files
+/// resolves to neither.
 #[allow(clippy::items_after_test_module)]
 fn cross_file_flow_sinks(
     files: &[std::path::PathBuf],
@@ -6153,21 +6257,72 @@ enum RustDeclaration {
     },
 }
 
-/// The `mod`/`use` declarations of a Rust file. Grouped (`use a::{b, c}`)
-/// and re-export (`pub use`) forms are not recognized.
+/// The `mod`/`use` declarations of a Rust file. Grouped `use a::{b, c}`
+/// items are expanded to one declaration each (`as` aliases and a `*` glob
+/// item included); nested groups (`use a::{b::{c, d}}`) and re-exports
+/// (`pub use`) are not recognized.
 #[allow(clippy::items_after_test_module)]
 fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
     let mut declarations = Vec::new();
-    let (Ok(mod_decl), Ok(use_decl)) = (
+    let (Ok(mod_decl), Ok(use_decl), Ok(group_decl)) = (
         Regex::new(r#"^\s*(?:pub\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"#),
         Regex::new(r#"^\s*use\s+([^;{]+?)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;"#),
+        Regex::new(r#"^\s*use\s+([^;{}]+?)::\s*\{([^}]*)\}\s*;"#),
     ) else {
         return declarations;
+    };
+    let split_path = |path_text: &str| -> Vec<String> {
+        path_text
+            .split("::")
+            .map(|segment| segment.trim().to_string())
+            .filter(|segment| !segment.is_empty())
+            .collect()
     };
     for line in lines {
         let code = line.split("//").next().unwrap_or("");
         if let Some(name) = mod_decl.captures(code).and_then(|c| c.get(1)) {
             declarations.push(RustDeclaration::Mod(name.as_str().to_string()));
+            continue;
+        }
+        if let Some(captures) = group_decl.captures(code) {
+            let prefix = split_path(captures.get(1).map(|m| m.as_str()).unwrap_or(""));
+            if prefix.is_empty() {
+                continue;
+            }
+            let items = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+            for item in items.split(',') {
+                let item = item.trim();
+                if item.is_empty() || item.contains('{') {
+                    // Nested groups are skipped rather than guessed.
+                    continue;
+                }
+                let (name, alias) = match item.split_once(" as ") {
+                    Some((name, alias)) => {
+                        let alias = alias.trim();
+                        if alias.is_empty()
+                            || !alias
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                        {
+                            continue;
+                        }
+                        (name.trim(), Some(alias.to_string()))
+                    }
+                    None => (item, None),
+                };
+                if name != "*"
+                    && !name
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                {
+                    continue;
+                }
+                let mut segments = prefix.clone();
+                segments.push(name.to_string());
+                declarations.push(RustDeclaration::Use { segments, alias });
+            }
             continue;
         }
         if let Some(captures) = use_decl.captures(code) {
