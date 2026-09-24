@@ -3692,6 +3692,132 @@ public class UserService {
     }
 
     #[test]
+    fn java_spring_multiline_annotated_params_reaching_statement_is_reported() {
+        let findings = scan(
+            r#"@GetMapping("/user")
+public String getUser(
+        @RequestParam String name,
+        @RequestParam String city) throws SQLException {
+	String sql = "SELECT * FROM users WHERE city = '" + city + "'";
+	Statement stmt = conn.createStatement();
+	ResultSet rs = stmt.executeQuery(sql);
+	return "ok";
+}"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(7));
+    }
+
+    #[test]
+    fn java_spring_multiline_param_with_value_is_reported() {
+        let findings = scan(
+            r#"@GetMapping("/user")
+public String getUser(
+        @RequestParam("name") String name) throws SQLException {
+	String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+	Statement stmt = conn.createStatement();
+	ResultSet rs = stmt.executeQuery(sql);
+	return "ok";
+}"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(6));
+    }
+
+    #[test]
+    fn java_spring_multiline_unannotated_param_is_not_seeded() {
+        let findings = scan(
+            r#"@GetMapping("/user")
+public String getUser(
+        @RequestParam String name,
+        String safe) throws SQLException {
+	String sql = "SELECT * FROM users WHERE name = '" + safe + "'";
+	Statement stmt = conn.createStatement();
+	ResultSet rs = stmt.executeQuery(sql);
+	return "ok";
+}"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_spring_inline_unannotated_param_is_not_seeded() {
+        let findings = scan(
+            r#"public String getUser(@RequestParam String name, String safe) throws SQLException {
+	String sql = "SELECT * FROM users WHERE name = '" + safe + "'";
+	Statement stmt = conn.createStatement();
+	ResultSet rs = stmt.executeQuery(sql);
+	return "ok";
+}"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_spring_multiline_prepared_statement_is_clean() {
+        let findings = scan(
+            r#"@GetMapping("/user")
+public String getUser(
+        @RequestParam String name) throws SQLException {
+	PreparedStatement ps = conn.prepareStatement("SELECT * FROM users WHERE name = ?");
+	ps.setString(1, name);
+	ResultSet rs = ps.executeQuery();
+	return "ok";
+}"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_spring_multiline_controller_to_static_service_cross_file_is_reported() {
+        let controller = r#"package com.example.demo;
+
+import java.sql.*;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+public class UserController {
+    @GetMapping("/user/{name}")
+    public ResultSet getUser(
+            @PathVariable String name) throws SQLException {
+        return UserService.findByName(name);
+    }
+}
+"#;
+        let service = r#"package com.example.demo;
+
+import java.sql.*;
+
+public class UserService {
+    private static Connection conn;
+
+    public static ResultSet findByName(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        Statement stmt = conn.createStatement();
+        return stmt.executeQuery(sql);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/UserController.java", controller),
+            ("src/UserService.java", service),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/UserService.java".to_string(),
+                SQLI_FLOW.to_string(),
+                11
+            )]
+        );
+    }
+
+    #[test]
     fn go_external_import_is_not_resolved() {
         let main = r#"package main
 
@@ -4377,6 +4503,9 @@ struct FlowFunction {
     params: Vec<String>,
     /// Line index of the definition header.
     header: usize,
+    /// First line index after the signature: `header + 1` for a single-line
+    /// header, or the line after a multi-line signature's opening brace.
+    signature_end: usize,
     /// Line indices of the function body.
     body: std::ops::Range<usize>,
     /// Methods are only resolved through `this.` / `self.` (JS, Python).
@@ -4480,20 +4609,32 @@ fn spring_annotated_seeds(
     if language != FlowLanguage::Java {
         return Vec::new();
     }
-    let Ok(annotation) = Regex::new(
-        r"@(?:RequestParam|PathVariable|RequestBody|RequestHeader|ModelAttribute|CookieValue)\b",
+    // Extract only the parameter names an annotation directly marks, from the
+    // whole signature window (the header line through the line before the
+    // body), so annotated parameters on their own lines are seeded and an
+    // unannotated parameter on the same line is not tainted by association.
+    let Ok(annotated_param) = Regex::new(
+        r"@(?:RequestParam|PathVariable|RequestBody|RequestHeader|ModelAttribute|CookieValue)\b\s*(?:\([^()]*\))?\s*(?:final\s+)?[A-Za-z_][A-Za-z0-9_.<>\[\], ?]*?\s+([A-Za-z_$][A-Za-z0-9_$]*)",
     ) else {
         return Vec::new();
     };
     functions
         .iter()
         .filter(|function| !function.params.is_empty())
-        .filter(|function| {
-            lines
-                .get(function.header)
-                .is_some_and(|header| annotation.is_match(header))
+        .filter_map(|function| {
+            let seeds: Vec<String> = lines[function.header..function.signature_end]
+                .iter()
+                .flat_map(|line| {
+                    annotated_param
+                        .captures_iter(line)
+                        .filter_map(|captures| {
+                            captures.get(1).map(|name| name.as_str().to_string())
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            (!seeds.is_empty()).then(|| (function.body.clone(), seeds))
         })
-        .map(|function| (function.body.clone(), function.params.clone()))
         .collect()
 }
 
@@ -4926,6 +5067,10 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
     .filter_map(|(pattern, method)| Regex::new(pattern).ok().map(|re| (re, method)))
     .collect();
     let annotation = Regex::new(r#"@[A-Za-z_][A-Za-z0-9_.]*(?:\([^()]*\))?\s*"#).ok();
+    let header_start = Regex::new(
+        r#"^\s*(?:(?:public|private|protected|static|final|synchronized|abstract)\s+)*(?:[A-Za-z_][A-Za-z0-9_.<>\[\], ?]*?\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\([^()]*$"#,
+    )
+    .ok();
     let definition_like = Regex::new(
         r#"^\s*(?:(?:export\s+)?(?:async\s+)?function\s*\*?\s*|(?:async\s+)?def\s+|func\s+|(?:pub\s+)?(?:async\s+)?fn\s+)([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
     )
@@ -4944,26 +5089,58 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
             }
             _ => visible.clone(),
         };
-        let matched = headers.iter().find_map(|(re, method)| {
-            re.captures(&header_text).map(|captures| {
-                if language == FlowLanguage::Python {
-                    let indent = captures.get(1).map_or(0, |m| m.as_str().len());
-                    (
-                        captures.get(2).map(|m| m.as_str().to_string()),
-                        captures.get(3).map(|m| m.as_str().to_string()),
-                        *method,
-                        indent,
-                    )
-                } else {
-                    let params = captures.get(2).or_else(|| captures.get(3));
-                    (
-                        captures.get(1).map(|m| m.as_str().to_string()),
-                        params.map(|m| m.as_str().to_string()),
-                        *method,
-                        0,
-                    )
+        // Java method signatures may span several lines (annotations on their
+        // own parameter lines). Assemble a bounded join of the following lines
+        // when the stripped line opens a parameter list it does not close, and
+        // match the header against the joined text. Line indexes are kept:
+        // `header` stays the first line and the brace scan below still finds
+        // the body.
+        let mut joined: Option<String> = None;
+        let mut joined_end: Option<usize> = None;
+        if language == FlowLanguage::Java {
+            if let (Some(start), Some(annotation)) = (header_start.as_ref(), annotation.as_ref()) {
+                if start.is_match(&header_text) {
+                    let mut text = header_text.clone();
+                    let mut depth = header_text.matches('(').count() as i64
+                        - header_text.matches(')').count() as i64;
+                    let mut next_index = index;
+                    while depth > 0 && next_index + 1 < lines.len() && next_index - index < 8 {
+                        next_index += 1;
+                        let following = blank_plain_strings(lines[next_index], language);
+                        let following = annotation.replace_all(&following, "");
+                        depth += following.matches('(').count() as i64
+                            - following.matches(')').count() as i64;
+                        text.push(' ');
+                        text.push_str(&following);
+                    }
+                    if depth == 0 {
+                        joined = Some(text);
+                        joined_end = Some(next_index + 1);
+                    }
                 }
-            })
+            }
+        }
+        let matched = headers.iter().find_map(|(re, method)| {
+            re.captures(joined.as_deref().unwrap_or(&header_text))
+                .map(|captures| {
+                    if language == FlowLanguage::Python {
+                        let indent = captures.get(1).map_or(0, |m| m.as_str().len());
+                        (
+                            captures.get(2).map(|m| m.as_str().to_string()),
+                            captures.get(3).map(|m| m.as_str().to_string()),
+                            *method,
+                            indent,
+                        )
+                    } else {
+                        let params = captures.get(2).or_else(|| captures.get(3));
+                        (
+                            captures.get(1).map(|m| m.as_str().to_string()),
+                            params.map(|m| m.as_str().to_string()),
+                            *method,
+                            0,
+                        )
+                    }
+                })
         });
         let Some((Some(name), Some(params), mut method, indent)) = matched else {
             // A definition this pass cannot parse still shadows the name.
@@ -5013,6 +5190,7 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
             }
             _ => {
                 let mut depth = 0i64;
+                let mut opened = false;
                 let mut end = None;
                 for (offset, next) in lines.iter().enumerate().skip(index) {
                     let text = blank_plain_strings(next, language);
@@ -5024,7 +5202,12 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
                             _ => {}
                         }
                     }
-                    if depth <= 0 {
+                    // Multi-line signatures contribute no brace on the header
+                    // line, so only close once the opening brace was seen.
+                    if depth > 0 {
+                        opened = true;
+                    }
+                    if opened && depth <= 0 {
                         end = Some(offset);
                         break;
                     }
@@ -5042,6 +5225,7 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
             name,
             params,
             header: index,
+            signature_end: joined_end.unwrap_or(index + 1),
             body,
             method,
         });
