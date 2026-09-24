@@ -2677,6 +2677,98 @@ exports.search = (req, res) => {
     }
 
     #[test]
+    fn js_named_reexport_through_barrel_is_reported_in_service() {
+        let barrel = "export { findByName } from './users';";
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", barrel),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_glob_reexport_through_barrel_is_reported_in_service() {
+        let barrel = "export * from './users';";
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", barrel),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_ambiguous_glob_reexport_is_not_resolved() {
+        let other = r#"const db = require('../db');
+
+function findByName(name) {
+    const sql = `SELECT id FROM users WHERE name = '${name}'`;
+    return db.prepare(sql).all();
+}
+
+module.exports = { findByName };"#;
+        let barrel = "export * from './users';
+export * from './other';";
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", barrel),
+            ("src/services/users.js", JS_USERS_SERVICE),
+            ("src/services/other.js", other),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn js_reexport_of_parameterized_service_stays_clean() {
+        let barrel = "export { findById } from './users';";
+        let route = r#"import { findById } from '../services';
+
+exports.get = (req, res) => {
+    const id = req.params.id;
+    return res.json(findById(id));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", barrel),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn js_parameterized_service_function_stays_clean() {
         let found = scan_project(&[
             (
@@ -5628,8 +5720,10 @@ enum ImportBinding {
 /// argument passed to an exported function of another file in a position
 /// that reaches a sink reports the sink line in that file. One import hop is
 /// followed; the callee's own same-file helpers are included through its
-/// summaries. Package imports (JS), dynamic `require`, re-exports,
-/// `_test.go` files, and calls through instance variables are not
+/// summaries. JS/TS re-exports resolve through one bounded barrel hop (a
+/// name offered by two sources resolves to neither). Package imports (JS),
+/// dynamic `require`, Rust re-exports, `_test.go` files, and calls through
+/// instance variables are not
 /// resolved, nested Rust groups (`use a::{b::{c, d}}`) and re-exports are
 /// not resolved, and a callable name offered by two different files
 /// resolves to neither.
@@ -5691,6 +5785,73 @@ fn cross_file_flow_sinks(
         .zip(&lines)
         .map(|(module, lines)| flow_imports(lines, module.language, &module.path, &root, &index_of))
         .collect();
+    // One bounded hop through a JS/TS re-exporting ("barrel") module: named
+    // (`export { f } from './x'`) and glob (`export * from './x'`) re-exports
+    // make the source function visible under the barrel's path. A name
+    // offered by two different sources resolves to neither, and the hop is
+    // not chained.
+    let reexport_maps: Vec<std::collections::HashMap<String, (usize, String)>> = modules
+        .iter()
+        .zip(&lines)
+        .map(|(module, lines)| {
+            let mut map = std::collections::HashMap::new();
+            if module.language != FlowLanguage::JavaScript {
+                return map;
+            }
+            let Some(dir) = module.path.parent() else {
+                return map;
+            };
+            let mut candidates: std::collections::HashMap<String, Vec<(usize, String)>> =
+                std::collections::HashMap::new();
+            for declaration in js_reexports(lines) {
+                match declaration {
+                    JsReexport::Named { spec, source, name } => {
+                        if let Some(target) = resolve_js_specifier(dir, &spec, &index_of) {
+                            candidates.entry(name).or_default().push((target, source));
+                        }
+                    }
+                    JsReexport::Glob { spec } => {
+                        if let Some(target) = resolve_js_specifier(dir, &spec, &index_of) {
+                            for name in exports[target].keys() {
+                                candidates
+                                    .entry(name.clone())
+                                    .or_default()
+                                    .push((target, name.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+            for (name, mut offers) in candidates {
+                offers.sort();
+                offers.dedup();
+                if offers.len() == 1 {
+                    map.insert(name, offers[0].clone());
+                }
+            }
+            map
+        })
+        .collect();
+    for (index, module) in modules.iter().enumerate() {
+        if module.language != FlowLanguage::JavaScript {
+            continue;
+        }
+        for binding in &mut bindings[index] {
+            if let ImportBinding::Function {
+                exported, target, ..
+            } = binding
+            {
+                if modules[*target].language == FlowLanguage::JavaScript
+                    && !exports[*target].contains_key(exported)
+                {
+                    if let Some((new_target, source)) = reexport_maps[*target].get(exported) {
+                        *target = *new_target;
+                        *exported = source.clone();
+                    }
+                }
+            }
+        }
+    }
     let mut by_dir: std::collections::HashMap<std::path::PathBuf, Vec<usize>> =
         std::collections::HashMap::new();
     for (canonical, index) in &index_of {
@@ -6829,6 +6990,102 @@ fn go_external_import_dir(
 
 /// Resolve a file's relative imports to other project files.
 #[allow(clippy::items_after_test_module)]
+/// Resolve a relative JS/TS import specifier (`./x`, `../x`) to a scanned
+/// file, trying the plain path, the common extensions, and index files.
+#[allow(clippy::items_after_test_module)]
+fn resolve_js_specifier(
+    dir: &Path,
+    spec: &str,
+    index_of: &std::collections::HashMap<std::path::PathBuf, usize>,
+) -> Option<usize> {
+    if !(spec.starts_with("./") || spec.starts_with("../")) {
+        return None;
+    }
+    let base = dir.join(spec);
+    let mut candidates = vec![base.clone()];
+    for ext in ["js", "ts", "mjs", "cjs"] {
+        candidates.push(std::path::PathBuf::from(format!(
+            "{}.{ext}",
+            base.to_string_lossy()
+        )));
+        candidates.push(base.join(format!("index.{ext}")));
+    }
+    candidates
+        .into_iter()
+        .filter(|candidate| candidate.is_file())
+        .find_map(|candidate| {
+            std::fs::canonicalize(candidate)
+                .ok()
+                .and_then(|canonical| index_of.get(&canonical).copied())
+        })
+}
+
+/// A re-export declaration of a JS/TS ("barrel") file.
+enum JsReexport {
+    Named {
+        spec: String,
+        source: String,
+        name: String,
+    },
+    Glob {
+        spec: String,
+    },
+}
+
+/// Re-export declarations of one JS/TS file: `export { a, b as c } from
+/// './x'` and `export * from './x'`.
+#[allow(clippy::items_after_test_module)]
+fn js_reexports(lines: &[&str]) -> Vec<JsReexport> {
+    let mut declarations = Vec::new();
+    let (Ok(named), Ok(glob)) = (
+        Regex::new(r#"^\s*export\s*\{([^}]*)\}\s*from\s+['"]([^'"]+)['"]\s*;?\s*$"#),
+        Regex::new(r#"^\s*export\s*\*\s*from\s+['"]([^'"]+)['"]\s*;?\s*$"#),
+    ) else {
+        return declarations;
+    };
+    let is_identifier = |text: &str| {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+    };
+    for line in lines {
+        let code = line.split("//").next().unwrap_or("");
+        if let Some(captures) = named.captures(code) {
+            let names = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+            let spec = captures
+                .get(2)
+                .map(|m| m.as_str())
+                .unwrap_or("")
+                .to_string();
+            for entry in names.split(',') {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                let (source, name) = match entry.split_once(" as ") {
+                    Some((left, right)) => (left.trim(), right.trim()),
+                    None => (entry, entry),
+                };
+                if is_identifier(source) && is_identifier(name) {
+                    declarations.push(JsReexport::Named {
+                        spec: spec.clone(),
+                        source: source.to_string(),
+                        name: name.to_string(),
+                    });
+                }
+            }
+            continue;
+        }
+        if let Some(spec) = glob.captures(code).and_then(|c| c.get(1)) {
+            declarations.push(JsReexport::Glob {
+                spec: spec.as_str().to_string(),
+            });
+        }
+    }
+    declarations
+}
+
 fn flow_imports(
     lines: &[&str],
     language: FlowLanguage,
@@ -6853,24 +7110,7 @@ fn flow_imports(
     };
     match language {
         FlowLanguage::JavaScript => {
-            let resolve = |spec: &str| -> Option<usize> {
-                if !(spec.starts_with("./") || spec.starts_with("../")) {
-                    return None;
-                }
-                let base = dir.join(spec);
-                let mut candidates = vec![base.clone()];
-                for ext in ["js", "ts", "mjs", "cjs"] {
-                    candidates.push(std::path::PathBuf::from(format!(
-                        "{}.{ext}",
-                        base.to_string_lossy()
-                    )));
-                    candidates.push(base.join(format!("index.{ext}")));
-                }
-                candidates
-                    .into_iter()
-                    .filter(|candidate| candidate.is_file())
-                    .find_map(lookup)
-            };
+            let resolve = |spec: &str| resolve_js_specifier(dir, spec, index_of);
             let (
                 Ok(module_require),
                 Ok(named_require),
