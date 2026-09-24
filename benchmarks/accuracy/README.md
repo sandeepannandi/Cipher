@@ -100,6 +100,17 @@ sink line in the dependency file. The controls keep the same call shapes
 with a bind parameter in the callee and must stay clean. These are
 self-written fixtures, not upstream corpus files.
 
+`DF-RS-SQLI-001` is the same-file Rust case: an actix-web handler passes
+request input to a helper that builds the SQL with `format!` and runs it
+through `sqlx::query`. `XF-RS-SQLI-001`/`002` are the cross-file project
+cases: the handler reaches the store function through `mod store;` +
+`store::find_user(...)`, or through `use crate::store::find_user;` + a bare
+call. The expected finding is the sink line in the store file. The controls
+keep the same call shapes but the callee binds the value with
+`sqlx::query(...).bind(name)`, or the caller converts it with
+`.parse::<i64>()`, and must stay clean. These are self-written fixtures, not
+upstream corpus files.
+
 ## Run
 
 ```bash
