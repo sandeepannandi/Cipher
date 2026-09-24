@@ -111,6 +111,16 @@ keep the same call shapes but the callee binds the value with
 `.parse::<i64>()`, and must stay clean. These are self-written fixtures, not
 upstream corpus files.
 
+`DF-JAVA-SQLI-002` and `XF-JAVA-SQLI-005` are the Spring MVC cases: a
+controller method takes request input through an annotated parameter
+(`@RequestParam String name`) and builds the SQL in place, or calls a static
+method of a sibling service class. `DF-GO-SQLI-002` and `XF-GO-SQLI-005` are
+the Gin/Echo cases: a handler reads `c.Query("name")` (Gin) and builds the
+SQL, or passes it to a store function in a sibling file of the same package.
+The expected finding is again the sink line. The controls keep the same call
+shapes with a bind parameter or a `PreparedStatement` in the callee and must
+stay clean. These are self-written fixtures, not upstream corpus files.
+
 ## Run
 
 ```bash
