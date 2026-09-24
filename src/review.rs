@@ -3526,6 +3526,172 @@ async fn handler(req: HttpRequest) -> HttpResponse {
     }
 
     #[test]
+    fn go_gin_query_param_reaching_query_is_reported() {
+        let findings = scan(
+            r#"name := c.Query("name")
+query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+rows, err := db.QueryContext(ctx, query)"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn go_echo_path_param_reaching_query_is_reported() {
+        let findings = scan(
+            r#"name := c.Param("name")
+query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+rows, err := db.QueryContext(ctx, query)"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn go_gin_bind_struct_field_reaching_query_is_reported() {
+        let findings = scan(
+            r#"var input UserInput
+if err := c.ShouldBindJSON(&input); err != nil {
+	return
+}
+query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", input.Name)
+rows, err := db.QueryContext(ctx, query)"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(6));
+    }
+
+    #[test]
+    fn go_gin_parameterized_query_is_clean() {
+        let findings = scan(
+            r#"name := c.Query("name")
+rows, err := db.QueryContext(ctx, "SELECT * FROM users WHERE name = $1", name)"#,
+            "go",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn go_gin_param_sanitized_by_atoi_is_clean() {
+        let findings = scan(
+            r#"id, _ := strconv.Atoi(c.Param("id"))
+query := fmt.Sprintf("SELECT * FROM users WHERE id = %d", id)
+rows, err := db.QueryContext(ctx, query)"#,
+            "go",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn go_gin_handler_to_store_cross_file_is_reported() {
+        let handler = r#"package main
+
+import "github.com/gin-gonic/gin"
+
+func handler(c *gin.Context) {
+	name := c.Query("name")
+	findUser(name)
+}
+"#;
+        let found = scan_project(&[("handler.go", handler), ("store.go", GO_STORE)]);
+        assert_eq!(
+            found,
+            vec![("store.go".to_string(), SQLI_FLOW.to_string(), 12)]
+        );
+    }
+
+    #[test]
+    fn java_spring_request_param_reaching_statement_is_reported() {
+        let findings = scan(
+            r#"@GetMapping("/user")
+public String getUser(@RequestParam String name) throws SQLException {
+	String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+	Statement stmt = conn.createStatement();
+	ResultSet rs = stmt.executeQuery(sql);
+	return "ok";
+}"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(5));
+    }
+
+    #[test]
+    fn java_spring_prepared_statement_is_clean() {
+        let findings = scan(
+            r#"@GetMapping("/user")
+public String getUser(@RequestParam String name) throws SQLException {
+	PreparedStatement ps = conn.prepareStatement("SELECT * FROM users WHERE name = ?");
+	ps.setString(1, name);
+	ResultSet rs = ps.executeQuery();
+	return "ok";
+}"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_spring_unannotated_param_is_not_seeded() {
+        let findings = scan(
+            r#"public String getUser(String name) throws SQLException {
+	String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+	Statement stmt = conn.createStatement();
+	ResultSet rs = stmt.executeQuery(sql);
+	return "ok";
+}"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_spring_controller_to_static_service_cross_file_is_reported() {
+        let controller = r#"package com.example.demo;
+
+import java.sql.*;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+public class UserController {
+    @GetMapping("/user/{name}")
+    public ResultSet getUser(@PathVariable String name) throws SQLException {
+        return UserService.findByName(name);
+    }
+}
+"#;
+        let service = r#"package com.example.demo;
+
+import java.sql.*;
+
+public class UserService {
+    private static Connection conn;
+
+    public static ResultSet findByName(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        Statement stmt = conn.createStatement();
+        return stmt.executeQuery(sql);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/UserController.java", controller),
+            ("src/UserService.java", service),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/UserService.java".to_string(),
+                SQLI_FLOW.to_string(),
+                11
+            )]
+        );
+    }
+
+    #[test]
     fn go_external_import_is_not_resolved() {
         let main = r#"package main
 
@@ -4101,7 +4267,7 @@ fn flow_source_regex(language: FlowLanguage) -> Option<Regex> {
             r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo)\s*\("#
         }
         FlowLanguage::Go => {
-            r#"^\s*(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+string)?\s*(?::=|=)\s*(?:r|req|request)\s*\.\s*(?:URL\s*\.\s*Query\s*\(\s*\)\s*\.\s*Get\s*\(|FormValue\s*\(|PostFormValue\s*\(|URL\s*\.\s*Path\b)"#
+            r#"^\s*(?:(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+string)?\s*(?::=|=)\s*(?:(?:r|req|request)\s*\.\s*(?:URL\s*\.\s*Query\s*\(\s*\)\s*\.\s*Get\s*\(|FormValue\s*\(|PostFormValue\s*\(|URL\s*\.\s*Path\b)|(?:c|ctx)\s*\.\s*(?:Param|Query|DefaultQuery|QueryArray|PostForm|DefaultPostForm|PostFormArray|FormValue|QueryParam|GetHeader|Cookie)\s*\()|(?:if\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s*:?=\s*)?(?:c|ctx)\s*\.\s*(?:Bind|BindJSON|BindQuery|BindUri|ShouldBind|ShouldBindJSON|ShouldBindQuery|ShouldBindUri|ShouldBindWith)\s*\(\s*&\s*([A-Za-z_][A-Za-z0-9_]*))"#
         }
         FlowLanguage::Rust => {
             r#"^\s*let\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[^=]+)?=\s*(?:(?:req|request)\s*\.\s*(?:match_info|query_params|query_string|param|params)\s*\(|(?:params|query|form)\s*(?:\.\s*get\s*\(|\[))"#
@@ -4188,6 +4354,20 @@ fn request_flow_sink_lines(
         Some(&calls),
     );
     sink_lines.extend(callee_sink_lines);
+    for (body, seeds) in spring_annotated_seeds(&lines, language, &functions) {
+        let (seeded, seeded_callee, _) = flow_pass(
+            &lines,
+            body,
+            language,
+            sinks,
+            sanitized,
+            &seeds,
+            true,
+            Some(&calls),
+        );
+        sink_lines.extend(seeded);
+        sink_lines.extend(seeded_callee);
+    }
     sink_lines
 }
 
@@ -4284,6 +4464,39 @@ fn flow_summaries(
     summaries
 }
 
+/// Spring-style handler parameters (`@RequestParam`, `@PathVariable`,
+/// `@RequestBody`, and friends) enter the controller already
+/// attacker-controlled at the framework boundary. Returns each annotated
+/// Java function's body range with its parameter names, so callers can run
+/// an extra seeded pass. Only single-line headers are considered (the same
+/// headers `flow_functions` parses); parameter annotations on their own
+/// line are a documented gap.
+#[allow(clippy::items_after_test_module)]
+fn spring_annotated_seeds(
+    lines: &[&str],
+    language: FlowLanguage,
+    functions: &[FlowFunction],
+) -> Vec<(std::ops::Range<usize>, Vec<String>)> {
+    if language != FlowLanguage::Java {
+        return Vec::new();
+    }
+    let Ok(annotation) = Regex::new(
+        r"@(?:RequestParam|PathVariable|RequestBody|RequestHeader|ModelAttribute|CookieValue)\b",
+    ) else {
+        return Vec::new();
+    };
+    functions
+        .iter()
+        .filter(|function| !function.params.is_empty())
+        .filter(|function| {
+            lines
+                .get(function.header)
+                .is_some_and(|header| annotation.is_match(header))
+        })
+        .map(|function| (function.body.clone(), function.params.clone()))
+        .collect()
+}
+
 /// One flow pass over `range`. Returns the sink lines reached directly, the
 /// callee sink lines reached through same-file calls, and `(file index, sink
 /// line)` pairs reached through calls into imported functions.
@@ -4357,7 +4570,7 @@ fn flow_pass(
         if track_sources {
             if let Some(name) = source
                 .captures(code)
-                .and_then(|captures| captures.get(1))
+                .and_then(|captures| captures.get(1).or_else(|| captures.get(2)))
                 .map(|capture| capture.as_str().to_string())
             {
                 if sanitized(code) {
@@ -5529,7 +5742,7 @@ fn cross_file_flow_sinks(
                 summaries: &summaries[caller],
                 imports: &imports,
             };
-            let (_, _, reached) = flow_pass(
+            let (_, _, mut reached) = flow_pass(
                 &lines[caller],
                 0..lines[caller].len(),
                 module.language,
@@ -5539,6 +5752,21 @@ fn cross_file_flow_sinks(
                 true,
                 Some(&calls),
             );
+            for (body, seeds) in
+                spring_annotated_seeds(&lines[caller], module.language, &functions[caller])
+            {
+                let (_, _, seeded_reached) = flow_pass(
+                    &lines[caller],
+                    body,
+                    module.language,
+                    &sinks,
+                    sanitized,
+                    &seeds,
+                    true,
+                    Some(&calls),
+                );
+                reached.extend(seeded_reached);
+            }
             for (target, line) in reached {
                 let entry = result.entry(modules[target].path.clone()).or_default();
                 match family {
