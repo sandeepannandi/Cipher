@@ -83,6 +83,12 @@
           "line": 42
         },
         {
+          "title": "SQL Injection \u2014 String Concatenation",
+          "cwe": "CWE-89",
+          "file": "src/service/index.js",
+          "line": 47
+        },
+        {
           "title": "Weak Hash Algorithm \u2014 MD5",
           "cwe": "CWE-328",
           "file": "src/service/index.js",
@@ -93,6 +99,18 @@
           "cwe": "CWE-328",
           "file": "src/service/index.js",
           "line": 69
+        },
+        {
+          "title": "SQL Injection \u2014 String Concatenation",
+          "cwe": "CWE-89",
+          "file": "src/service/index.js",
+          "line": 71
+        },
+        {
+          "title": "SQL Injection \u2014 String Concatenation",
+          "cwe": "CWE-89",
+          "file": "src/service/index.js",
+          "line": 80
         },
         {
           "title": "Command Injection",
