@@ -2107,6 +2107,320 @@ req, err := http.NewRequest("POST", "https://api.example.com/search", strings.Ne
         );
         assert!(findings.is_empty());
     }
+
+    const SQLI_FLOW: &str = "SQL Injection — String Concatenation";
+
+    #[test]
+    fn js_request_value_through_helper_chain_reaches_sql_sink() {
+        let findings = scan(
+            r#"function findUserByName(username) {
+    const query = `SELECT * FROM users WHERE username = '${username}'`;
+    return db.prepare(query).get();
+}
+
+function lookup(name) {
+    return findUserByName(name);
+}
+
+exports.getUser = (req, res) => {
+    const { username } = req.query;
+    return res.json(lookup(username));
+};"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI_FLOW]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn js_helper_using_bind_parameter_is_clean() {
+        let findings = scan(
+            r#"function findUserByName(username) {
+    return db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+}
+
+exports.getUser = (req, res) => {
+    const { username } = req.query;
+    return res.json(findUserByName(username));
+};"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_helper_called_only_with_constants_is_clean() {
+        let findings = scan(
+            r#"function findUserByName(username) {
+    const query = `SELECT * FROM users WHERE username = '${username}'`;
+    return db.prepare(query).get();
+}
+
+exports.getAdmin = (req, res) => {
+    const { id } = req.query;
+    return res.json(findUserByName('admin'));
+};"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_function_defined_twice_is_not_resolved() {
+        let findings = scan(
+            r#"function findUser(name) {
+    return db.prepare(`SELECT * FROM users WHERE name = '${name}'`).get();
+}
+
+function findUser(name) {
+    return db.prepare('SELECT * FROM users WHERE name = ?').get(name);
+}
+
+exports.getUser = (req, res) => {
+    const { name } = req.query;
+    return res.json(findUser(name));
+};"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_call_on_other_receiver_is_not_resolved_to_local_function() {
+        let findings = scan(
+            r#"function findUser(name) {
+    return db.prepare(`SELECT * FROM users WHERE name = '${name}'`).get();
+}
+
+exports.getUser = (req, res) => {
+    const { name } = req.query;
+    return res.json(repository.findUser(name));
+};"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_caller_rebinding_to_constant_before_call_is_clean() {
+        let findings = scan(
+            r#"function findUser(name) {
+    return db.prepare(`SELECT * FROM users WHERE name = '${name}'`).get();
+}
+
+exports.getUser = (req, res) => {
+    let name = req.query.name;
+    name = 'guest';
+    return res.json(findUser(name));
+};"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_only_the_tainted_parameter_position_counts() {
+        let findings = scan(
+            r#"function findProduct(owner, term) {
+    const sql = `SELECT * FROM products WHERE name = '${term}'`;
+    return db.prepare(sql).all();
+}
+
+exports.search = (req, res) => {
+    const owner = req.query.owner;
+    return res.json(findProduct(owner, 'widgets'));
+};"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn python_request_value_passed_to_query_helper_is_reported() {
+        let findings = scan(
+            r#"def find_user(conn, name):
+    query = f"SELECT * FROM users WHERE name = '{name}'"
+    return conn.execute(query).fetchall()
+
+
+@app.route("/user")
+def user():
+    name = request.args.get("name")
+    return str(find_user(conn, name))"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI_FLOW]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn python_numeric_conversion_at_call_site_is_clean() {
+        let findings = scan(
+            r#"def find_user(conn, user_id):
+    query = f"SELECT * FROM users WHERE id = {user_id}"
+    return conn.execute(query).fetchall()
+
+
+@app.route("/user")
+def user():
+    user_id = request.args.get("id")
+    return str(find_user(conn, int(user_id)))"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn python_self_method_shell_helper_is_reported_and_quote_stops_it() {
+        let vulnerable = scan(
+            r#"class Diagnostics:
+    def run_ping(self, host):
+        command = "ping -c 1 " + host
+        return subprocess.check_output(command, shell=True)
+
+    def ping(self):
+        host = request.args.get("host")
+        return self.run_ping(host)"#,
+            "py",
+        );
+        assert_eq!(titles(&vulnerable), vec![CMDI]);
+        assert_eq!(vulnerable[0].line_number, Some(4));
+
+        let quoted = scan(
+            r#"class Diagnostics:
+    def run_ping(self, host):
+        command = "ping -c 1 " + host
+        return subprocess.check_output(command, shell=True)
+
+    def ping(self):
+        host = request.args.get("host")
+        return self.run_ping(shlex.quote(host))"#,
+            "py",
+        );
+        assert!(quoted.is_empty());
+    }
+
+    #[test]
+    fn python_keyword_argument_call_is_not_mapped_by_position() {
+        let findings = scan(
+            r#"def find_user(conn, name):
+    query = f"SELECT * FROM users WHERE name = '{name}'"
+    return conn.execute(query).fetchall()
+
+
+def user():
+    name = request.args.get("name")
+    return find_user(conn=name, name="guest")"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_request_value_passed_to_private_query_method_is_reported() {
+        let vulnerable = scan(
+            r#"public class UserController extends HttpServlet {
+    private ResultSet findUser(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        return conn.createStatement().executeQuery(sql);
+    }
+
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        findUser(name);
+    }
+}"#,
+            "java",
+        );
+        assert_eq!(titles(&vulnerable), vec![SQLI_FLOW]);
+        assert_eq!(vulnerable[0].line_number, Some(4));
+
+        let prepared = scan(
+            r#"public class UserController extends HttpServlet {
+    private ResultSet findUser(String name) throws SQLException {
+        PreparedStatement stmt = conn.prepareStatement("SELECT * FROM users WHERE name = ?");
+        stmt.setString(1, name);
+        return stmt.executeQuery();
+    }
+
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        findUser(name);
+    }
+}"#,
+            "java",
+        );
+        assert!(prepared.is_empty());
+    }
+
+    #[test]
+    fn java_overloaded_methods_are_not_resolved() {
+        let findings = scan(
+            r#"public class UserController {
+    private ResultSet findUser(String name) throws SQLException {
+        return conn.createStatement().executeQuery("SELECT * FROM users WHERE name = '" + name + "'");
+    }
+
+    private ResultSet findUser(String name, int limit) throws SQLException {
+        return null;
+    }
+
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        findUser(name, 10);
+    }
+}"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn go_request_value_passed_to_query_function_is_reported() {
+        let vulnerable = scan(
+            r#"func findUser(name string) (*sql.Rows, error) {
+	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+	return db.Query(query)
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	findUser(name)
+}"#,
+            "go",
+        );
+        assert_eq!(titles(&vulnerable), vec![SQLI_FLOW]);
+        assert_eq!(vulnerable[0].line_number, Some(3));
+
+        let parameterized = scan(
+            r#"func findUser(name string) (*sql.Rows, error) {
+	return db.Query("SELECT * FROM users WHERE name = $1", name)
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	findUser(name)
+}"#,
+            "go",
+        );
+        assert!(parameterized.is_empty());
+    }
+
+    #[test]
+    fn go_method_with_receiver_is_not_resolved_from_bare_call() {
+        let findings = scan(
+            r#"func (s *Store) findUser(name string) (*sql.Rows, error) {
+	return s.db.Query("SELECT * FROM users WHERE name = '" + name + "'")
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	store.findUser(name)
+}"#,
+            "go",
+        );
+        assert!(findings.is_empty());
+    }
 }
 
 /// Find calls through local Python aliases bound directly to `hashlib.md5`.
@@ -2676,8 +2990,14 @@ type FlowArguments = fn(&str) -> Vec<usize>;
 /// untainted value, and reports a sink line only when a tainted identifier
 /// appears in one of the sink's dangerous argument positions. Plain string
 /// literal contents are ignored so text that merely looks like a variable
-/// name does not count. This does not follow function calls, returns,
-/// branches, or other files.
+/// name does not count.
+///
+/// On top of that straight-line pass, calls to functions defined in the same
+/// file are followed: when a tainted argument is passed in a parameter
+/// position whose value reaches a sink inside the callee (directly or through
+/// further same-file calls), the callee's sink line is reported as well. See
+/// [`flow_functions`] for which definitions and calls are recognized. This
+/// does not follow branches, dynamic dispatch, or other files.
 #[allow(clippy::items_after_test_module)]
 fn request_flow_sink_lines(
     content: &str,
@@ -2685,18 +3005,133 @@ fn request_flow_sink_lines(
     sinks: &[FlowSink],
     sanitized: fn(&str) -> bool,
 ) -> std::collections::HashSet<usize> {
+    let lines: Vec<&str> = content.lines().collect();
+    let functions = flow_functions(&lines, language);
+    let summaries = flow_summaries(&lines, language, sinks, sanitized, &functions);
+    let calls = FlowCalls {
+        functions: &functions,
+        summaries: &summaries,
+    };
+    let (mut sink_lines, callee_sink_lines) = flow_pass(
+        &lines,
+        0..lines.len(),
+        language,
+        sinks,
+        sanitized,
+        &[],
+        true,
+        Some(&calls),
+    );
+    sink_lines.extend(callee_sink_lines);
+    sink_lines
+}
+
+/// A function defined in the file, as seen by the interprocedural pass.
+struct FlowFunction {
+    name: String,
+    params: Vec<String>,
+    /// Line index of the definition header.
+    header: usize,
+    /// Line indices of the function body.
+    body: std::ops::Range<usize>,
+    /// Methods are only resolved through `this.` / `self.` (JS, Python).
+    method: bool,
+}
+
+/// For each function (by index) and parameter position, the sink lines a
+/// value passed in that position reaches.
+type FlowSummaries = Vec<Vec<std::collections::HashSet<usize>>>;
+
+struct FlowCalls<'a> {
+    functions: &'a [FlowFunction],
+    summaries: &'a FlowSummaries,
+}
+
+/// Compute parameter-to-sink summaries for every recognized function. Each
+/// parameter is seeded as the only tainted value and the function body is
+/// run through the same flow pass; calls to other same-file functions use the
+/// summaries from the previous round, so helper chains resolve over a
+/// bounded number of rounds.
+#[allow(clippy::items_after_test_module)]
+fn flow_summaries(
+    lines: &[&str],
+    language: FlowLanguage,
+    sinks: &[FlowSink],
+    sanitized: fn(&str) -> bool,
+    functions: &[FlowFunction],
+) -> FlowSummaries {
+    let mut summaries: FlowSummaries = functions
+        .iter()
+        .map(|function| vec![std::collections::HashSet::new(); function.params.len()])
+        .collect();
+    for _ in 0..6 {
+        let calls = FlowCalls {
+            functions,
+            summaries: &summaries,
+        };
+        let next: FlowSummaries = functions
+            .iter()
+            .map(|function| {
+                function
+                    .params
+                    .iter()
+                    .map(|param| {
+                        let (mut reached, via_calls) = flow_pass(
+                            lines,
+                            function.body.clone(),
+                            language,
+                            sinks,
+                            sanitized,
+                            std::slice::from_ref(param),
+                            false,
+                            Some(&calls),
+                        );
+                        reached.extend(via_calls);
+                        reached
+                    })
+                    .collect()
+            })
+            .collect();
+        if next == summaries {
+            break;
+        }
+        summaries = next;
+    }
+    summaries
+}
+
+/// One flow pass over `range`. Returns the sink lines reached directly and
+/// the callee sink lines reached through same-file calls.
+#[allow(clippy::items_after_test_module, clippy::too_many_arguments)]
+fn flow_pass(
+    lines: &[&str],
+    range: std::ops::Range<usize>,
+    language: FlowLanguage,
+    sinks: &[FlowSink],
+    sanitized: fn(&str) -> bool,
+    seeds: &[String],
+    track_sources: bool,
+    calls: Option<&FlowCalls>,
+) -> (
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+) {
     let mut sink_lines = std::collections::HashSet::new();
+    let mut callee_sink_lines = std::collections::HashSet::new();
     let (Some(source), Some(binding)) = (flow_source_regex(language), flow_binding_regex(language))
     else {
-        return sink_lines;
+        return (sink_lines, callee_sink_lines);
     };
     let destructure = Regex::new(
         r#"^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:req|request)\s*\.\s*(?:params|query|body)\s*;?\s*$"#,
     )
     .ok();
 
-    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (line_index, line) in content.lines().enumerate() {
+    let mut tainted: std::collections::HashSet<String> = seeds.iter().cloned().collect();
+    for line_index in range {
+        let Some(line) = lines.get(line_index) else {
+            break;
+        };
         let raw = if language == FlowLanguage::Python {
             line.split('#').next().unwrap_or("")
         } else {
@@ -2711,7 +3146,7 @@ fn request_flow_sink_lines(
             continue;
         }
 
-        if language == FlowLanguage::JavaScript {
+        if track_sources && language == FlowLanguage::JavaScript {
             if let Some(names) = destructure
                 .as_ref()
                 .and_then(|re| re.captures(code))
@@ -2732,17 +3167,19 @@ fn request_flow_sink_lines(
             }
         }
 
-        if let Some(name) = source
-            .captures(code)
-            .and_then(|captures| captures.get(1))
-            .map(|capture| capture.as_str().to_string())
-        {
-            if sanitized(code) {
-                tainted.remove(&name);
-            } else {
-                tainted.insert(name);
+        if track_sources {
+            if let Some(name) = source
+                .captures(code)
+                .and_then(|captures| captures.get(1))
+                .map(|capture| capture.as_str().to_string())
+            {
+                if sanitized(code) {
+                    tainted.remove(&name);
+                } else {
+                    tainted.insert(name);
+                }
+                continue;
             }
-            continue;
         }
 
         let visible = blank_plain_strings(code, language);
@@ -2785,8 +3222,386 @@ fn request_flow_sink_lines(
         if reaches_sink {
             sink_lines.insert(line_index + 1);
         }
+
+        if let Some(calls) = calls {
+            for (function_index, args) in same_file_calls(&visible, line_index, language, calls) {
+                let Some(params) = calls.summaries.get(function_index) else {
+                    continue;
+                };
+                for (position, arg) in args.iter().enumerate() {
+                    let carries_taint =
+                        !sanitized(arg) && tainted.iter().any(|name| identifier_in(arg, name));
+                    if carries_taint {
+                        if let Some(reached) = params.get(position) {
+                            callee_sink_lines.extend(reached.iter().copied());
+                        }
+                    }
+                }
+            }
+        }
     }
-    sink_lines
+    (sink_lines, callee_sink_lines)
+}
+
+/// Calls on one line that resolve to a recognized same-file function,
+/// with their positional arguments. A bare `name(...)` resolves to a
+/// function (in Java, also to a method of the file); `this.name(...)` /
+/// `self.name(...)` resolves to a method. Calls on any other receiver, calls
+/// with keyword, spread, or extra arguments, and the definition header
+/// itself are skipped.
+#[allow(clippy::items_after_test_module)]
+fn same_file_calls(
+    visible: &str,
+    line_index: usize,
+    language: FlowLanguage,
+    calls: &FlowCalls,
+) -> Vec<(usize, Vec<String>)> {
+    let mut found = Vec::new();
+    let Ok(call) = Regex::new(r#"([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#) else {
+        return found;
+    };
+    let keyword_argument = Regex::new(r#"^[A-Za-z_][A-Za-z0-9_]*\s*=[^=]"#).ok();
+    for captures in call.captures_iter(visible) {
+        let (Some(whole), Some(name)) = (captures.get(0), captures.get(1)) else {
+            continue;
+        };
+        let Some(function_index) = calls
+            .functions
+            .iter()
+            .position(|function| function.name == name.as_str())
+        else {
+            continue;
+        };
+        let function = &calls.functions[function_index];
+        if function.header == line_index {
+            continue;
+        }
+        let before = visible[..name.start()].trim_end();
+        let is_word = |ch: char| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$';
+        let last_word = |text: &str| -> String {
+            text.rsplit(|ch: char| !is_word(ch))
+                .next()
+                .unwrap_or("")
+                .to_string()
+        };
+        if before.chars().last().is_some_and(is_word) {
+            // `function name(`, `def name(`, `new name(` and similar are not
+            // calls; `return name(` and `await name(` are.
+            let keyword = last_word(before);
+            if keyword != "return" && keyword != "await" {
+                continue;
+            }
+        }
+        // For `recv.name(`: the receiver word, and whether the receiver is
+        // itself reached through another `.` (e.g. `other.this.name(`).
+        let receiver = before.strip_suffix('.').map(|rest| {
+            let rest = rest.trim_end();
+            let word = last_word(rest);
+            let chained = rest[..rest.len() - word.len()].trim_end().ends_with('.');
+            (word, chained)
+        });
+        let resolves = match (&receiver, language) {
+            (None, FlowLanguage::Java) => true,
+            (None, _) => !function.method,
+            (Some((word, chained)), FlowLanguage::JavaScript) => {
+                word == "this" && !chained && function.method
+            }
+            (Some((word, chained)), FlowLanguage::Java) => word == "this" && !chained,
+            (Some((word, chained)), FlowLanguage::Python) => {
+                word == "self" && !chained && function.method
+            }
+            (Some(_), FlowLanguage::Go) => false,
+        };
+        if !resolves {
+            continue;
+        }
+        let args = call_arguments(visible, whole.end() - 1);
+        let args: Vec<String> = if args.len() == 1 && args[0].is_empty() {
+            Vec::new()
+        } else {
+            args
+        };
+        let unsupported = args.len() > function.params.len()
+            || args.iter().any(|arg| {
+                arg.starts_with('*')
+                    || arg.starts_with("...")
+                    || keyword_argument
+                        .as_ref()
+                        .is_some_and(|re| language == FlowLanguage::Python && re.is_match(arg))
+            });
+        if unsupported {
+            continue;
+        }
+        found.push((function_index, args));
+    }
+    found
+}
+
+/// Function definitions the interprocedural pass can summarize.
+///
+/// Recognized: JS/TS `function name(...) {`, `const name = function (...) {`,
+/// `const name = (...) => {`, and class methods `name(...) {`; Python
+/// `def name(...):` (methods when the first parameter is `self`/`cls`); Java
+/// methods and constructors whose header ends with `{`; Go `func name(...)
+/// ... {` (methods with receivers are skipped). Only simple positional
+/// parameters are accepted: destructuring, rest/variadic-star parameters,
+/// and headers split across lines make a definition unsupported. A name
+/// defined more than once in the file (overloads, redefinitions, the same
+/// method name on two classes) is dropped so a call never resolves to the
+/// wrong body.
+#[allow(clippy::items_after_test_module)]
+fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
+    let mut functions: Vec<FlowFunction> = Vec::new();
+    let mut unsupported_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let keywords = [
+        "if",
+        "for",
+        "while",
+        "switch",
+        "catch",
+        "function",
+        "return",
+        "with",
+        "else",
+        "new",
+        "synchronized",
+        "try",
+        "do",
+        "super",
+        "this",
+    ];
+    let headers: Vec<(Regex, bool)> = match language {
+        FlowLanguage::JavaScript => vec![
+            (
+                r#"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(([^()]*)\)\s*(?::\s*[^{]+)?\{\s*$"#,
+                false,
+            ),
+            (
+                r#"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?::\s*[^=]+)?=\s*(?:async\s+)?(?:function\s*[A-Za-z0-9_$]*\s*\(([^()]*)\)|\(([^()]*)\)\s*(?::\s*[^=]+)?=>)\s*\{\s*$"#,
+                false,
+            ),
+            (
+                r#"^\s*(?:(?:public|private|protected|static|async|readonly)\s+)*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(([^()]*)\)\s*(?::\s*[^{]+)?\{\s*$"#,
+                true,
+            ),
+        ],
+        FlowLanguage::Python => vec![(
+            r#"^(\s*)(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)\s*(?:->\s*[^:]+)?:\s*$"#,
+            false,
+        )],
+        FlowLanguage::Java => vec![(
+            r#"^\s*(?:(?:public|private|protected|static|final|synchronized|abstract)\s+)*(?:<[^>]+>\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\], ?]*?\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)\s*(?:throws\s+[A-Za-z0-9_.,\s]+?)?\s*\{\s*$"#,
+            false,
+        )],
+        FlowLanguage::Go => vec![(
+            r#"^\s*func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)[^{]*\{\s*$"#,
+            false,
+        )],
+    }
+    .into_iter()
+    .filter_map(|(pattern, method)| Regex::new(pattern).ok().map(|re| (re, method)))
+    .collect();
+    let annotation = Regex::new(r#"@[A-Za-z_][A-Za-z0-9_.]*(?:\([^()]*\))?\s*"#).ok();
+    let definition_like = Regex::new(
+        r#"^\s*(?:(?:export\s+)?(?:async\s+)?function\s*\*?\s*|(?:async\s+)?def\s+|func\s+)([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
+    )
+    .ok();
+
+    for (index, line) in lines.iter().enumerate() {
+        let code = if language == FlowLanguage::Python {
+            line.split('#').next().unwrap_or("")
+        } else {
+            line
+        };
+        let visible = blank_plain_strings(code, language);
+        let header_text = match (language, annotation.as_ref()) {
+            (FlowLanguage::Java, Some(annotation)) => {
+                annotation.replace_all(&visible, "").to_string()
+            }
+            _ => visible.clone(),
+        };
+        let matched = headers.iter().find_map(|(re, method)| {
+            re.captures(&header_text).map(|captures| {
+                if language == FlowLanguage::Python {
+                    let indent = captures.get(1).map_or(0, |m| m.as_str().len());
+                    (
+                        captures.get(2).map(|m| m.as_str().to_string()),
+                        captures.get(3).map(|m| m.as_str().to_string()),
+                        *method,
+                        indent,
+                    )
+                } else {
+                    let params = captures.get(2).or_else(|| captures.get(3));
+                    (
+                        captures.get(1).map(|m| m.as_str().to_string()),
+                        params.map(|m| m.as_str().to_string()),
+                        *method,
+                        0,
+                    )
+                }
+            })
+        });
+        let Some((Some(name), Some(params), mut method, indent)) = matched else {
+            // A definition this pass cannot parse still shadows the name.
+            if let Some(name) = definition_like
+                .as_ref()
+                .and_then(|re| re.captures(&visible))
+                .and_then(|captures| captures.get(1))
+            {
+                unsupported_names.insert(name.as_str().to_string());
+            }
+            continue;
+        };
+        if keywords.contains(&name.as_str()) {
+            continue;
+        }
+        let Some(mut params) = flow_parameters(&params, language) else {
+            unsupported_names.insert(name);
+            continue;
+        };
+        if language == FlowLanguage::Python
+            && params
+                .first()
+                .is_some_and(|first| first == "self" || first == "cls")
+        {
+            params.remove(0);
+            method = true;
+        }
+        let body = match language {
+            FlowLanguage::Python => {
+                let mut end = index + 1;
+                for (offset, next) in lines.iter().enumerate().skip(index + 1) {
+                    let trimmed = next.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
+                    }
+                    let next_indent = next.len() - next.trim_start().len();
+                    if next_indent <= indent {
+                        break;
+                    }
+                    end = offset + 1;
+                }
+                index + 1..end
+            }
+            _ => {
+                let mut depth = 0i64;
+                let mut end = None;
+                for (offset, next) in lines.iter().enumerate().skip(index) {
+                    let text = blank_plain_strings(next, language);
+                    let text = text.split("//").next().unwrap_or("");
+                    for ch in text.chars() {
+                        match ch {
+                            '{' => depth += 1,
+                            '}' => depth -= 1,
+                            _ => {}
+                        }
+                    }
+                    if depth <= 0 {
+                        end = Some(offset);
+                        break;
+                    }
+                }
+                match end {
+                    Some(end) if end > index => index + 1..end,
+                    _ => {
+                        unsupported_names.insert(name);
+                        continue;
+                    }
+                }
+            }
+        };
+        functions.push(FlowFunction {
+            name,
+            params,
+            header: index,
+            body,
+            method,
+        });
+    }
+
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for function in &functions {
+        *counts.entry(function.name.clone()).or_default() += 1;
+    }
+    functions.retain(|function| {
+        counts.get(&function.name) == Some(&1) && !unsupported_names.contains(&function.name)
+    });
+    functions
+}
+
+/// Parse a parameter list into plain names, or `None` when any parameter is
+/// not a simple positional identifier.
+#[allow(clippy::items_after_test_module)]
+fn flow_parameters(list: &str, language: FlowLanguage) -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    for ch in list.chars() {
+        match ch {
+            '<' | '[' | '{' | '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            '>' | ']' | '}' | ')' => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                parts.push(std::mem::take(&mut current));
+            }
+            _ => current.push(ch),
+        }
+    }
+    parts.push(current);
+    let parts: Vec<String> = parts
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .collect();
+    if parts.len() == 1 && parts[0].is_empty() {
+        return Some(Vec::new());
+    }
+    let is_identifier = |name: &str| {
+        !name.is_empty()
+            && !name.starts_with(|ch: char| ch.is_ascii_digit())
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+    };
+    let mut names = Vec::new();
+    for part in parts {
+        if part.is_empty() || part.starts_with('*') || part.starts_with("...") {
+            return None;
+        }
+        let name = match language {
+            FlowLanguage::JavaScript | FlowLanguage::Python => {
+                let name = part.split('=').next().unwrap_or("");
+                let name = name.split(':').next().unwrap_or("").trim();
+                let name = name.trim_end_matches('?');
+                name.to_string()
+            }
+            FlowLanguage::Java => {
+                let part = part.trim_start_matches("final ").trim();
+                if part.contains("...") {
+                    return None;
+                }
+                part.rsplit(char::is_whitespace)
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            }
+            FlowLanguage::Go => {
+                if part.contains("...") {
+                    return None;
+                }
+                part.split_whitespace().next().unwrap_or("").to_string()
+            }
+        };
+        if !is_identifier(&name) {
+            return None;
+        }
+        names.push(name);
+    }
+    Some(names)
 }
 
 #[allow(clippy::items_after_test_module)]
