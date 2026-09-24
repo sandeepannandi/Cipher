@@ -71,10 +71,10 @@ by the cases below.
 
 ### Cross-file data-flow cases
 
-`XF-JS-SQLI-001` and `XF-PY-SQLI-001` are small project cases. A route or view
-file reads request input and calls a function exported by another file it
-imports (`require('../services/users')`, `from .repository import
-find_orders`). That function builds and runs the SQL. The expected finding is
+`XF-JS-SQLI-001`/`002` and `XF-PY-SQLI-001` are small project cases. A route
+or view file reads request input and calls a function exported by another file
+it imports (`require('../services/users')`, a default import from an
+`export default` service, `from .repository import find_orders`). That function builds and runs the SQL. The expected finding is
 the sink line in the imported file. `CTRL-XF-JS-SQLI-001` keeps the same call
 but the service uses a bind parameter. `CTRL-XF-PY-SQLI-001` converts the value
 to an integer before the call. Both must stay clean. These are self-written

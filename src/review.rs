@@ -2540,6 +2540,143 @@ exports.search = (req, res) => {
     }
 
     #[test]
+    fn js_default_export_call_is_reported_in_service() {
+        let service = r#"const db = require('../db');
+
+export default function findByName(name) {
+    const sql = `SELECT id FROM users WHERE name = '${name}'`;
+    return db.prepare(sql).all();
+}
+"#;
+        for import in [
+            "import findByName from '../services/users';",
+            "import lookup from '../services/users';",
+        ] {
+            let callee = if import.contains("lookup") {
+                "lookup"
+            } else {
+                "findByName"
+            };
+            let route = format!(
+                "{import}\n\nexports.search = (req, res) => {{\n    const name = req.query.name;\n    return res.json({callee}(name));\n}};"
+            );
+            let found = scan_project(&[
+                ("src/routes/users.js", route.as_str()),
+                ("src/services/users.js", service),
+            ]);
+            assert_eq!(
+                found,
+                vec![(
+                    "src/services/users.js".to_string(),
+                    SQLI_FLOW.to_string(),
+                    5
+                )],
+                "{import}"
+            );
+        }
+    }
+
+    #[test]
+    fn js_default_export_reference_form_is_reported_in_service() {
+        let service = r#"const db = require('../db');
+
+function findByName(name) {
+    const sql = `SELECT id FROM users WHERE name = '${name}'`;
+    return db.prepare(sql).all();
+}
+
+export default findByName;
+"#;
+        let route = r#"import findByName from '../services/users';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/users.js", service),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_mixed_default_and_named_import_resolve() {
+        let service = r#"const db = require('../db');
+
+export default function findByName(name) {
+    const sql = `SELECT id FROM users WHERE name = '${name}'`;
+    return db.prepare(sql).all();
+}
+
+export function findById(id) {
+    return db.prepare('SELECT id FROM users WHERE id = ?').get(id);
+}
+"#;
+        let route = r#"import findByName, { findById } from '../services/users';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/users.js", service),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_default_export_parameterized_stays_clean() {
+        let service = r#"const db = require('../db');
+
+export default function findByName(name) {
+    return db.prepare('SELECT id FROM users WHERE name = ?').all(name);
+}
+"#;
+        let route = r#"import findByName from '../services/users';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/users.js", service),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn js_default_import_without_default_export_is_not_resolved() {
+        let route = r#"import findByName from '../services/users';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn js_parameterized_service_function_stays_clean() {
         let found = scan_project(&[
             (
@@ -5491,8 +5628,8 @@ enum ImportBinding {
 /// argument passed to an exported function of another file in a position
 /// that reaches a sink reports the sink line in that file. One import hop is
 /// followed; the callee's own same-file helpers are included through its
-/// summaries. Package imports (JS), dynamic `require`, re-exports, default
-/// exports, `_test.go` files, and calls through instance variables are not
+/// summaries. Package imports (JS), dynamic `require`, re-exports,
+/// `_test.go` files, and calls through instance variables are not
 /// resolved, nested Rust groups (`use a::{b::{c, d}}`) and re-exports are
 /// not resolved, and a callable name offered by two different files
 /// resolves to neither.
@@ -6070,7 +6207,8 @@ fn cross_file_flow_sinks(
 
 /// Exported function names of a file, mapped to their index in `functions`.
 /// JS/TS: `module.exports = { a, b: c }`, `exports.a = b`, `export function
-/// a`, `export { a, b as c }`. Python: every top-level function. Go: every
+/// a`, `export { a, b as c }`, `export default function a` / `export default
+/// a` (under the conventional `default` key). Python: every top-level function. Go: every
 /// package-level function (same-package visibility; cross-package callers
 /// see only capitalized names, filtered at the binding). Java: the static,
 /// non-private methods of the file's class. Rust: the `pub` free functions.
@@ -6137,7 +6275,14 @@ fn flow_exports(
         }
         return exported;
     }
-    let (Ok(object_start), Ok(property), Ok(export_decl), Ok(export_list)) = (
+    let (
+        Ok(object_start),
+        Ok(property),
+        Ok(export_decl),
+        Ok(export_list),
+        Ok(export_default_fn),
+        Ok(export_default_ref),
+    ) = (
         Regex::new(r#"^\s*module\s*\.\s*exports\s*=\s*\{(.*)$"#),
         Regex::new(
             r#"^\s*(?:module\s*\.\s*)?exports\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*;?\s*$"#,
@@ -6146,7 +6291,12 @@ fn flow_exports(
             r#"^\s*export\s+(?:async\s+)?(?:function\s*\*?\s*|const\s+|let\s+|var\s+)([A-Za-z_$][A-Za-z0-9_$]*)"#,
         ),
         Regex::new(r#"^\s*export\s*\{([^}]*)\}"#),
-    ) else {
+        Regex::new(
+            r#"^\s*export\s+default\s+(?:async\s+)?function\s*\*?\s*([A-Za-z_$][A-Za-z0-9_$]*)"#,
+        ),
+        Regex::new(r#"^\s*export\s+default\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*;?\s*$"#),
+    )
+    else {
         return exported;
     };
     let add_entries =
@@ -6201,6 +6351,21 @@ fn flow_exports(
                 if let Some(index) = find(local.as_str()) {
                     exported.insert(key.as_str().to_string(), index);
                 }
+            }
+            continue;
+        }
+        // `export default function f` / `export default f` register the
+        // function under the conventional `default` key that default imports
+        // look up.
+        if let Some(name) = export_default_fn.captures(code).and_then(|c| c.get(1)) {
+            if let Some(index) = find(name.as_str()) {
+                exported.insert("default".to_string(), index);
+            }
+            continue;
+        }
+        if let Some(name) = export_default_ref.captures(code).and_then(|c| c.get(1)) {
+            if let Some(index) = find(name.as_str()) {
+                exported.insert("default".to_string(), index);
             }
             continue;
         }
@@ -6706,7 +6871,14 @@ fn flow_imports(
                     .filter(|candidate| candidate.is_file())
                     .find_map(lookup)
             };
-            let (Ok(module_require), Ok(named_require), Ok(namespace_import), Ok(named_import)) = (
+            let (
+                Ok(module_require),
+                Ok(named_require),
+                Ok(namespace_import),
+                Ok(named_import),
+                Ok(default_import),
+                Ok(mixed_import),
+            ) = (
                 Regex::new(
                     r#"^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$"#,
                 ),
@@ -6717,7 +6889,14 @@ fn flow_imports(
                     r#"^\s*import\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$"#,
                 ),
                 Regex::new(r#"^\s*import\s*\{([^}]*)\}\s*from\s+['"]([^'"]+)['"]\s*;?\s*$"#),
-            ) else {
+                Regex::new(
+                    r#"^\s*import\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$"#,
+                ),
+                Regex::new(
+                    r#"^\s*import\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*,\s*\{([^}]*)\}\s*from\s+['"]([^'"]+)['"]\s*;?\s*$"#,
+                ),
+            )
+            else {
                 return bindings;
             };
             for line in lines {
@@ -6732,6 +6911,49 @@ fn flow_imports(
                                         exported_only: false,
                                     });
                                 }
+                            }
+                        }
+                    }
+                }
+                // `import f from './x'` binds the local name to the target's
+                // `default` export; `import f, { g } from './x'` binds both.
+                // `import type ...` lines are skipped: they never produce a
+                // callable binding.
+                if !line.trim_start().starts_with("import type") {
+                    if let Some(captures) = mixed_import.captures(line) {
+                        if let (Some(local), Some(names), Some(spec)) =
+                            (captures.get(1), captures.get(2), captures.get(3))
+                        {
+                            if let Some(target) = resolve(spec.as_str()) {
+                                bindings.push(ImportBinding::Function {
+                                    local: local.as_str().to_string(),
+                                    exported: "default".to_string(),
+                                    target,
+                                });
+                                for entry in names.as_str().split(',') {
+                                    let entry = entry.trim();
+                                    let (exported, local) = match entry.split_once(" as ") {
+                                        Some((left, right)) => (left.trim(), right.trim()),
+                                        None => (entry, entry),
+                                    };
+                                    if is_identifier(exported) && is_identifier(local) {
+                                        bindings.push(ImportBinding::Function {
+                                            local: local.to_string(),
+                                            exported: exported.to_string(),
+                                            target,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    } else if let Some(captures) = default_import.captures(line) {
+                        if let (Some(local), Some(spec)) = (captures.get(1), captures.get(2)) {
+                            if let Some(target) = resolve(spec.as_str()) {
+                                bindings.push(ImportBinding::Function {
+                                    local: local.as_str().to_string(),
+                                    exported: "default".to_string(),
+                                    target,
+                                });
                             }
                         }
                     }
