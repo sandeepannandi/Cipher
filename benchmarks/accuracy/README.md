@@ -80,6 +80,15 @@ but the service uses a bind parameter. `CTRL-XF-PY-SQLI-001` converts the value
 to an integer before the call. Both must stay clean. These are self-written
 fixtures, not upstream corpus files.
 
+`XF-JAVA-SQLI-001` and `XF-GO-SQLI-001`/`002` are the Java and Go project
+cases. A servlet calls a static method of a sibling class in the same package;
+a Go handler calls a function defined in a sibling file of the same package,
+or in another package of the same module resolved through `go.mod`. That
+function builds and runs the SQL. The expected finding is the sink line in
+the other file. The controls keep the same call shape but the callee uses a
+bind parameter or the caller converts the value with `strconv.Atoi`, and must
+stay clean. These are self-written fixtures, not upstream corpus files.
+
 ## Run
 
 ```bash
@@ -88,7 +97,7 @@ python3 benchmarks/accuracy/run.py --cipher ./target/release/cipher-ai
 
 The script validates the manifest, runs each fixture through the review path, and writes `benchmarks/accuracy/results/latest.json`. It exits non-zero if the manifest is invalid, any execution error occurs, or a configured threshold for precision/recall/F1 or execution errors is missed.
 
-The focused corpus remains intentionally small and measures the deterministic `review` path, not AI verification, Java/Go cross-file data flow, or dependency scanning. The runner now supports pinned public project subsets with exact finding labels; those realism cases belong in a separate manifest and CI job so their measured baseline cannot weaken the focused regression gate.
+The focused corpus remains intentionally small and measures the deterministic `review` path, not AI verification or dependency scanning. The runner now supports pinned public project subsets with exact finding labels; those realism cases belong in a separate manifest and CI job so their measured baseline cannot weaken the focused regression gate.
 
 ## CI gates and report
 

@@ -2657,6 +2657,345 @@ def orders():
         ]);
         assert!(found.is_empty(), "{found:?}");
     }
+
+    const JAVA_USER_SERVICE: &str = r#"package com.example.demo;
+
+import java.sql.*;
+
+public class UserService {
+    private static Connection conn;
+
+    public static ResultSet findByName(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        Statement stmt = conn.createStatement();
+        return stmt.executeQuery(sql);
+    }
+}
+"#;
+
+    const JAVA_USER_CONTROLLER: &str = r#"package com.example.demo;
+
+import java.sql.*;
+import javax.servlet.http.*;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        UserService.findByName(name);
+    }
+}
+"#;
+
+    const GO_STORE: &str = r#"package main
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+var db *sql.DB
+
+func findUser(name string) (*sql.Rows, error) {
+	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+	return db.Query(query)
+}
+"#;
+
+    #[test]
+    fn java_same_package_static_call_is_reported_in_service() {
+        let found = scan_project(&[
+            ("src/UserController.java", JAVA_USER_CONTROLLER),
+            ("src/UserService.java", JAVA_USER_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/UserService.java".to_string(),
+                SQLI_FLOW.to_string(),
+                11
+            )]
+        );
+    }
+
+    #[test]
+    fn java_import_resolved_static_call_is_reported_in_service() {
+        let controller = r#"package com.example.web;
+
+import java.sql.*;
+import javax.servlet.http.*;
+import com.example.service.UserService;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        UserService.findByName(name);
+    }
+}
+"#;
+        let service = r#"package com.example.service;
+
+import java.sql.*;
+
+public class UserService {
+    private static Connection conn;
+
+    public static ResultSet findByName(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        Statement stmt = conn.createStatement();
+        return stmt.executeQuery(sql);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/com/example/web/UserController.java", controller),
+            ("src/com/example/service/UserService.java", service),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/com/example/service/UserService.java".to_string(),
+                SQLI_FLOW.to_string(),
+                11
+            )]
+        );
+    }
+
+    #[test]
+    fn java_parameterized_cross_file_call_is_clean() {
+        let service = r#"package com.example.demo;
+
+import java.sql.*;
+
+public class UserService {
+    private static Connection conn;
+
+    public static ResultSet findByName(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = ?";
+        PreparedStatement stmt = conn.prepareStatement(sql);
+        stmt.setString(1, name);
+        return stmt.executeQuery();
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/UserController.java", JAVA_USER_CONTROLLER),
+            ("src/UserService.java", service),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn java_import_static_is_not_resolved() {
+        let controller = r#"package com.example.web;
+
+import java.sql.*;
+import javax.servlet.http.*;
+import static com.example.service.UserService.findByName;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        findByName(name);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/com/example/web/UserController.java", controller),
+            (
+                "src/com/example/service/UserService.java",
+                JAVA_USER_SERVICE,
+            ),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn java_instance_method_call_is_not_resolved() {
+        let controller = r#"package com.example.demo;
+
+import java.sql.*;
+import javax.servlet.http.*;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        UserService service = new UserService();
+        service.findByName(name);
+    }
+}
+"#;
+        let service = r#"package com.example.demo;
+
+import java.sql.*;
+
+public class UserService {
+    private Connection conn;
+
+    public ResultSet findByName(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        Statement stmt = conn.createStatement();
+        return stmt.executeQuery(sql);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/UserController.java", controller),
+            ("src/UserService.java", service),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn go_same_package_call_is_reported_in_store() {
+        let handler = r#"package main
+
+import "net/http"
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	findUser(name)
+}
+"#;
+        let found = scan_project(&[("handler.go", handler), ("store.go", GO_STORE)]);
+        assert_eq!(
+            found,
+            vec![("store.go".to_string(), SQLI_FLOW.to_string(), 12)]
+        );
+    }
+
+    #[test]
+    fn go_numeric_conversion_before_cross_file_call_is_clean() {
+        let handler = r#"package main
+
+import (
+	"net/http"
+	"strconv"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	id, _ := strconv.Atoi(name)
+	findUser(id)
+}
+"#;
+        let found = scan_project(&[("handler.go", handler), ("store.go", GO_STORE)]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn go_cross_package_call_is_reported_in_store() {
+        let store = r#"package store
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+var db *sql.DB
+
+func FindUser(name string) (*sql.Rows, error) {
+	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+	return db.Query(query)
+}
+"#;
+        for (import, call) in [
+            ("\"example.com/shop/store\"", "store.FindUser(name)"),
+            ("st \"example.com/shop/store\"", "st.FindUser(name)"),
+        ] {
+            let main = format!(
+                "package main\n\nimport (\n\t\"net/http\"\n\n\t{import}\n)\n\nfunc handler(w http.ResponseWriter, r *http.Request) {{\n\tname := r.URL.Query().Get(\"name\")\n\t{call}\n}}\n"
+            );
+            let found = scan_project(&[
+                ("go.mod", "module example.com/shop\n"),
+                ("main.go", main.as_str()),
+                ("store/store.go", store),
+            ]);
+            assert_eq!(
+                found,
+                vec![("store/store.go".to_string(), SQLI_FLOW.to_string(), 12)],
+                "{import}"
+            );
+        }
+    }
+
+    #[test]
+    fn go_unexported_cross_package_call_is_not_resolved() {
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	"example.com/shop/store"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	store.findUser(name)
+}
+"#;
+        let store = r#"package store
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+var db *sql.DB
+
+func findUser(name string) (*sql.Rows, error) {
+	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+	return db.Query(query)
+}
+"#;
+        let found = scan_project(&[
+            ("go.mod", "module example.com/shop\n"),
+            ("main.go", main),
+            ("store/store.go", store),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn go_external_import_is_not_resolved() {
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	"github.com/other/store"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	store.FindUser(name)
+}
+"#;
+        let found = scan_project(&[
+            ("go.mod", "module example.com/shop\n"),
+            ("main.go", main),
+            ("store/store.go", GO_STORE),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn go_duplicate_function_names_across_siblings_are_not_resolved() {
+        let handler = r#"package main
+
+import "net/http"
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	findUser(name)
+}
+"#;
+        let found = scan_project(&[
+            ("handler.go", handler),
+            ("store.go", GO_STORE),
+            ("extra.go", GO_STORE),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
 }
 
 /// Find calls through local Python aliases bound directly to `hashlib.md5`.
@@ -3977,8 +4316,13 @@ struct CrossFileSinkLines {
 enum ImportBinding {
     /// `const service = require('../service')`, `import * as s from`,
     /// `import service` / `from . import service`: calls look like
-    /// `binding.name(...)`.
-    Module { binding: String, target: usize },
+    /// `binding.name(...)`. `exported_only` restricts the visible names to
+    /// capitalized ones (Go cross-package calls).
+    Module {
+        binding: String,
+        target: usize,
+        exported_only: bool,
+    },
     /// `const { f } = require(...)`, `import { f as g } from`,
     /// `from .service import f as g`: calls look like `local(...)`.
     Function {
@@ -3988,18 +4332,27 @@ enum ImportBinding {
     },
 }
 
-/// Cross-file request flow for JS/TS and Python projects.
+/// Cross-file request flow for JS/TS, Python, Java, and Go projects.
 ///
 /// Each file's functions are summarized with the same per-parameter pass as
-/// the same-file engine. Relative imports are resolved to project files
-/// (`require`/`import` of `./x`, `../x`, `x/index`; Python `from .x import f`,
-/// `from x import f`, `import x as m` resolved next to the importing file or
-/// at the project root). A request-tainted argument passed to an exported
-/// function of an imported file in a position that reaches a sink reports the
-/// sink line in the imported file. One import hop is followed; the callee's
-/// own same-file helpers are included through its summaries. Package
-/// imports, dynamic `require`, re-exports, and default exports are not
-/// resolved.
+/// the same-file engine. JS/TS and Python imports are resolved to project
+/// files (`require`/`import` of `./x`, `../x`, `x/index`; Python `from .x
+/// import f`, `from x import f`, `import x as m` resolved next to the
+/// importing file or at the project root). Go files in one directory share a
+/// package namespace, so a bare call resolves to a function defined in a
+/// sibling file; `import "mod/pkg"` (optionally aliased, single or grouped
+/// form) resolves through the module path of the nearest `go.mod`, and only
+/// exported (capitalized) names are visible across packages. Java classes in
+/// one package refer to each other by class name (`Service.find(...)`), and
+/// `import a.b.C;` resolves to the one project file whose package and class
+/// name match; only static, non-private methods resolve. A request-tainted
+/// argument passed to an exported function of another file in a position
+/// that reaches a sink reports the sink line in that file. One import hop is
+/// followed; the callee's own same-file helpers are included through its
+/// summaries. Package imports (JS), dynamic `require`, re-exports, default
+/// exports, `import static` and wildcard imports (Java), `_test.go` files,
+/// and calls through instance variables are not resolved, and a callable
+/// name offered by two different files resolves to neither.
 #[allow(clippy::items_after_test_module)]
 fn cross_file_flow_sinks(
     files: &[std::path::PathBuf],
@@ -4016,9 +4369,6 @@ fn cross_file_flow_sinks(
         .iter()
         .filter_map(|path| {
             let language = flow_language(&file_extension(path))?;
-            if !matches!(language, FlowLanguage::JavaScript | FlowLanguage::Python) {
-                return None;
-            }
             let content = std::fs::read_to_string(path).ok()?;
             Some(Module {
                 path: path.clone(),
@@ -4056,11 +4406,172 @@ fn cross_file_flow_sinks(
         .zip(&functions)
         .map(|((module, lines), functions)| flow_exports(lines, module.language, functions))
         .collect();
-    let bindings: Vec<Vec<ImportBinding>> = modules
+    let mut bindings: Vec<Vec<ImportBinding>> = modules
         .iter()
         .zip(&lines)
         .map(|(module, lines)| flow_imports(lines, module.language, &module.path, &root, &index_of))
         .collect();
+    let mut by_dir: std::collections::HashMap<std::path::PathBuf, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (canonical, index) in &index_of {
+        if let Some(parent) = canonical.parent() {
+            by_dir.entry(parent.to_path_buf()).or_default().push(*index);
+        }
+    }
+    // Same-package siblings need no import statement: Go files in one
+    // directory share a namespace, and Java classes in one package refer to
+    // each other by class name. Go cross-package imports resolve through the
+    // module path of the nearest go.mod; a Java `import a.b.C;` matches the
+    // one file whose package and class name line up.
+    for (index, module) in modules.iter().enumerate() {
+        let is_test = module
+            .path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with("_test.go"));
+        let Some(own_dir) = module
+            .path
+            .parent()
+            .and_then(|parent| std::fs::canonicalize(parent).ok())
+        else {
+            continue;
+        };
+        match module.language {
+            FlowLanguage::Go => {
+                if is_test {
+                    continue;
+                }
+                if let Some(package) = go_package_clause(&lines[index]) {
+                    if let Some(siblings) = by_dir.get(&own_dir) {
+                        for &sibling in siblings {
+                            if sibling == index
+                                || modules[sibling].language != FlowLanguage::Go
+                                || modules[sibling].path.file_name().is_some_and(|name| {
+                                    name.to_string_lossy().ends_with("_test.go")
+                                })
+                                || go_package_clause(&lines[sibling]).as_deref()
+                                    != Some(package.as_str())
+                            {
+                                continue;
+                            }
+                            for name in exports[sibling].keys() {
+                                bindings[index].push(ImportBinding::Function {
+                                    local: name.clone(),
+                                    exported: name.clone(),
+                                    target: sibling,
+                                });
+                            }
+                        }
+                    }
+                }
+                let Some((module_root, module_path)) = go_module_root_and_path(&own_dir, &root)
+                else {
+                    continue;
+                };
+                for (alias, spec) in go_import_specs(&lines[index]) {
+                    let relative = match spec.strip_prefix(module_path.as_str()) {
+                        Some("") => std::path::PathBuf::new(),
+                        Some(rest) if rest.starts_with('/') => std::path::PathBuf::from(&rest[1..]),
+                        _ => continue,
+                    };
+                    let Ok(target_dir) = std::fs::canonicalize(module_root.join(relative)) else {
+                        continue;
+                    };
+                    let Some(targets) = by_dir.get(&target_dir) else {
+                        continue;
+                    };
+                    let targets: Vec<usize> = targets
+                        .iter()
+                        .copied()
+                        .filter(|&target| {
+                            modules[target].language == FlowLanguage::Go
+                                && !modules[target].path.file_name().is_some_and(|name| {
+                                    name.to_string_lossy().ends_with("_test.go")
+                                })
+                        })
+                        .collect();
+                    if targets.is_empty() {
+                        continue;
+                    }
+                    let binding = match alias {
+                        Some(alias) => alias,
+                        None => {
+                            let mut clauses = targets
+                                .iter()
+                                .filter_map(|&target| go_package_clause(&lines[target]));
+                            let Some(first) = clauses.next() else {
+                                continue;
+                            };
+                            if clauses.any(|clause| clause != first) {
+                                continue;
+                            }
+                            first
+                        }
+                    };
+                    for target in targets {
+                        bindings[index].push(ImportBinding::Module {
+                            binding: binding.clone(),
+                            target,
+                            exported_only: true,
+                        });
+                    }
+                }
+            }
+            FlowLanguage::Java => {
+                let package = java_package_clause(&lines[index]);
+                let mut class_counts: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                let mut siblings = Vec::new();
+                if let Some(same_dir) = by_dir.get(&own_dir) {
+                    for &sibling in same_dir {
+                        if sibling == index
+                            || modules[sibling].language != FlowLanguage::Java
+                            || java_package_clause(&lines[sibling]) != package
+                        {
+                            continue;
+                        }
+                        if let Some(class) =
+                            java_class_name(&lines[sibling], &modules[sibling].path)
+                        {
+                            *class_counts.entry(class.clone()).or_default() += 1;
+                            siblings.push((class, sibling));
+                        }
+                    }
+                }
+                for (class, sibling) in siblings {
+                    if class_counts.get(&class) == Some(&1) {
+                        bindings[index].push(ImportBinding::Module {
+                            binding: class,
+                            target: sibling,
+                            exported_only: false,
+                        });
+                    }
+                }
+                for (package, class) in java_import_specs(&lines[index]) {
+                    let matches: Vec<usize> = modules
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, other_module)| {
+                            *other != index
+                                && other_module.language == FlowLanguage::Java
+                                && java_package_clause(&lines[*other]).as_deref()
+                                    == Some(package.as_str())
+                                && java_class_name(&lines[*other], &other_module.path).as_deref()
+                                    == Some(class.as_str())
+                        })
+                        .map(|(other, _)| other)
+                        .collect();
+                    if matches.len() == 1 {
+                        bindings[index].push(ImportBinding::Module {
+                            binding: class,
+                            target: matches[0],
+                            exported_only: false,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     if bindings.iter().all(|found| found.is_empty()) {
         return result;
     }
@@ -4091,11 +4602,19 @@ fn cross_file_flow_sinks(
             for binding in &bindings[caller] {
                 let (receiver, target, pairs): (Option<String>, usize, Vec<(String, usize)>) =
                     match binding {
-                        ImportBinding::Module { binding, target } => (
+                        ImportBinding::Module {
+                            binding,
+                            target,
+                            exported_only,
+                        } => (
                             Some(binding.clone()),
                             *target,
                             exports[*target]
                                 .iter()
+                                .filter(|(name, _)| {
+                                    !exported_only
+                                        || name.chars().next().is_some_and(|ch| ch.is_uppercase())
+                                })
                                 .map(|(name, function)| (name.clone(), *function))
                                 .collect(),
                         ),
@@ -4131,6 +4650,41 @@ fn cross_file_flow_sinks(
                     });
                 }
             }
+            // A call resolves only when one file provides the (receiver,
+            // name) pair: two files offering the same callable are ambiguous
+            // and neither resolves. Duplicate bindings for the same target
+            // collapse instead.
+            let mut groups: std::collections::HashMap<(Option<String>, String), Vec<usize>> =
+                std::collections::HashMap::new();
+            for (position, callee) in imports.iter().enumerate() {
+                groups
+                    .entry((callee.receiver.clone(), callee.name.clone()))
+                    .or_default()
+                    .push(position);
+            }
+            let mut keep = vec![true; imports.len()];
+            for positions in groups.values() {
+                let target = imports[positions[0]].target;
+                if positions[1..]
+                    .iter()
+                    .any(|&position| imports[position].target != target)
+                {
+                    for &position in positions {
+                        keep[position] = false;
+                    }
+                } else {
+                    for &position in &positions[1..] {
+                        keep[position] = false;
+                    }
+                }
+            }
+            let mut deduped = Vec::new();
+            for (position, callee) in imports.into_iter().enumerate() {
+                if keep[position] {
+                    deduped.push(callee);
+                }
+            }
+            let imports = deduped;
             if imports.is_empty() {
                 continue;
             }
@@ -4165,7 +4719,10 @@ fn cross_file_flow_sinks(
 
 /// Exported function names of a file, mapped to their index in `functions`.
 /// JS/TS: `module.exports = { a, b: c }`, `exports.a = b`, `export function
-/// a`, `export { a, b as c }`. Python: every top-level function.
+/// a`, `export { a, b as c }`. Python: every top-level function. Go: every
+/// package-level function (same-package visibility; cross-package callers
+/// see only capitalized names, filtered at the binding). Java: the static,
+/// non-private methods of the file's class.
 #[allow(clippy::items_after_test_module)]
 fn flow_exports(
     lines: &[&str],
@@ -4184,6 +4741,26 @@ fn flow_exports(
                 .get(function.header)
                 .is_some_and(|line| !line.starts_with(char::is_whitespace));
             if top_level && !function.method {
+                exported.insert(function.name.clone(), index);
+            }
+        }
+        return exported;
+    }
+    if language == FlowLanguage::Go {
+        for (index, function) in functions.iter().enumerate() {
+            exported.insert(function.name.clone(), index);
+        }
+        return exported;
+    }
+    if language == FlowLanguage::Java {
+        for (index, function) in functions.iter().enumerate() {
+            let Some(header) = lines.get(function.header) else {
+                continue;
+            };
+            let words: std::collections::HashSet<&str> = header
+                .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                .collect();
+            if words.contains("static") && !words.contains("private") {
                 exported.insert(function.name.clone(), index);
             }
         }
@@ -4275,6 +4852,147 @@ fn flow_exports(
     exported
 }
 
+/// The `package` clause of a Go file; files sharing it in one directory
+/// share a namespace.
+#[allow(clippy::items_after_test_module)]
+fn go_package_clause(lines: &[&str]) -> Option<String> {
+    let package = Regex::new(r#"^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)"#).ok()?;
+    lines.iter().find_map(|line| {
+        package
+            .captures(line.split("//").next().unwrap_or(""))
+            .and_then(|captures| captures.get(1))
+            .map(|name| name.as_str().to_string())
+    })
+}
+
+/// The `package` statement of a Java file; `None` for the default package.
+#[allow(clippy::items_after_test_module)]
+fn java_package_clause(lines: &[&str]) -> Option<String> {
+    let package = Regex::new(r#"^\s*package\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;"#).ok()?;
+    lines.iter().find_map(|line| {
+        package
+            .captures(line.split("//").next().unwrap_or(""))
+            .and_then(|captures| captures.get(1))
+            .map(|name| name.as_str().to_string())
+    })
+}
+
+/// The first declared type name of a Java file, falling back to the file
+/// stem (`UserService.java` conventionally declares `UserService`).
+#[allow(clippy::items_after_test_module)]
+fn java_class_name(lines: &[&str], path: &Path) -> Option<String> {
+    let class =
+        Regex::new(r#"(?:^|\s)(?:class|interface|enum|record)\s+([A-Za-z_][A-Za-z0-9_]*)"#).ok()?;
+    for line in lines {
+        let code = line.split("//").next().unwrap_or("");
+        if let Some(name) = class.captures(code).and_then(|captures| captures.get(1)) {
+            return Some(name.as_str().to_string());
+        }
+    }
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+}
+
+/// Import specs of a Go file as `(alias, path)` pairs, from both
+/// `import "path"` and the grouped `import ( ... )` form. Blank and dot
+/// imports are skipped.
+#[allow(clippy::items_after_test_module)]
+fn go_import_specs(lines: &[&str]) -> Vec<(Option<String>, String)> {
+    let mut specs = Vec::new();
+    let (Ok(single), Ok(group_start), Ok(entry)) = (
+        Regex::new(r#"^\s*import\s+(?:([A-Za-z_][A-Za-z0-9_.]*)\s+)?"([^"]+)""#),
+        Regex::new(r#"^\s*import\s*\(\s*$"#),
+        Regex::new(r#"^\s*(?:([A-Za-z_][A-Za-z0-9_.]*)\s+)?"([^"]+)""#),
+    ) else {
+        return specs;
+    };
+    let mut in_group = false;
+    for line in lines {
+        let code = line.split("//").next().unwrap_or("").trim();
+        if in_group {
+            if code.starts_with(')') {
+                in_group = false;
+                continue;
+            }
+            if let Some(captures) = entry.captures(code) {
+                let alias = captures.get(1).map(|name| name.as_str().to_string());
+                if !matches!(alias.as_deref(), Some("_") | Some(".")) {
+                    let path = captures.get(2).map_or("", |spec| spec.as_str());
+                    specs.push((alias, path.to_string()));
+                }
+            }
+            continue;
+        }
+        if group_start.is_match(code) {
+            in_group = true;
+            continue;
+        }
+        if let Some(captures) = single.captures(code) {
+            let alias = captures.get(1).map(|name| name.as_str().to_string());
+            if !matches!(alias.as_deref(), Some("_") | Some(".")) {
+                let path = captures.get(2).map_or("", |spec| spec.as_str());
+                specs.push((alias, path.to_string()));
+            }
+        }
+    }
+    specs
+}
+
+/// `(package, class)` pairs from Java `import a.b.C;` statements. `import
+/// static` and wildcard imports are skipped.
+#[allow(clippy::items_after_test_module)]
+fn java_import_specs(lines: &[&str]) -> Vec<(String, String)> {
+    let mut specs = Vec::new();
+    let Ok(import) = Regex::new(r#"^\s*import\s+(static\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*;"#) else {
+        return specs;
+    };
+    for line in lines {
+        let code = line.split("//").next().unwrap_or("").trim();
+        let Some(captures) = import.captures(code) else {
+            continue;
+        };
+        if captures.get(1).is_some() {
+            continue;
+        }
+        let dotted = captures.get(2).map_or("", |name| name.as_str());
+        let Some((package, class)) = dotted.rsplit_once('.') else {
+            continue;
+        };
+        if class == "*" {
+            continue;
+        }
+        specs.push((package.to_string(), class.to_string()));
+    }
+    specs
+}
+
+/// The directory holding the nearest `go.mod` at or above `dir` (stopping
+/// at `root`), and the module path it declares.
+#[allow(clippy::items_after_test_module)]
+fn go_module_root_and_path(dir: &Path, root: &Path) -> Option<(std::path::PathBuf, String)> {
+    let mut base = dir;
+    loop {
+        let go_mod = base.join("go.mod");
+        if go_mod.is_file() {
+            let content = std::fs::read_to_string(go_mod).ok()?;
+            let module = content.lines().find_map(|line| {
+                let line = line.split("//").next().unwrap_or("").trim();
+                let mut words = line.split_whitespace();
+                if words.next() == Some("module") {
+                    words.next().map(str::to_string)
+                } else {
+                    None
+                }
+            })?;
+            return Some((base.to_path_buf(), module));
+        }
+        if base == root {
+            return None;
+        }
+        base = base.parent()?;
+    }
+}
+
 /// Resolve a file's relative imports to other project files.
 #[allow(clippy::items_after_test_module)]
 fn flow_imports(
@@ -4342,6 +5060,7 @@ fn flow_imports(
                                     bindings.push(ImportBinding::Module {
                                         binding: binding.as_str().to_string(),
                                         target,
+                                        exported_only: false,
                                     });
                                 }
                             }
@@ -4440,6 +5159,7 @@ fn flow_imports(
                             bindings.push(ImportBinding::Module {
                                 binding: local.to_string(),
                                 target,
+                                exported_only: false,
                             });
                         } else if let Some(target) = module_target {
                             bindings.push(ImportBinding::Function {
@@ -4459,7 +5179,11 @@ fn flow_imports(
                         None => continue,
                     };
                     if let Some(target) = resolve_module(0, dotted) {
-                        bindings.push(ImportBinding::Module { binding, target });
+                        bindings.push(ImportBinding::Module {
+                            binding,
+                            target,
+                            exported_only: false,
+                        });
                     }
                 }
             }
