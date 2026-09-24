@@ -2784,8 +2784,23 @@ public class UserService {
         assert!(found.is_empty(), "{found:?}");
     }
 
+    const JAVA_SERVICE_PACKAGE: &str = r#"package com.example.service;
+
+import java.sql.*;
+
+public class UserService {
+    private static Connection conn;
+
+    public static ResultSet findByName(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        Statement stmt = conn.createStatement();
+        return stmt.executeQuery(sql);
+    }
+}
+"#;
+
     #[test]
-    fn java_import_static_is_not_resolved() {
+    fn java_import_static_call_is_reported_in_service() {
         let controller = r#"package com.example.web;
 
 import java.sql.*;
@@ -2803,8 +2818,185 @@ public class UserController extends HttpServlet {
             ("src/com/example/web/UserController.java", controller),
             (
                 "src/com/example/service/UserService.java",
-                JAVA_USER_SERVICE,
+                JAVA_SERVICE_PACKAGE,
             ),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/com/example/service/UserService.java".to_string(),
+                SQLI_FLOW.to_string(),
+                11
+            )]
+        );
+    }
+
+    #[test]
+    fn java_import_static_wildcard_call_is_reported_in_service() {
+        let controller = r#"package com.example.web;
+
+import java.sql.*;
+import javax.servlet.http.*;
+import static com.example.service.UserService.*;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        findByName(name);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/com/example/web/UserController.java", controller),
+            (
+                "src/com/example/service/UserService.java",
+                JAVA_SERVICE_PACKAGE,
+            ),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/com/example/service/UserService.java".to_string(),
+                SQLI_FLOW.to_string(),
+                11
+            )]
+        );
+    }
+
+    #[test]
+    fn java_package_wildcard_call_is_reported_in_service() {
+        let controller = r#"package com.example.web;
+
+import java.sql.*;
+import javax.servlet.http.*;
+import com.example.service.*;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        UserService.findByName(name);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/com/example/web/UserController.java", controller),
+            (
+                "src/com/example/service/UserService.java",
+                JAVA_SERVICE_PACKAGE,
+            ),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/com/example/service/UserService.java".to_string(),
+                SQLI_FLOW.to_string(),
+                11
+            )]
+        );
+    }
+
+    #[test]
+    fn java_import_static_shadowed_by_own_method_is_not_resolved() {
+        let controller = r#"package com.example.web;
+
+import java.sql.*;
+import javax.servlet.http.*;
+import static com.example.service.UserService.findByName;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        findByName(name);
+    }
+
+    private void findByName(String name) {
+        System.out.println(name);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/com/example/web/UserController.java", controller),
+            (
+                "src/com/example/service/UserService.java",
+                JAVA_SERVICE_PACKAGE,
+            ),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn java_import_static_private_method_is_not_resolved() {
+        let controller = r#"package com.example.web;
+
+import java.sql.*;
+import javax.servlet.http.*;
+import static com.example.service.UserService.findByName;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        findByName(name);
+    }
+}
+"#;
+        let service = r#"package com.example.service;
+
+import java.sql.*;
+
+public class UserService {
+    private static Connection conn;
+
+    private static ResultSet findByName(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        Statement stmt = conn.createStatement();
+        return stmt.executeQuery(sql);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/com/example/web/UserController.java", controller),
+            ("src/com/example/service/UserService.java", service),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn java_import_static_ambiguous_members_are_not_resolved() {
+        let controller = r#"package com.example.web;
+
+import java.sql.*;
+import javax.servlet.http.*;
+import static com.example.service.UserService.findByName;
+import static com.example.other.UserService.findByName;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        findByName(name);
+    }
+}
+"#;
+        let other = r#"package com.example.other;
+
+import java.sql.*;
+
+public class UserService {
+    private static Connection conn;
+
+    public static ResultSet findByName(String name) throws SQLException {
+        String sql = "SELECT * FROM users WHERE name = '" + name + "'";
+        Statement stmt = conn.createStatement();
+        return stmt.executeQuery(sql);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/com/example/web/UserController.java", controller),
+            (
+                "src/com/example/service/UserService.java",
+                JAVA_SERVICE_PACKAGE,
+            ),
+            ("src/com/example/other/UserService.java", other),
         ]);
         assert!(found.is_empty(), "{found:?}");
     }
@@ -2916,6 +3108,137 @@ func FindUser(name string) (*sql.Rows, error) {
                 "{import}"
             );
         }
+    }
+
+    #[test]
+    fn go_replace_module_call_is_reported_in_store() {
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	"example.com/inventory/store"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	store.FindUser(name)
+}
+"#;
+        let store = r#"package store
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+var db *sql.DB
+
+func FindUser(name string) (*sql.Rows, error) {
+	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+	return db.Query(query)
+}
+"#;
+        for go_mod in [
+            "module example.com/shop\n\nrequire example.com/inventory v0.0.0\n\nreplace example.com/inventory => ./inventory\n",
+            "module example.com/shop\n\nreplace (\n\texample.com/inventory => ./inventory\n)\n",
+        ] {
+            let found = scan_project(&[
+                ("go.mod", go_mod),
+                ("main.go", main),
+                ("inventory/store/store.go", store),
+            ]);
+            assert_eq!(
+                found,
+                vec![(
+                    "inventory/store/store.go".to_string(),
+                    SQLI_FLOW.to_string(),
+                    12
+                )],
+                "{go_mod}"
+            );
+        }
+    }
+
+    #[test]
+    fn go_nested_module_call_is_reported_in_store() {
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	"example.com/inventory/store"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	store.FindUser(name)
+}
+"#;
+        let store = r#"package store
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+var db *sql.DB
+
+func FindUser(name string) (*sql.Rows, error) {
+	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+	return db.Query(query)
+}
+"#;
+        let found = scan_project(&[
+            ("go.mod", "module example.com/shop\n"),
+            ("main.go", main),
+            ("inventory/go.mod", "module example.com/inventory\n"),
+            ("inventory/store/store.go", store),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "inventory/store/store.go".to_string(),
+                SQLI_FLOW.to_string(),
+                12
+            )]
+        );
+    }
+
+    #[test]
+    fn go_replace_module_parameterized_is_clean() {
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	"example.com/inventory/store"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	store.FindUser(name)
+}
+"#;
+        let store = r#"package store
+
+import "database/sql"
+
+var db *sql.DB
+
+func FindUser(name string) (*sql.Rows, error) {
+	return db.Query("SELECT * FROM users WHERE name = ?", name)
+}
+"#;
+        let found = scan_project(&[
+            (
+                "go.mod",
+                "module example.com/shop\n\nreplace example.com/inventory => ./inventory\n",
+            ),
+            ("main.go", main),
+            ("inventory/store/store.go", store),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
     }
 
     #[test]
@@ -4342,17 +4665,24 @@ enum ImportBinding {
 /// package namespace, so a bare call resolves to a function defined in a
 /// sibling file; `import "mod/pkg"` (optionally aliased, single or grouped
 /// form) resolves through the module path of the nearest `go.mod`, and only
-/// exported (capitalized) names are visible across packages. Java classes in
-/// one package refer to each other by class name (`Service.find(...)`), and
+/// exported (capitalized) names are visible across packages. Imports outside
+/// the file's own module resolve through `replace` directives that map the
+/// module path to a local directory, or through another `go.mod` under the
+/// project root whose module path prefixes the import; the module cache and
+/// `vendor/` (excluded from scans) are not followed. Java classes in one
+/// package refer to each other by class name (`Service.find(...)`), and
 /// `import a.b.C;` resolves to the one project file whose package and class
-/// name match; only static, non-private methods resolve. A request-tainted
+/// name match; `import a.b.*;` resolves every uniquely named class in that
+/// package, `import static a.b.C.f;` resolves the bare call `f(...)`, and
+/// `import static a.b.C.*;` resolves every static method of `C` the same
+/// way. Only static, non-private methods resolve. A request-tainted
 /// argument passed to an exported function of another file in a position
 /// that reaches a sink reports the sink line in that file. One import hop is
 /// followed; the callee's own same-file helpers are included through its
 /// summaries. Package imports (JS), dynamic `require`, re-exports, default
-/// exports, `import static` and wildcard imports (Java), `_test.go` files,
-/// and calls through instance variables are not resolved, and a callable
-/// name offered by two different files resolves to neither.
+/// exports, `_test.go` files, and calls through instance variables are not
+/// resolved, and a callable name offered by two different files resolves to
+/// neither.
 #[allow(clippy::items_after_test_module)]
 fn cross_file_flow_sinks(
     files: &[std::path::PathBuf],
@@ -4418,6 +4748,17 @@ fn cross_file_flow_sinks(
             by_dir.entry(parent.to_path_buf()).or_default().push(*index);
         }
     }
+    // Multi-module Go repositories: an import outside a file's own module
+    // resolves through a `replace` directive to a local directory or through
+    // another go.mod under the project root whose module path prefixes it.
+    let go_modules: Vec<(std::path::PathBuf, String)> = if modules
+        .iter()
+        .any(|module| module.language == FlowLanguage::Go)
+    {
+        go_nested_modules(&root)
+    } else {
+        Vec::new()
+    };
     // Same-package siblings need no import statement: Go files in one
     // directory share a namespace, and Java classes in one package refer to
     // each other by class name. Go cross-package imports resolve through the
@@ -4467,13 +4808,27 @@ fn cross_file_flow_sinks(
                 else {
                     continue;
                 };
+                let replaces = go_replace_dirs(&module_root.join("go.mod"));
                 for (alias, spec) in go_import_specs(&lines[index]) {
                     let relative = match spec.strip_prefix(module_path.as_str()) {
                         Some("") => std::path::PathBuf::new(),
                         Some(rest) if rest.starts_with('/') => std::path::PathBuf::from(&rest[1..]),
-                        _ => continue,
+                        // Outside the file's own module: a `replace` to a
+                        // local directory or another go.mod under the project
+                        // root can still map the import into the tree.
+                        _ => {
+                            match go_external_import_dir(
+                                &spec,
+                                &module_root,
+                                &replaces,
+                                &go_modules,
+                            ) {
+                                Some(dir) => dir,
+                                None => continue,
+                            }
+                        }
                     };
-                    let Ok(target_dir) = std::fs::canonicalize(module_root.join(relative)) else {
+                    let Ok(target_dir) = std::fs::canonicalize(module_root.join(&relative)) else {
                         continue;
                     };
                     let Some(targets) = by_dir.get(&target_dir) else {
@@ -4546,26 +4901,93 @@ fn cross_file_flow_sinks(
                         });
                     }
                 }
-                for (package, class) in java_import_specs(&lines[index]) {
+                // The one other file declaring `class` in `package`; two
+                // files offering the same class resolve to neither.
+                let class_file = |package: &str, class: &str| -> Option<usize> {
                     let matches: Vec<usize> = modules
                         .iter()
                         .enumerate()
                         .filter(|(other, other_module)| {
                             *other != index
                                 && other_module.language == FlowLanguage::Java
-                                && java_package_clause(&lines[*other]).as_deref()
-                                    == Some(package.as_str())
+                                && java_package_clause(&lines[*other]).as_deref() == Some(package)
                                 && java_class_name(&lines[*other], &other_module.path).as_deref()
-                                    == Some(class.as_str())
+                                    == Some(class)
                         })
                         .map(|(other, _)| other)
                         .collect();
-                    if matches.len() == 1 {
-                        bindings[index].push(ImportBinding::Module {
-                            binding: class,
-                            target: matches[0],
-                            exported_only: false,
-                        });
+                    (matches.len() == 1).then_some(matches[0])
+                };
+                for import in java_imports(&lines[index]) {
+                    match import {
+                        JavaImport::Class { package, class } => {
+                            if let Some(target) = class_file(&package, &class) {
+                                bindings[index].push(ImportBinding::Module {
+                                    binding: class,
+                                    target,
+                                    exported_only: false,
+                                });
+                            }
+                        }
+                        JavaImport::PackageWildcard { package } => {
+                            // `import a.b.*;` names every class of the
+                            // package; a class offered by two files resolves
+                            // to neither.
+                            let mut by_class: std::collections::HashMap<String, Vec<usize>> =
+                                std::collections::HashMap::new();
+                            for (other, other_module) in modules.iter().enumerate() {
+                                if other == index
+                                    || other_module.language != FlowLanguage::Java
+                                    || java_package_clause(&lines[other]).as_deref()
+                                        != Some(package.as_str())
+                                {
+                                    continue;
+                                }
+                                if let Some(class) =
+                                    java_class_name(&lines[other], &other_module.path)
+                                {
+                                    by_class.entry(class).or_default().push(other);
+                                }
+                            }
+                            for (class, files) in by_class {
+                                if files.len() == 1 {
+                                    bindings[index].push(ImportBinding::Module {
+                                        binding: class,
+                                        target: files[0],
+                                        exported_only: false,
+                                    });
+                                }
+                            }
+                        }
+                        JavaImport::StaticMember {
+                            package,
+                            class,
+                            member,
+                        } => {
+                            // `import static a.b.C.f;` makes the bare call
+                            // `f(...)` resolve to the static method; only
+                            // static, non-private methods are exported.
+                            if let Some(target) = class_file(&package, &class) {
+                                if exports[target].contains_key(member.as_str()) {
+                                    bindings[index].push(ImportBinding::Function {
+                                        local: member.clone(),
+                                        exported: member,
+                                        target,
+                                    });
+                                }
+                            }
+                        }
+                        JavaImport::StaticWildcard { package, class } => {
+                            if let Some(target) = class_file(&package, &class) {
+                                for name in exports[target].keys() {
+                                    bindings[index].push(ImportBinding::Function {
+                                        local: name.clone(),
+                                        exported: name.clone(),
+                                        target,
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -4938,32 +5360,88 @@ fn go_import_specs(lines: &[&str]) -> Vec<(Option<String>, String)> {
     specs
 }
 
-/// `(package, class)` pairs from Java `import a.b.C;` statements. `import
-/// static` and wildcard imports are skipped.
+/// One Java `import` statement.
+enum JavaImport {
+    /// `import a.b.C;`
+    Class { package: String, class: String },
+    /// `import a.b.*;`
+    PackageWildcard { package: String },
+    /// `import static a.b.C.f;`
+    StaticMember {
+        package: String,
+        class: String,
+        member: String,
+    },
+    /// `import static a.b.C.*;`
+    StaticWildcard { package: String, class: String },
+}
+
+/// The imports of a Java file. The package/class boundary uses the same
+/// convention as `import a.b.C;` resolution: the last dotted segment is the
+/// class (or, for `import static`, the member and the segment before it).
 #[allow(clippy::items_after_test_module)]
-fn java_import_specs(lines: &[&str]) -> Vec<(String, String)> {
-    let mut specs = Vec::new();
-    let Ok(import) = Regex::new(r#"^\s*import\s+(static\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*;"#) else {
-        return specs;
+fn java_imports(lines: &[&str]) -> Vec<JavaImport> {
+    let mut imports = Vec::new();
+    let Ok(import) =
+        Regex::new(r#"^\s*import\s+(static\s+)?([A-Za-z_][A-Za-z0-9_.]*?)(\.\*)?\s*;"#)
+    else {
+        return imports;
     };
     for line in lines {
         let code = line.split("//").next().unwrap_or("").trim();
         let Some(captures) = import.captures(code) else {
             continue;
         };
-        if captures.get(1).is_some() {
-            continue;
-        }
+        let is_static = captures.get(1).is_some();
         let dotted = captures.get(2).map_or("", |name| name.as_str());
-        let Some((package, class)) = dotted.rsplit_once('.') else {
+        let wildcard = captures.get(3).is_some();
+        let Some((path, last)) = dotted.rsplit_once('.') else {
             continue;
         };
-        if class == "*" {
-            continue;
+        let parsed = match (is_static, wildcard) {
+            (false, false) => Some(JavaImport::Class {
+                package: path.to_string(),
+                class: last.to_string(),
+            }),
+            (false, true) => Some(JavaImport::PackageWildcard {
+                package: dotted.to_string(),
+            }),
+            (true, false) => {
+                path.rsplit_once('.')
+                    .map(|(package, class)| JavaImport::StaticMember {
+                        package: package.to_string(),
+                        class: class.to_string(),
+                        member: last.to_string(),
+                    })
+            }
+            (true, true) => {
+                dotted
+                    .rsplit_once('.')
+                    .map(|(package, class)| JavaImport::StaticWildcard {
+                        package: package.to_string(),
+                        class: class.to_string(),
+                    })
+            }
+        };
+        if let Some(parsed) = parsed {
+            imports.push(parsed);
         }
-        specs.push((package.to_string(), class.to_string()));
     }
-    specs
+    imports
+}
+
+/// The module path a `go.mod` declares.
+#[allow(clippy::items_after_test_module)]
+fn go_module_path(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let line = line.split("//").next().unwrap_or("").trim();
+        let mut words = line.split_whitespace();
+        if words.next() == Some("module") {
+            words.next().map(str::to_string)
+        } else {
+            None
+        }
+    })
 }
 
 /// The directory holding the nearest `go.mod` at or above `dir` (stopping
@@ -4975,15 +5453,7 @@ fn go_module_root_and_path(dir: &Path, root: &Path) -> Option<(std::path::PathBu
         let go_mod = base.join("go.mod");
         if go_mod.is_file() {
             let content = std::fs::read_to_string(go_mod).ok()?;
-            let module = content.lines().find_map(|line| {
-                let line = line.split("//").next().unwrap_or("").trim();
-                let mut words = line.split_whitespace();
-                if words.next() == Some("module") {
-                    words.next().map(str::to_string)
-                } else {
-                    None
-                }
-            })?;
+            let module = go_module_path(&content)?;
             return Some((base.to_path_buf(), module));
         }
         if base == root {
@@ -4991,6 +5461,138 @@ fn go_module_root_and_path(dir: &Path, root: &Path) -> Option<(std::path::PathBu
         }
         base = base.parent()?;
     }
+}
+
+/// `replace` directives of a `go.mod` that map a module path to a local
+/// directory, as `(module path, target)` pairs where target is relative to
+/// the `go.mod` (or absolute). Replacements to another module version have
+/// no local directory and are skipped.
+#[allow(clippy::items_after_test_module)]
+fn go_replace_dirs(go_mod: &Path) -> Vec<(String, std::path::PathBuf)> {
+    let Ok(content) = std::fs::read_to_string(go_mod) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    let mut in_block = false;
+    for line in content.lines() {
+        let line = line.split("//").next().unwrap_or("").trim();
+        if in_block {
+            if line.starts_with(')') {
+                in_block = false;
+                continue;
+            }
+            push_replace(&mut dirs, line);
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("replace") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        if rest == "(" {
+            in_block = true;
+            continue;
+        }
+        if let Some(body) = rest.strip_prefix('(').map(str::trim_end) {
+            // `replace ( old => new )` on one line.
+            if let Some(body) = body.strip_suffix(')') {
+                push_replace(&mut dirs, body);
+            }
+            continue;
+        }
+        push_replace(&mut dirs, rest);
+    }
+    dirs
+}
+
+/// One `old [version] => new [version]` replace body; kept only when `new`
+/// is a local path (no version, starting with `.` or `/`).
+fn push_replace(dirs: &mut Vec<(String, std::path::PathBuf)>, body: &str) {
+    let Some((left, right)) = body.split_once("=>") else {
+        return;
+    };
+    let old = left.split_whitespace().next().unwrap_or("");
+    let right: Vec<&str> = right.split_whitespace().collect();
+    if old.is_empty() || right.len() != 1 {
+        return;
+    }
+    let new = right[0];
+    if new.starts_with('.') || new.starts_with('/') {
+        dirs.push((old.to_string(), std::path::PathBuf::from(new)));
+    }
+}
+
+/// Every `(module dir, module path)` declared by a `go.mod` under `root`,
+/// skipping excluded directories (`vendor`, `node_modules`, ...). Bounded so
+/// a huge tree cannot stall the scan.
+#[allow(clippy::items_after_test_module)]
+fn go_nested_modules(root: &Path) -> Vec<(std::path::PathBuf, String)> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(dir) = pending.pop() {
+        if found.len() >= 256 || visited >= 50_000 {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            let path = entry.path();
+            if path.is_dir() {
+                if !crate::scan::should_exclude(&path) {
+                    pending.push(path);
+                }
+            } else if path.file_name().is_some_and(|name| name == "go.mod") {
+                if let Some(module) = std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|content| go_module_path(&content))
+                {
+                    if let Ok(canonical) = std::fs::canonicalize(&path) {
+                        if let Some(parent) = canonical.parent() {
+                            found.push((parent.to_path_buf(), module));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Map an import outside the file's own module to a directory: through a
+/// `replace` directive to a local directory (resolved against the module
+/// root), or through another `go.mod` under the project root whose module
+/// path prefixes the import. The longest matching module path wins.
+#[allow(clippy::items_after_test_module)]
+fn go_external_import_dir(
+    spec: &str,
+    module_root: &Path,
+    replaces: &[(String, std::path::PathBuf)],
+    nested: &[(std::path::PathBuf, String)],
+) -> Option<std::path::PathBuf> {
+    let mut best: Option<(usize, std::path::PathBuf)> = None;
+    let mut offer = |module_path: &str, dir: std::path::PathBuf| {
+        let relative = match spec.strip_prefix(module_path) {
+            Some("") => std::path::PathBuf::new(),
+            Some(rest) if rest.starts_with('/') => std::path::PathBuf::from(&rest[1..]),
+            _ => return,
+        };
+        let candidate = dir.join(relative);
+        if best
+            .as_ref()
+            .is_none_or(|(len, _)| module_path.len() > *len)
+        {
+            best = Some((module_path.len(), candidate));
+        }
+    };
+    for (old, target) in replaces {
+        offer(old, module_root.join(target));
+    }
+    for (dir, module_path) in nested {
+        offer(module_path, dir.clone());
+    }
+    best.map(|(_, dir)| dir)
 }
 
 /// Resolve a file's relative imports to other project files.
