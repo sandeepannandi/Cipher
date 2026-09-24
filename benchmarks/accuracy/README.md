@@ -89,6 +89,17 @@ the other file. The controls keep the same call shape but the callee uses a
 bind parameter or the caller converts the value with `strconv.Atoi`, and must
 stay clean. These are self-written fixtures, not upstream corpus files.
 
+`XF-JAVA-SQLI-002`/`003`/`004` close the Java import-resolution gaps: a
+servlet reaches the same vulnerable service through `import static
+a.b.C.findByName` (bare call), `import a.b.*;` (package wildcard), and
+`import static a.b.C.*;` (static wildcard). `XF-GO-SQLI-003`/`004` resolve an
+import outside the handler's own module: through a `replace` directive
+mapping the dependency to a local directory, and through a nested `go.mod`
+whose module path prefixes the import. The expected finding is again the
+sink line in the dependency file. The controls keep the same call shapes
+with a bind parameter in the callee and must stay clean. These are
+self-written fixtures, not upstream corpus files.
+
 ## Run
 
 ```bash
