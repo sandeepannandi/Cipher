@@ -121,7 +121,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         // Same-line shape only: request input passed straight into an HTTP
         // client call. Multi-line flows are found by `ssrf_sink_lines`.
         r#"(?i)\b(?:requests\s*\.\s*(?:get|post|put|delete|head|patch)|urlopen|fetch|axios\s*\.\s*(?:get|post|put|delete)|http\s*\.\s*Get)\s*\(\s*(?:request\s*\.\s*(?:args|form|values|GET|POST|getParameter)|req\s*\.\s*(?:query|body|params)|r\s*\.\s*URL\s*\.\s*Query)"#,
-        &["py", "js", "ts", "java", "go"],
+        &["py", "js", "ts", "java", "go", "rs"],
         "Validate outbound URLs against an allowlist of hosts and schemes, block private and metadata addresses, and never pass user input directly as the request URL."
     );
 
@@ -3278,6 +3278,253 @@ func findUser(name string) (*sql.Rows, error) {
         assert!(found.is_empty(), "{found:?}");
     }
 
+    const RUST_STORE: &str = r#"use sqlx::PgPool;
+
+pub async fn find_user(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    let query = format!("SELECT * FROM users WHERE name = '{name}'");
+    sqlx::query(&query).execute(pool).await?;
+    Ok(())
+}
+"#;
+
+    #[test]
+    fn rust_mod_path_call_is_reported_in_store() {
+        let main = r#"mod store;
+
+use actix_web::{get, HttpRequest, HttpResponse};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    store::find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_use_crate_function_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::find_user;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        for main_file in ["src/main.rs", "src/lib.rs"] {
+            let found = scan_project(&[(main_file, main), ("src/store.rs", RUST_STORE)]);
+            assert_eq!(
+                found,
+                vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)],
+                "{main_file}"
+            );
+        }
+    }
+
+    #[test]
+    fn rust_use_glob_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::*;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_nested_mod_path_call_is_reported_in_store() {
+        let main = r#"mod api;
+
+use actix_web::{get, HttpRequest, HttpResponse};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    api::users::lookup(name).await;
+    HttpResponse::Ok().finish()
+}
+"#;
+        let api = r#"pub mod users;
+"#;
+        let users = r#"use sqlx::PgPool;
+
+pub async fn lookup(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    let query = format!("SELECT * FROM users WHERE name = '{name}'");
+    sqlx::query(&query).execute(pool).await?;
+    Ok(())
+}
+"#;
+        // `api::users::lookup(...)` chains two receivers and stays
+        // unresolved; a `use` brings the bare call into scope instead.
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/api.rs", api),
+            ("src/api/users.rs", users),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+
+        let main_use = main.replace("mod api;", "use crate::api::users::lookup;");
+        let main_use = main_use.replace(
+            "api::users::lookup(name).await;",
+            "lookup(&POOL, name).await.ok();",
+        );
+        let found = scan_project(&[
+            ("src/main.rs", main_use.as_str()),
+            ("src/api.rs", api),
+            ("src/api/users.rs", users),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/api/users.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_non_pub_function_is_not_exported() {
+        let store = r#"use sqlx::PgPool;
+
+async fn find_user(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    let query = format!("SELECT * FROM users WHERE name = '{name}'");
+    sqlx::query(&query).execute(pool).await?;
+    Ok(())
+}
+"#;
+        let main = r#"mod store;
+
+use actix_web::{get, HttpRequest, HttpResponse};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    store::find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", store)]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn rust_parse_conversion_before_call_is_clean() {
+        let main = r#"mod store;
+
+use actix_web::{get, HttpRequest, HttpResponse};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    let id: i64 = name.parse::<i64>().unwrap_or(0);
+    store::find_user_by_id(id).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let store = r#"use sqlx::PgPool;
+
+pub async fn find_user_by_id(id: i64) -> Result<(), sqlx::Error> {
+    let query = format!("SELECT * FROM users WHERE id = {id}");
+    sqlx::query(&query).execute(&POOL).await?;
+    Ok(())
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", store)]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn rust_same_file_helper_call_is_reported() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use sqlx::PgPool;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    run(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+
+async fn run(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    let query = format!("SELECT * FROM users WHERE name = '{name}'");
+    sqlx::query(&query).execute(pool).await?;
+    Ok(())
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main)]);
+        assert_eq!(
+            found,
+            vec![("src/main.rs".to_string(), SQLI_FLOW.to_string(), 13)]
+        );
+    }
+
+    #[test]
+    fn rust_command_chain_from_request_is_reported() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use std::process::Command;
+
+#[get("/ping")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let host = req.match_info().get("host").unwrap_or("");
+    Command::new("sh").arg("-c").arg(format!("ping {host}")).output().ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main)]);
+        assert_eq!(
+            found,
+            vec![("src/main.rs".to_string(), CMDI.to_string(), 7)]
+        );
+    }
+
+    #[test]
+    fn rust_command_without_shell_is_clean() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use std::process::Command;
+
+#[get("/ping")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let host = req.match_info().get("host").unwrap_or("");
+    Command::new("ping").arg(host).output().ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main)]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn rust_reqwest_url_from_request_is_reported() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+
+#[get("/fetch")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let url = req.match_info().get("url").unwrap_or("");
+    reqwest::get(url).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main)]);
+        assert_eq!(
+            found,
+            vec![("src/main.rs".to_string(), SSRF.to_string(), 6)]
+        );
+    }
+
     #[test]
     fn go_external_import_is_not_resolved() {
         let main = r#"package main
@@ -3709,6 +3956,7 @@ enum FlowLanguage {
     Python,
     Java,
     Go,
+    Rust,
 }
 
 #[allow(clippy::items_after_test_module)]
@@ -3718,6 +3966,7 @@ fn flow_language(extension: &str) -> Option<FlowLanguage> {
         "py" => Some(FlowLanguage::Python),
         "java" => Some(FlowLanguage::Java),
         "go" => Some(FlowLanguage::Go),
+        "rs" => Some(FlowLanguage::Rust),
         _ => None,
     }
 }
@@ -3733,8 +3982,10 @@ fn blank_plain_strings(text: &str, language: FlowLanguage) -> String {
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
+        // Rust has no single-quoted strings (`'a` is a lifetime, `'x'` a
+        // rare char literal); blanking on them would eat code.
         let is_quote = c == '"'
-            || c == '\''
+            || (c == '\'' && language != FlowLanguage::Rust)
             || (c == '`' && matches!(language, FlowLanguage::JavaScript | FlowLanguage::Go));
         if !is_quote {
             out.push(c);
@@ -3748,6 +3999,15 @@ fn blank_plain_strings(text: &str, language: FlowLanguage) -> String {
                 || !(chars[i - 2].is_ascii_alphanumeric() || chars[i - 2] == '_')
                 || matches!(chars[i - 2], 'r' | 'R'));
         let js_template = language == FlowLanguage::JavaScript && c == '`';
+        // Rust `format!("{name}")`-family macro strings interpolate inline
+        // `{ident}` arguments; keep those visible like f-string contents.
+        let rust_format = language == FlowLanguage::Rust
+            && c == '"'
+            && i > 1
+            && chars[i - 1] == '('
+            && chars[i - 2] == '!'
+            && i > 2
+            && (chars[i - 3].is_ascii_alphanumeric() || chars[i - 3] == '_');
         out.push(c);
         i += 1;
         let mut depth = 0usize;
@@ -3765,7 +4025,7 @@ fn blank_plain_strings(text: &str, language: FlowLanguage) -> String {
             if depth == 0 && ch == c {
                 break;
             }
-            let opens = (python_fstring && ch == '{')
+            let opens = ((python_fstring || rust_format) && ch == '{')
                 || (js_template && ch == '$' && chars.get(i + 1) == Some(&'{'));
             if opens {
                 if js_template {
@@ -3843,6 +4103,9 @@ fn flow_source_regex(language: FlowLanguage) -> Option<Regex> {
         FlowLanguage::Go => {
             r#"^\s*(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+string)?\s*(?::=|=)\s*(?:r|req|request)\s*\.\s*(?:URL\s*\.\s*Query\s*\(\s*\)\s*\.\s*Get\s*\(|FormValue\s*\(|PostFormValue\s*\(|URL\s*\.\s*Path\b)"#
         }
+        FlowLanguage::Rust => {
+            r#"^\s*let\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[^=]+)?=\s*(?:(?:req|request)\s*\.\s*(?:match_info|query_params|query_string|param|params)\s*\(|(?:params|query|form)\s*(?:\.\s*get\s*\(|\[))"#
+        }
     };
     Regex::new(pattern).ok()
 }
@@ -3860,6 +4123,9 @@ fn flow_binding_regex(language: FlowLanguage) -> Option<Regex> {
         }
         FlowLanguage::Go => {
             r#"^\s*(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)?(?:\s+[A-Za-z_][A-Za-z0-9_.]*)?\s*(?::=|=)\s*([^=].*?)\s*$"#
+        }
+        FlowLanguage::Rust => {
+            r#"^\s*(?:let\s+(?:mut\s+)?)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[^=]+)?=\s*([^=].*?);?\s*$"#
         }
     };
     Regex::new(pattern).ok()
@@ -4202,38 +4468,52 @@ fn imported_calls(
             continue;
         };
         let before = visible[..name.start()].trim_end();
-        let receiver = match before.strip_suffix('.') {
-            Some(rest) => {
-                let rest = rest.trim_end();
-                let word: String = rest
-                    .rsplit(|ch: char| !is_word(ch))
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-                if word.is_empty() || rest[..rest.len() - word.len()].trim_end().ends_with('.') {
-                    continue;
-                }
-                Some(word)
+        let receiver = if language == FlowLanguage::Rust && before.ends_with("::") {
+            let rest = before[..before.len() - 2].trim_end();
+            let word: String = rest
+                .rsplit(|ch: char| !is_word(ch))
+                .next()
+                .unwrap_or("")
+                .to_string();
+            if word.is_empty() || rest[..rest.len() - word.len()].trim_end().ends_with("::") {
+                continue;
             }
-            None => {
-                if before.chars().last().is_some_and(is_word) {
-                    let keyword: String = before
+            Some(word)
+        } else {
+            match before.strip_suffix('.') {
+                Some(rest) => {
+                    let rest = rest.trim_end();
+                    let word: String = rest
                         .rsplit(|ch: char| !is_word(ch))
                         .next()
                         .unwrap_or("")
                         .to_string();
-                    if keyword != "return" && keyword != "await" {
+                    if word.is_empty() || rest[..rest.len() - word.len()].trim_end().ends_with('.')
+                    {
                         continue;
                     }
+                    Some(word)
                 }
-                if calls
-                    .functions
-                    .iter()
-                    .any(|function| function.name == name.as_str())
-                {
-                    continue;
+                None => {
+                    if before.chars().last().is_some_and(is_word) {
+                        let keyword: String = before
+                            .rsplit(|ch: char| !is_word(ch))
+                            .next()
+                            .unwrap_or("")
+                            .to_string();
+                        if keyword != "return" && keyword != "await" {
+                            continue;
+                        }
+                    }
+                    if calls
+                        .functions
+                        .iter()
+                        .any(|function| function.name == name.as_str())
+                    {
+                        continue;
+                    }
+                    None
                 }
-                None
             }
         };
         let Some(import_index) = calls
@@ -4332,7 +4612,10 @@ fn same_file_calls(
             (Some((word, chained)), FlowLanguage::Python) => {
                 word == "self" && !chained && function.method
             }
-            (Some(_), FlowLanguage::Go) => false,
+            (Some((word, chained)), FlowLanguage::Rust) if word == "self" && !chained => {
+                function.method
+            }
+            (Some(_), FlowLanguage::Go | FlowLanguage::Rust) => false,
         };
         if !resolves {
             continue;
@@ -4365,7 +4648,9 @@ fn same_file_calls(
 /// `const name = (...) => {`, and class methods `name(...) {`; Python
 /// `def name(...):` (methods when the first parameter is `self`/`cls`); Java
 /// methods and constructors whose header ends with `{`; Go `func name(...)
-/// ... {` (methods with receivers are skipped). Only simple positional
+/// ... {` (methods with receivers are skipped); Rust `fn name(...) ->
+/// ... {` (methods when the first parameter is `self`). Only simple
+/// positional
 /// parameters are accepted: destructuring, rest/variadic-star parameters,
 /// and headers split across lines make a definition unsupported. A name
 /// defined more than once in the file (overloads, redefinitions, the same
@@ -4419,13 +4704,17 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
             r#"^\s*func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)[^{]*\{\s*$"#,
             false,
         )],
+        FlowLanguage::Rust => vec![(
+            r#"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>]*>)?\s*\(([^()]*)\)\s*(?:->\s*[^{]+?)?\{\s*$"#,
+            false,
+        )],
     }
     .into_iter()
     .filter_map(|(pattern, method)| Regex::new(pattern).ok().map(|re| (re, method)))
     .collect();
     let annotation = Regex::new(r#"@[A-Za-z_][A-Za-z0-9_.]*(?:\([^()]*\))?\s*"#).ok();
     let definition_like = Regex::new(
-        r#"^\s*(?:(?:export\s+)?(?:async\s+)?function\s*\*?\s*|(?:async\s+)?def\s+|func\s+)([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
+        r#"^\s*(?:(?:export\s+)?(?:async\s+)?function\s*\*?\s*|(?:async\s+)?def\s+|func\s+|(?:pub\s+)?(?:async\s+)?fn\s+)([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
     )
     .ok();
 
@@ -4486,6 +4775,10 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
                 .first()
                 .is_some_and(|first| first == "self" || first == "cls")
         {
+            params.remove(0);
+            method = true;
+        }
+        if language == FlowLanguage::Rust && params.first().is_some_and(|first| first == "self") {
             params.remove(0);
             method = true;
         }
@@ -4617,6 +4910,19 @@ fn flow_parameters(list: &str, language: FlowLanguage) -> Option<Vec<String>> {
                 }
                 part.split_whitespace().next().unwrap_or("").to_string()
             }
+            FlowLanguage::Rust => {
+                let part = part.trim();
+                if matches!(part, "self" | "&self" | "&mut self" | "mut self") {
+                    "self".to_string()
+                } else {
+                    part.trim_start_matches("mut ")
+                        .split(':')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string()
+                }
+            }
         };
         if !is_identifier(&name) {
             return None;
@@ -4655,7 +4961,7 @@ enum ImportBinding {
     },
 }
 
-/// Cross-file request flow for JS/TS, Python, Java, and Go projects.
+/// Cross-file request flow for JS/TS, Python, Java, Go, and Rust projects.
 ///
 /// Each file's functions are summarized with the same per-parameter pass as
 /// the same-file engine. JS/TS and Python imports are resolved to project
@@ -4675,12 +4981,18 @@ enum ImportBinding {
 /// name match; `import a.b.*;` resolves every uniquely named class in that
 /// package, `import static a.b.C.f;` resolves the bare call `f(...)`, and
 /// `import static a.b.C.*;` resolves every static method of `C` the same
-/// way. Only static, non-private methods resolve. A request-tainted
+/// way. Only static, non-private methods resolve. Rust `mod store;`
+/// resolves to the sibling `store.rs`/`store/mod.rs` for `store::f(...)`
+/// path calls, and `use crate::`/`self::`/`super::` paths (with `as`
+/// aliases or a trailing `::*` glob) resolve from the nearest ancestor
+/// holding `main.rs`/`lib.rs`; only `pub` free functions are visible. A
+/// request-tainted
 /// argument passed to an exported function of another file in a position
 /// that reaches a sink reports the sink line in that file. One import hop is
 /// followed; the callee's own same-file helpers are included through its
 /// summaries. Package imports (JS), dynamic `require`, re-exports, default
 /// exports, `_test.go` files, and calls through instance variables are not
+/// resolved, grouped Rust `use a::{b, c}` imports and re-exports are not
 /// resolved, and a callable name offered by two different files resolves to
 /// neither.
 #[allow(clippy::items_after_test_module)]
@@ -4991,6 +5303,107 @@ fn cross_file_flow_sinks(
                     }
                 }
             }
+            FlowLanguage::Rust => {
+                // `mod store;` names a sibling file (`store.rs` or
+                // `store/mod.rs`); calls look like `store::find_user(...)`.
+                // `use crate::a::b::f;` (also `self::`/`super::`, an `as`
+                // alias, or a trailing `::*` glob) resolves from the crate
+                // root and makes the bare call `f(...)` resolve; a path
+                // whose last segment names a module binds the module
+                // instead. Only `pub` free functions are visible.
+                let Some(module_dir) = rust_module_dir(&module.path) else {
+                    continue;
+                };
+                let is_mod_rs = module.path.file_stem().is_some_and(|stem| stem == "mod");
+                let super_base = if is_mod_rs {
+                    own_dir.parent().map(|parent| parent.to_path_buf())
+                } else {
+                    Some(own_dir.clone())
+                };
+                let crate_base = rust_crate_root(&own_dir, &root);
+                let resolve_module = |base: &Path, segments: &[&str]| -> Option<usize> {
+                    let mut target = base.to_path_buf();
+                    for segment in segments {
+                        target.push(segment);
+                    }
+                    let candidates: Vec<std::path::PathBuf> = if segments.is_empty() {
+                        vec![base.join("lib.rs"), base.join("main.rs")]
+                    } else {
+                        vec![target.with_extension("rs"), target.join("mod.rs")]
+                    };
+                    candidates.into_iter().find_map(|candidate| {
+                        std::fs::canonicalize(candidate)
+                            .ok()
+                            .and_then(|canonical| index_of.get(&canonical).copied())
+                            .filter(|&found| modules[found].language == FlowLanguage::Rust)
+                    })
+                };
+                for declaration in rust_declarations(&lines[index]) {
+                    let (mut segments, alias) = match declaration {
+                        RustDeclaration::Mod(name) => {
+                            if let Some(target) = resolve_module(&module_dir, &[name.as_str()]) {
+                                bindings[index].push(ImportBinding::Module {
+                                    binding: name,
+                                    target,
+                                    exported_only: false,
+                                });
+                            }
+                            continue;
+                        }
+                        RustDeclaration::Use { segments, alias } => (segments, alias),
+                    };
+                    let Some(prefix) = segments.first().map(String::as_str) else {
+                        continue;
+                    };
+                    let Some(base) = (match prefix {
+                        "crate" => crate_base.clone(),
+                        "self" => Some(module_dir.clone()),
+                        "super" => super_base.clone(),
+                        _ => None,
+                    }) else {
+                        continue;
+                    };
+                    segments.remove(0);
+                    let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
+                    if segments.last() == Some(&"*") {
+                        // `use crate::store::*;` imports every `pub fn`.
+                        let module_path = &segments[..segments.len() - 1];
+                        if let Some(target) = resolve_module(&base, module_path) {
+                            for name in exports[target].keys() {
+                                bindings[index].push(ImportBinding::Function {
+                                    local: name.clone(),
+                                    exported: name.clone(),
+                                    target,
+                                });
+                            }
+                        }
+                        continue;
+                    }
+                    let Some(last) = segments.last().copied() else {
+                        continue;
+                    };
+                    // A path ending in a module binds the module; otherwise
+                    // the last segment is the function and the rest is the
+                    // module path.
+                    if let Some(target) = resolve_module(&base, &segments) {
+                        bindings[index].push(ImportBinding::Module {
+                            binding: alias.clone().unwrap_or_else(|| last.to_string()),
+                            target,
+                            exported_only: false,
+                        });
+                        continue;
+                    }
+                    if let Some(target) = resolve_module(&base, &segments[..segments.len() - 1]) {
+                        if exports[target].contains_key(last) {
+                            bindings[index].push(ImportBinding::Function {
+                                local: alias.clone().unwrap_or_else(|| last.to_string()),
+                                exported: last.to_string(),
+                                target,
+                            });
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -5144,7 +5557,7 @@ fn cross_file_flow_sinks(
 /// a`, `export { a, b as c }`. Python: every top-level function. Go: every
 /// package-level function (same-package visibility; cross-package callers
 /// see only capitalized names, filtered at the binding). Java: the static,
-/// non-private methods of the file's class.
+/// non-private methods of the file's class. Rust: the `pub` free functions.
 #[allow(clippy::items_after_test_module)]
 fn flow_exports(
     lines: &[&str],
@@ -5194,6 +5607,20 @@ fn flow_exports(
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
     };
+    if language == FlowLanguage::Rust {
+        for (index, function) in functions.iter().enumerate() {
+            let Some(header) = lines.get(function.header) else {
+                continue;
+            };
+            let words: std::collections::HashSet<&str> = header
+                .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                .collect();
+            if words.contains("pub") && !function.method {
+                exported.insert(function.name.clone(), index);
+            }
+        }
+        return exported;
+    }
     let (Ok(object_start), Ok(property), Ok(export_decl), Ok(export_list)) = (
         Regex::new(r#"^\s*module\s*\.\s*exports\s*=\s*\{(.*)$"#),
         Regex::new(
@@ -5272,6 +5699,79 @@ fn flow_exports(
         }
     }
     exported
+}
+
+/// The directory a Rust file's `mod name;` declarations and `self::` paths
+/// resolve against: `main.rs`/`lib.rs`/`mod.rs` use their own directory,
+/// any other file uses a same-named subdirectory.
+#[allow(clippy::items_after_test_module)]
+fn rust_module_dir(path: &Path) -> Option<std::path::PathBuf> {
+    let dir = path.parent()?;
+    let stem = path.file_stem()?.to_string_lossy();
+    if matches!(stem.as_ref(), "main" | "lib" | "mod") {
+        Some(dir.to_path_buf())
+    } else {
+        Some(dir.join(stem.as_ref()))
+    }
+}
+
+/// The crate root of a Rust file: the nearest ancestor directory, within the
+/// project root, that holds `main.rs` or `lib.rs`.
+#[allow(clippy::items_after_test_module)]
+fn rust_crate_root(dir: &Path, root: &Path) -> Option<std::path::PathBuf> {
+    let mut candidate = Some(dir);
+    while let Some(path) = candidate {
+        if path.join("main.rs").is_file() || path.join("lib.rs").is_file() {
+            return Some(path.to_path_buf());
+        }
+        if path == root {
+            break;
+        }
+        candidate = path.parent();
+    }
+    None
+}
+
+/// A Rust `mod name;` declaration or `use` path found in one file.
+enum RustDeclaration {
+    Mod(String),
+    Use {
+        segments: Vec<String>,
+        alias: Option<String>,
+    },
+}
+
+/// The `mod`/`use` declarations of a Rust file. Grouped (`use a::{b, c}`)
+/// and re-export (`pub use`) forms are not recognized.
+#[allow(clippy::items_after_test_module)]
+fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
+    let mut declarations = Vec::new();
+    let (Ok(mod_decl), Ok(use_decl)) = (
+        Regex::new(r#"^\s*(?:pub\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"#),
+        Regex::new(r#"^\s*use\s+([^;{]+?)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;"#),
+    ) else {
+        return declarations;
+    };
+    for line in lines {
+        let code = line.split("//").next().unwrap_or("");
+        if let Some(name) = mod_decl.captures(code).and_then(|c| c.get(1)) {
+            declarations.push(RustDeclaration::Mod(name.as_str().to_string()));
+            continue;
+        }
+        if let Some(captures) = use_decl.captures(code) {
+            let path_text = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+            let alias = captures.get(2).map(|m| m.as_str().to_string());
+            let segments: Vec<String> = path_text
+                .split("::")
+                .map(|segment| segment.trim().to_string())
+                .filter(|segment| !segment.is_empty())
+                .collect();
+            if !segments.is_empty() {
+                declarations.push(RustDeclaration::Use { segments, alias });
+            }
+        }
+    }
+    declarations
 }
 
 /// The `package` clause of a Go file; files sharing it in one directory
@@ -5827,6 +6327,9 @@ fn contains_numeric_conversion(text: &str) -> bool {
         "strconv.parseint(",
         "strconv.parseuint(",
         "strconv.parsefloat(",
+        "parse::<i",
+        "parse::<u",
+        "parse::<f",
     ]
     .iter()
     .any(|marker| {
@@ -5890,6 +6393,16 @@ fn sql_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
             r#"\b[A-Za-z_][A-Za-z0-9_]*\s*\.\s*(Query|QueryRow|QueryContext|QueryRowContext|Exec|ExecContext|Prepare|PrepareContext)\s*\("#,
             go_sql_query_argument,
         )],
+        FlowLanguage::Rust => &[
+            (
+                r#"\bsqlx\s*::\s*(query|query_as|query_scalar|raw_sql)\s*\("#,
+                first_argument,
+            ),
+            (
+                r#"\b(?:conn|db|tx|pool|client|connection)\s*\.\s*(execute|query|query_row|query_map|query_one|query_opt|query_and_then|prepare|batch_execute)\s*\("#,
+                first_argument,
+            ),
+        ],
     };
     patterns
         .iter()
@@ -5927,7 +6440,8 @@ fn contains_command_sanitizer(text: &str) -> bool {
 /// hand a command string to a shell: Python `os.system`/`os.popen`,
 /// `subprocess.getoutput`, and `subprocess` calls with `shell=True`; Node
 /// `child_process` `exec`/`execSync`; Java `Runtime.exec` and
-/// `ProcessBuilder("sh", "-c", ...)`; Go `exec.Command("sh", "-c", ...)`.
+/// `ProcessBuilder("sh", "-c", ...)`; Go `exec.Command("sh", "-c", ...)`;
+/// Rust `Command::new("sh").arg("-c").arg(cmd)` single-line chains.
 /// Argument-vector process calls without a shell are not sinks.
 /// `shlex.quote` and numeric conversions stop the flow. Same-file and
 /// straight-line only; no interprocedural claim.
@@ -5989,6 +6503,13 @@ fn command_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
             shell_command_argument,
             Some(shell_prefix),
         )],
+        FlowLanguage::Rust => &[(
+            r#"\.\s*(arg)\s*\("#,
+            first_argument,
+            Some(
+                r#"Command\s*::\s*new\s*\(\s*"(?:/bin/)?(?:sh|bash|zsh)"\s*\)\s*\.\s*arg\s*\(\s*"-c""#,
+            ),
+        )],
     };
     patterns
         .iter()
@@ -6023,7 +6544,8 @@ fn outbound_url_argument(name: &str) -> Vec<usize> {
 /// argument counts: Python `requests`/`httpx` calls and `urlopen`; JS
 /// `fetch`, `axios`, `got`, and `http(s).get/request`; Java `new URL`,
 /// `URI.create`, and `RestTemplate` calls; Go `http.Get/Post/Head/PostForm`
-/// and `http.NewRequest*`. A request value sent only as a query parameter,
+/// and `http.NewRequest*`; Rust `reqwest`/`ureq` `get`/`post`/... calls. A
+/// request value sent only as a query parameter,
 /// body, or header of a fixed URL is not reported. Host allowlists are not
 /// modeled as sanitizers; numeric conversions stop the flow. Same-file and
 /// straight-line only; no interprocedural claim.
@@ -6060,6 +6582,10 @@ fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
         FlowLanguage::Go => {
             &[r#"\bhttp\s*\.\s*(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\("#]
         }
+        FlowLanguage::Rust => &[
+            r#"\b(?:reqwest|ureq)\s*::\s*(get|post|put|delete|head|patch)\s*\("#,
+            r#"\b(?:client|reqwest)\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
+        ],
     };
     patterns
         .iter()
