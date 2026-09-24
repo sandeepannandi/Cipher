@@ -3634,6 +3634,131 @@ async fn handler(req: HttpRequest) -> HttpResponse {
         );
     }
 
+    const RUST_HANDLER: &str = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::find_user;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+
+    #[test]
+    fn rust_pub_use_named_reexport_is_reported_in_store() {
+        let lib = "mod store;\n\npub use store::find_user;";
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", RUST_HANDLER),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_pub_use_crate_path_reexport_is_reported_in_store() {
+        let lib = "mod store;\n\npub use crate::store::find_user;";
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", RUST_HANDLER),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_pub_use_grouped_reexport_is_reported_in_store() {
+        let lib = "mod store;\n\npub use store::{find_user};";
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", RUST_HANDLER),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_pub_use_glob_reexport_is_reported_in_store() {
+        let lib = "mod store;\n\npub use store::*;";
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", RUST_HANDLER),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_pub_use_alias_reexport_is_reported_in_store() {
+        let lib = "mod store;\n\npub use store::find_user as locate_user;";
+        let handler = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::locate_user;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    locate_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", handler),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_pub_use_ambiguous_glob_is_not_resolved() {
+        let lib = "mod a;\nmod b;\n\npub use a::*;\npub use b::*;";
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", RUST_HANDLER),
+            ("src/a.rs", RUST_STORE),
+            ("src/b.rs", RUST_STORE),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn rust_pub_use_parameterized_store_is_clean() {
+        let lib = "mod store;\n\npub use store::find_user;";
+        let store = r#"use sqlx::{Pool, Postgres};
+
+pub async fn find_user(pool: &Pool<Postgres>, name: &str) -> Option<String> {
+    sqlx::query("SELECT name FROM users WHERE name = $1")
+        .bind(name)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+"#;
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", RUST_HANDLER),
+            ("src/store.rs", store),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
     #[test]
     fn rust_grouped_use_parameterized_store_is_clean() {
         let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
@@ -5720,11 +5845,15 @@ enum ImportBinding {
 /// argument passed to an exported function of another file in a position
 /// that reaches a sink reports the sink line in that file. One import hop is
 /// followed; the callee's own same-file helpers are included through its
-/// summaries. JS/TS re-exports resolve through one bounded barrel hop (a
-/// name offered by two sources resolves to neither). Package imports (JS),
-/// dynamic `require`, Rust re-exports, `_test.go` files, and calls through
-/// instance variables are not
-/// resolved, nested Rust groups (`use a::{b::{c, d}}`) and re-exports are
+/// summaries. JS/TS re-exports resolve through one bounded barrel hop, and
+/// Rust `pub use` re-exports (named, `as` alias, grouped, or `*` glob, with
+/// `crate::`/`self::`/`super::` or bare relative paths) resolve through one
+/// bounded hop as well; in both cases a name offered by two sources
+/// resolves to neither, and the hop is not chained. Package imports (JS),
+/// dynamic `require`, `_test.go` files, and calls through instance
+/// variables are not
+/// resolved, nested Rust groups (`use a::{b::{c, d}}`) and chained Rust
+/// re-exports are
 /// not resolved, and a callable name offered by two different files
 /// resolves to neither.
 #[allow(clippy::items_after_test_module)]
@@ -5859,6 +5988,113 @@ fn cross_file_flow_sinks(
             by_dir.entry(parent.to_path_buf()).or_default().push(*index);
         }
     }
+    // One bounded hop through a Rust re-exporting module: `pub use a::f;`
+    // (named, `as` alias, grouped, or a `*` glob) makes the source function
+    // visible under the re-exporting module's path. A name offered by two
+    // different sources resolves to neither, and the hop is not chained:
+    // only a module that itself exports the function can be the source.
+    let rust_reexport_maps: Vec<std::collections::HashMap<String, (usize, String)>> = modules
+        .iter()
+        .enumerate()
+        .zip(&lines)
+        .map(|((_index, module), lines)| {
+            let mut offers: std::collections::HashMap<String, Vec<(usize, String)>> =
+                std::collections::HashMap::new();
+            if module.language != FlowLanguage::Rust {
+                return std::collections::HashMap::new();
+            }
+            let Some(own_dir) = module
+                .path
+                .parent()
+                .and_then(|parent| std::fs::canonicalize(parent).ok())
+            else {
+                return std::collections::HashMap::new();
+            };
+            let Some(module_dir) = rust_module_dir(&module.path) else {
+                return std::collections::HashMap::new();
+            };
+            let is_mod_rs = module.path.file_stem().is_some_and(|stem| stem == "mod");
+            let super_base = if is_mod_rs {
+                own_dir.parent().map(|parent| parent.to_path_buf())
+            } else {
+                Some(own_dir.clone())
+            };
+            let crate_base = rust_crate_root(&own_dir, &root);
+            let resolve_module = |base: &Path, segments: &[&str]| -> Option<usize> {
+                let mut target = base.to_path_buf();
+                for segment in segments {
+                    target.push(segment);
+                }
+                let candidates: Vec<std::path::PathBuf> = if segments.is_empty() {
+                    vec![base.join("lib.rs"), base.join("main.rs")]
+                } else {
+                    vec![target.with_extension("rs"), target.join("mod.rs")]
+                };
+                candidates.into_iter().find_map(|candidate| {
+                    std::fs::canonicalize(candidate)
+                        .ok()
+                        .and_then(|canonical| index_of.get(&canonical).copied())
+                        .filter(|&found| modules[found].language == FlowLanguage::Rust)
+                })
+            };
+            for declaration in rust_declarations(lines) {
+                let RustDeclaration::Use {
+                    segments,
+                    alias,
+                    reexport,
+                } = declaration
+                else {
+                    continue;
+                };
+                if !reexport {
+                    continue;
+                }
+                let skip = usize::from(matches!(
+                    segments.first().map(String::as_str),
+                    Some("crate" | "self" | "super")
+                ));
+                let Some(base) = (match segments.first().map(String::as_str) {
+                    Some("crate") => crate_base.clone(),
+                    Some("self") => Some(module_dir.clone()),
+                    Some("super") => super_base.clone(),
+                    // A bare path is relative to the current module; an
+                    // external crate name simply resolves to nothing.
+                    _ => Some(module_dir.clone()),
+                }) else {
+                    continue;
+                };
+                let rest: Vec<&str> = segments[skip..].iter().map(String::as_str).collect();
+                if rest.last() == Some(&"*") {
+                    let module_path = &rest[..rest.len() - 1];
+                    if let Some(source) = resolve_module(&base, module_path) {
+                        for name in exports[source].keys() {
+                            offers
+                                .entry(name.clone())
+                                .or_default()
+                                .push((source, name.clone()));
+                        }
+                    }
+                    continue;
+                }
+                let Some(last) = rest.last().copied() else {
+                    continue;
+                };
+                if let Some(source) = resolve_module(&base, &rest[..rest.len() - 1]) {
+                    if exports[source].contains_key(last) {
+                        offers
+                            .entry(alias.clone().unwrap_or_else(|| last.to_string()))
+                            .or_default()
+                            .push((source, last.to_string()));
+                    }
+                }
+            }
+            offers
+                .into_iter()
+                .filter(|(_, found)| found.len() == 1)
+                .map(|(name, found)| (name, found[0].clone()))
+                .collect()
+        })
+        .collect();
     // Multi-module Go repositories: an import outside a file's own module
     // resolves through a `replace` directive to a local directory or through
     // another go.mod under the project root whose module path prefixes it.
@@ -6149,7 +6385,9 @@ fn cross_file_flow_sinks(
                             }
                             continue;
                         }
-                        RustDeclaration::Use { segments, alias } => (segments, alias),
+                        RustDeclaration::Use {
+                            segments, alias, ..
+                        } => (segments, alias),
                     };
                     let Some(prefix) = segments.first().map(String::as_str) else {
                         continue;
@@ -6198,6 +6436,14 @@ fn cross_file_flow_sinks(
                                 local: alias.clone().unwrap_or_else(|| last.to_string()),
                                 exported: last.to_string(),
                                 target,
+                            });
+                        } else if let Some((source, original)) =
+                            rust_reexport_maps[target].get(last)
+                        {
+                            bindings[index].push(ImportBinding::Function {
+                                local: alias.clone().unwrap_or_else(|| last.to_string()),
+                                exported: original.clone(),
+                                target: *source,
                             });
                         }
                     }
@@ -6580,20 +6826,22 @@ enum RustDeclaration {
     Use {
         segments: Vec<String>,
         alias: Option<String>,
+        reexport: bool,
     },
 }
 
 /// The `mod`/`use` declarations of a Rust file. Grouped `use a::{b, c}`
 /// items are expanded to one declaration each (`as` aliases and a `*` glob
-/// item included); nested groups (`use a::{b::{c, d}}`) and re-exports
-/// (`pub use`) are not recognized.
+/// item included); `pub use` re-exports are recognized and flagged so the
+/// cross-file pass can resolve one hop through them. Nested groups
+/// (`use a::{b::{c, d}}`) are not recognized.
 #[allow(clippy::items_after_test_module)]
 fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
     let mut declarations = Vec::new();
     let (Ok(mod_decl), Ok(use_decl), Ok(group_decl)) = (
         Regex::new(r#"^\s*(?:pub\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"#),
-        Regex::new(r#"^\s*use\s+([^;{]+?)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;"#),
-        Regex::new(r#"^\s*use\s+([^;{}]+?)::\s*\{([^}]*)\}\s*;"#),
+        Regex::new(r#"^\s*(pub\s+)?use\s+([^;{]+?)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;"#),
+        Regex::new(r#"^\s*(pub\s+)?use\s+([^;{}]+?)::\s*\{([^}]*)\}\s*;"#),
     ) else {
         return declarations;
     };
@@ -6611,11 +6859,12 @@ fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
             continue;
         }
         if let Some(captures) = group_decl.captures(code) {
-            let prefix = split_path(captures.get(1).map(|m| m.as_str()).unwrap_or(""));
+            let reexport = captures.get(1).is_some();
+            let prefix = split_path(captures.get(2).map(|m| m.as_str()).unwrap_or(""));
             if prefix.is_empty() {
                 continue;
             }
-            let items = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+            let items = captures.get(3).map(|m| m.as_str()).unwrap_or("");
             for item in items.split(',') {
                 let item = item.trim();
                 if item.is_empty() || item.contains('{') {
@@ -6647,20 +6896,29 @@ fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
                 }
                 let mut segments = prefix.clone();
                 segments.push(name.to_string());
-                declarations.push(RustDeclaration::Use { segments, alias });
+                declarations.push(RustDeclaration::Use {
+                    segments,
+                    alias,
+                    reexport,
+                });
             }
             continue;
         }
         if let Some(captures) = use_decl.captures(code) {
-            let path_text = captures.get(1).map(|m| m.as_str()).unwrap_or("");
-            let alias = captures.get(2).map(|m| m.as_str().to_string());
+            let reexport = captures.get(1).is_some();
+            let path_text = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+            let alias = captures.get(3).map(|m| m.as_str().to_string());
             let segments: Vec<String> = path_text
                 .split("::")
                 .map(|segment| segment.trim().to_string())
                 .filter(|segment| !segment.is_empty())
                 .collect();
             if !segments.is_empty() {
-                declarations.push(RustDeclaration::Use { segments, alias });
+                declarations.push(RustDeclaration::Use {
+                    segments,
+                    alias,
+                    reexport,
+                });
             }
         }
     }
