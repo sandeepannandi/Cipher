@@ -29,3 +29,8 @@ Cargo.lock
 
 # Keep the application dependency graph reproducible
 !Cargo.lock
+
+# Python benchmark artifacts
+__pycache__/
+*.pyc
+benchmarks/accuracy/results/latest.json
