@@ -4617,6 +4617,79 @@ async fn handler(req: HttpRequest) -> HttpResponse {
     }
 
     #[test]
+    fn rust_multiline_grouped_use_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{
+    find_user,
+    list_users,
+};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_multiline_nested_group_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{
+    inner::{
+        find_user
+    }
+};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let store = "pub mod inner;
+";
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/store.rs", store),
+            ("src/store/inner.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store/inner.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_multiline_grouped_use_with_comment_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{
+    find_user, // the lookup
+    list_users,
+};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
     fn rust_nested_group_missing_module_is_clean() {
         let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
 use crate::store::{inner::{find_user}};
@@ -6868,9 +6941,8 @@ enum ImportBinding {
 /// `import repo`); methods match by name within the imported file.
 /// Package imports (JS), dynamic `require`,
 /// `_test.go` files, and other instance receivers are not
-/// resolved, Rust `use` trees spanning several lines are not recognized,
-/// and a callable name offered by two different files resolves to
-/// neither.
+/// resolved, and a callable name offered by two different files resolves
+/// to neither.
 #[allow(clippy::items_after_test_module)]
 fn cross_file_flow_sinks(
     files: &[std::path::PathBuf],
@@ -8192,10 +8264,11 @@ enum RustDeclaration {
 /// The `mod`/`use` declarations of a Rust file. Grouped `use a::{b, c}`
 /// items are expanded to one declaration each (`as` aliases and a `*` glob
 /// item included); nested groups (`use a::{b::{c, d}}`) and nested path
-/// items (`use a::{b::c, d}`) flatten to their full segment lists, and
-/// `pub use` re-exports are recognized and flagged so the cross-file pass
-/// can resolve one hop through them. A `use` tree spanning several lines
-/// is not recognized.
+/// items (`use a::{b::c, d}`) flatten to their full segment lists, a
+/// tree spanning several lines is joined before flattening (bounded, so
+/// an unterminated tree is skipped), and `pub use` re-exports are
+/// recognized and flagged so the cross-file pass can resolve one hop
+/// through them.
 #[allow(clippy::items_after_test_module)]
 fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
     let mut declarations = Vec::new();
@@ -8205,23 +8278,50 @@ fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
     ) else {
         return declarations;
     };
-    for line in lines {
-        let code = line.split("//").next().unwrap_or("");
+    let use_start = Regex::new(r#"^\s*(?:pub\s+)?use\s"#).ok();
+    let mut index = 0;
+    while index < lines.len() {
+        let code = lines[index].split("//").next().unwrap_or("");
         if let Some(name) = mod_decl.captures(code).and_then(|c| c.get(1)) {
             declarations.push(RustDeclaration::Mod(name.as_str().to_string()));
+            index += 1;
             continue;
         }
-        if let Some(captures) = use_decl.captures(code) {
-            let reexport = captures.get(1).is_some();
-            let body = captures.get(2).map(|m| m.as_str()).unwrap_or("");
-            for (segments, alias) in expand_use_tree(body) {
-                declarations.push(RustDeclaration::Use {
-                    segments,
-                    alias,
-                    reexport,
-                });
+        if use_start.as_ref().is_some_and(|re| re.is_match(code)) {
+            // A `use` tree may span several lines: join comment-stripped
+            // lines with spaces until the braces balance and the final
+            // `;` appears, bounded so an unterminated tree is skipped.
+            let mut joined = String::new();
+            let mut balance = 0i32;
+            let mut end = index;
+            while end < lines.len() && end - index < 40 {
+                let piece = lines[end].split("//").next().unwrap_or("");
+                balance += piece.matches('{').count() as i32;
+                balance -= piece.matches('}').count() as i32;
+                if !joined.is_empty() {
+                    joined.push(' ');
+                }
+                joined.push_str(piece.trim_end());
+                end += 1;
+                if balance <= 0 && piece.contains(';') {
+                    break;
+                }
             }
+            if let Some(captures) = use_decl.captures(&joined) {
+                let reexport = captures.get(1).is_some();
+                let body = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+                for (segments, alias) in expand_use_tree(body) {
+                    declarations.push(RustDeclaration::Use {
+                        segments,
+                        alias,
+                        reexport,
+                    });
+                }
+            }
+            index = end.max(index + 1);
+            continue;
         }
+        index += 1;
     }
     declarations
 }
