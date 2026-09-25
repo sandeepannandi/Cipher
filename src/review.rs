@@ -10159,4 +10159,131 @@ fn command_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
             (
                 r#"\b(?:subprocess|commands)\s*\.\s*(getoutput|getstatusoutput)\s*\("#,
                 first_argument,
-       
+                None,
+            ),
+            (
+                r#"\bsubprocess\s*\.\s*(run|call|check_call|check_output|Popen)\s*\("#,
+                first_argument,
+                Some(r#"\bshell\s*=\s*True\b"#),
+            ),
+        ],
+        FlowLanguage::JavaScript => &[
+            (r#"(?:^|[^.\w$])(exec|execSync)\s*\("#, first_argument, None),
+            (
+                r#"\b(?:child_process|childProcess|cp)\s*\.\s*(exec|execSync)\s*\("#,
+                first_argument,
+                None,
+            ),
+        ],
+        FlowLanguage::Java => &[
+            (
+                r#"\bRuntime\s*\.\s*getRuntime\s*\(\s*\)\s*\.\s*(exec)\s*\("#,
+                first_argument,
+                None,
+            ),
+            (
+                r#"\bnew\s+(ProcessBuilder)\s*\("#,
+                shell_command_argument,
+                Some(shell_prefix),
+            ),
+        ],
+        FlowLanguage::Go => &[(
+            r#"\bexec\s*\.\s*(Command|CommandContext)\s*\("#,
+            shell_command_argument,
+            Some(shell_prefix),
+        )],
+        FlowLanguage::Rust => &[(
+            r#"\.\s*(arg)\s*\("#,
+            first_argument,
+            Some(
+                r#"Command\s*::\s*new\s*\(\s*"(?:/bin/)?(?:sh|bash|zsh)"\s*\)\s*\.\s*arg\s*\(\s*"-c""#,
+            ),
+        )],
+    };
+    patterns
+        .iter()
+        .filter_map(|(pattern, arguments, requires)| {
+            let call = Regex::new(pattern).ok()?;
+            let line_requires = match requires {
+                Some(required) => Some(Regex::new(required).ok()?),
+                None => None,
+            };
+            Some(FlowSink {
+                call,
+                arguments: *arguments,
+                line_requires,
+            })
+        })
+        .collect()
+}
+
+#[allow(clippy::items_after_test_module)]
+fn outbound_url_argument(name: &str) -> Vec<usize> {
+    match name {
+        "request" | "NewRequest" => vec![1],
+        "NewRequestWithContext" => vec![2],
+        _ => vec![0],
+    }
+}
+
+/// Find outbound HTTP requests whose URL is built from request input in the
+/// same file.
+///
+/// Sources and propagation match the SQL injection model. Only the URL
+/// argument counts: Python `requests`/`httpx` calls and `urlopen`; JS
+/// `fetch`, `axios`, `got`, and `http(s).get/request`; Java `new URL`,
+/// `URI.create`, and `RestTemplate` calls; Go `http.Get/Post/Head/PostForm`
+/// and `http.NewRequest*`; Rust `reqwest`/`ureq` `get`/`post`/... calls. A
+/// request value sent only as a query parameter,
+/// body, or header of a fixed URL is not reported. Host allowlists are not
+/// modeled as sanitizers; numeric conversions stop the flow. Same-file and
+/// straight-line only; no interprocedural claim.
+#[allow(clippy::items_after_test_module)]
+fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let Some(language) = flow_language(extension) else {
+        return std::collections::HashSet::new();
+    };
+    request_flow_sink_lines(
+        content,
+        language,
+        &ssrf_flow_sinks(language),
+        contains_numeric_conversion,
+    )
+}
+
+#[allow(clippy::items_after_test_module)]
+fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
+    let patterns: &[&str] = match language {
+        FlowLanguage::Python => &[
+            r#"\b(?:requests|httpx|session|client)\s*\.\s*(get|post|put|delete|head|patch|options|request)\s*\("#,
+            r#"\b(?:urllib\s*\.\s*request\s*\.\s*)?(urlopen)\s*\("#,
+        ],
+        FlowLanguage::JavaScript => &[
+            r#"(?:^|[^.\w$])(fetch|got|axios)\s*\("#,
+            r#"\baxios\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
+            r#"\bhttps?\s*\.\s*(get|request)\s*\("#,
+        ],
+        FlowLanguage::Java => &[
+            r#"\bnew\s+(URL)\s*\("#,
+            r#"\bURI\s*\.\s*(create)\s*\("#,
+            r#"\b[A-Za-z_]*[Rr]est[Tt]emplate\s*\.\s*(getForObject|getForEntity|postForObject|postForEntity|exchange)\s*\("#,
+        ],
+        FlowLanguage::Go => {
+            &[r#"\bhttp\s*\.\s*(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\("#]
+        }
+        FlowLanguage::Rust => &[
+            r#"\b(?:reqwest|ureq)\s*::\s*(get|post|put|delete|head|patch)\s*\("#,
+            r#"\b(?:client|reqwest)\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
+        ],
+    };
+    patterns
+        .iter()
+        .filter_map(|pattern| {
+            Regex::new(pattern).ok().map(|call| FlowSink {
+                call,
+                arguments: outbound_url_argument,
+                line_requires: None,
+            })
+        })
+        .collect()
+}
