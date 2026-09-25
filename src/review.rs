@@ -3532,6 +3532,54 @@ exports.search = (req, res) => {
     }
 
     #[test]
+    fn js_aliased_reexport_through_barrel_is_reported_in_service() {
+        let barrel = "export { findByName as lookup } from './users';";
+        let route = r#"import { lookup } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(lookup(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", barrel),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_namespace_reexport_through_barrel_is_reported_in_service() {
+        let barrel = "export * as users from './users';";
+        let route = r#"import { users } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(users.findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", barrel),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
     fn js_reexport_of_parameterized_service_stays_clean() {
         let barrel = "export { findById } from './users';";
         let route = r#"import { findById } from '../services';
@@ -7265,6 +7313,10 @@ fn cross_file_flow_sinks(
                                 }
                             }
                         }
+                        JsReexport::Namespace { .. } => {
+                            // Handled by the namespace map below, which
+                            // binds the name as a module, not a function.
+                        }
                         JsReexport::Glob { spec } => {
                             if let Some(target) = resolve_js_specifier(dir, &spec, &index_of) {
                                 for name in exports[target].keys() {
@@ -7311,13 +7363,52 @@ fn cross_file_flow_sinks(
         }
         reexport_maps = next;
     }
+    // Namespace re-exports (`export * as ns from './x'`): the barrel
+    // offers `ns` as a module bound to the re-exported file, so
+    // `import { ns } from './barrel'` followed by `ns.f(...)` resolves
+    // like a whole-module import of that file. Single pass: a name
+    // offered by two sources, or pointing at the barrel itself,
+    // resolves to neither.
+    let namespace_maps: Vec<std::collections::HashMap<String, usize>> = modules
+        .iter()
+        .enumerate()
+        .zip(&lines)
+        .map(|((index, module), lines)| {
+            let mut map = std::collections::HashMap::new();
+            if module.language != FlowLanguage::JavaScript {
+                return map;
+            }
+            let Some(dir) = module.path.parent() else {
+                return map;
+            };
+            let mut offers: std::collections::HashMap<String, Vec<usize>> =
+                std::collections::HashMap::new();
+            for declaration in js_reexports(lines) {
+                if let JsReexport::Namespace { spec, name } = declaration {
+                    if let Some(target) = resolve_js_specifier(dir, &spec, &index_of) {
+                        offers.entry(name).or_default().push(target);
+                    }
+                }
+            }
+            for (name, mut targets) in offers {
+                targets.sort();
+                targets.dedup();
+                if targets.len() == 1 && targets[0] != index {
+                    map.insert(name, targets[0]);
+                }
+            }
+            map
+        })
+        .collect();
     for (index, module) in modules.iter().enumerate() {
         if module.language != FlowLanguage::JavaScript {
             continue;
         }
         for binding in &mut bindings[index] {
-            if let ImportBinding::Function {
-                exported, target, ..
+            let replacement = if let ImportBinding::Function {
+                local,
+                exported,
+                target,
             } = binding
             {
                 if modules[*target].language == FlowLanguage::JavaScript
@@ -7326,8 +7417,24 @@ fn cross_file_flow_sinks(
                     if let Some((new_target, source)) = reexport_maps[*target].get(exported) {
                         *target = *new_target;
                         *exported = source.clone();
+                        None
+                    } else {
+                        namespace_maps[*target].get(exported).map(|ns_target| {
+                            ImportBinding::Module {
+                                binding: local.clone(),
+                                target: *ns_target,
+                                exported_only: false,
+                            }
+                        })
                     }
+                } else {
+                    None
                 }
+            } else {
+                None
+            };
+            if let Some(new_binding) = replacement {
+                *binding = new_binding;
             }
         }
     }
@@ -9019,10 +9126,16 @@ enum JsReexport {
     Glob {
         spec: String,
     },
+    /// `export * as ns from './x'`: the barrel offers `ns` as a module
+    /// (namespace) bound to the target file itself.
+    Namespace {
+        spec: String,
+        name: String,
+    },
 }
 
 /// Re-export declarations of one JS/TS file: `export { a, b as c } from
-/// './x'` and `export * from './x'`.
+/// './x'`, `export * from './x'`, and `export * as ns from './x'`.
 #[allow(clippy::items_after_test_module)]
 /// JS declaration statements with multi-line ones joined: an `import`,
 /// an `export { ... } from` / `export * from` re-export, or a
@@ -9090,9 +9203,12 @@ fn js_declarations(lines: &[&str]) -> Vec<String> {
 
 fn js_reexports(lines: &[&str]) -> Vec<JsReexport> {
     let mut declarations = Vec::new();
-    let (Ok(named), Ok(glob)) = (
+    let (Ok(named), Ok(glob), Ok(namespace)) = (
         Regex::new(r#"^\s*export\s*\{([^}]*)\}\s*from\s+['"]([^'"]+)['"]\s*;?\s*$"#),
         Regex::new(r#"^\s*export\s*\*\s*from\s+['"]([^'"]+)['"]\s*;?\s*$"#),
+        Regex::new(
+            r#"^\s*export\s*\*\s*as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$"#,
+        ),
     ) else {
         return declarations;
     };
@@ -9127,6 +9243,15 @@ fn js_reexports(lines: &[&str]) -> Vec<JsReexport> {
                         name: name.to_string(),
                     });
                 }
+            }
+            continue;
+        }
+        if let Some(captures) = namespace.captures(code) {
+            if let (Some(name), Some(spec)) = (captures.get(1), captures.get(2)) {
+                declarations.push(JsReexport::Namespace {
+                    spec: spec.as_str().to_string(),
+                    name: name.as_str().to_string(),
+                });
             }
             continue;
         }
