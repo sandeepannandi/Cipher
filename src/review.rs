@@ -2898,6 +2898,82 @@ module.exports = { byName };"#;
     }
 
     #[test]
+    fn js_three_import_hops_converge_in_final_service() {
+        let route = r#"const gateway = require('../services/gateway');
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(gateway.byName(name));
+};"#;
+        let gateway = r#"const search = require('./search');
+
+function byName(name) {
+    return search.byName(name);
+}
+
+module.exports = { byName };"#;
+        let middle = r#"const store = require('./db-users');
+
+function byName(name) {
+    return store.findByName(name);
+}
+
+module.exports = { byName };"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/gateway.js", gateway),
+            ("src/services/search.js", middle),
+            ("src/services/db-users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/db-users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_three_import_hops_parameterized_service_is_clean() {
+        let route = r#"const gateway = require('../services/gateway');
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(gateway.byName(name));
+};"#;
+        let gateway = r#"const search = require('./search');
+
+function byName(name) {
+    return search.byName(name);
+}
+
+module.exports = { byName };"#;
+        let middle = r#"const store = require('./db-users');
+
+function byName(name) {
+    return store.findByName(name);
+}
+
+module.exports = { byName };"#;
+        let service = r#"const db = require('../db');
+
+function findByName(name) {
+    return db.prepare('SELECT id, name FROM users WHERE name = ?').get(name);
+}
+
+module.exports = { findByName };"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/gateway.js", gateway),
+            ("src/services/search.js", middle),
+            ("src/services/db-users.js", service),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn js_ambiguous_glob_reexport_is_not_resolved() {
         let other = r#"const db = require('../db');
 
@@ -4005,6 +4081,50 @@ pub async fn find_user(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
             ("src/handler.rs", handler),
             ("src/intermediate.rs", intermediate),
             ("src/store.rs", store.as_str()),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_three_import_hops_converge_in_store() {
+        let lib = "mod intermediate;\nmod relay;\nmod store;";
+        let handler = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::intermediate::find_user;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let intermediate = r#"use sqlx::PgPool;
+
+use crate::relay::find_user as relay_user;
+
+pub async fn find_user(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    relay_user(pool, name).await
+}
+"#;
+        let relay = r#"use sqlx::PgPool;
+
+use crate::store::find_user as query_user;
+
+pub async fn find_user(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    query_user(pool, name).await
+}
+"#;
+        // Reuses RUST_STORE directly so the fixture adds no extra copy of
+        // the sink string (the policy baseline counts duplicates).
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", handler),
+            ("src/intermediate.rs", intermediate),
+            ("src/relay.rs", relay),
+            ("src/store.rs", RUST_STORE),
         ]);
         assert_eq!(
             found,
@@ -6191,11 +6311,12 @@ enum ImportBinding {
 /// request-tainted
 /// argument passed to an exported function of another file in a position
 /// that reaches a sink reports the sink line in that file. Import hops are
-/// followed through a bounded fixpoint: a callee whose own imports forward
-/// the value onward contributes the sinks those imports reach, so a call
-/// chain across two import hops resolves; the callee's same-file helpers
-/// are included through its summaries, import cycles simply stop changing,
-/// and longer chains stay unresolved. JS/TS re-exports and Rust `pub use` re-exports (named,
+/// followed through a converging fixpoint: a callee whose own imports
+/// forward the value onward contributes the sinks those imports reach, so a
+/// call chain across any number of import hops resolves (one propagation
+/// round per module bounds the loop); the callee's same-file helpers are
+/// included through its summaries, and import cycles simply stop changing.
+/// JS/TS re-exports and Rust `pub use` re-exports (named,
 /// `as` alias, grouped, or `*` glob, with `crate::`/`self::`/`super::` or
 /// bare relative paths) resolve through a bounded fixpoint, so chained
 /// re-exports (a barrel re-exporting from another barrel) collapse toward
@@ -6892,8 +7013,9 @@ fn cross_file_flow_sinks(
         // reaches. They start from the shallow summaries pinned to their
         // own file, then iterate: a callee whose own imports forward the
         // value onward also contributes the sinks those imports reach.
-        // Three bounded rounds propagate through two import hops, and
-        // import cycles simply stop changing.
+        // Iterate until the summaries stop changing: each round propagates
+        // one import hop, so chains of any length converge within one round
+        // per module, and import cycles simply stop changing.
         // Per parameter, the `(file index, sink line)` pairs reached; per
         // function, one set per parameter; per module, one entry per callee.
         type DeepSummaries = Vec<Vec<std::collections::HashSet<(usize, usize)>>>;
@@ -7054,7 +7176,7 @@ fn cross_file_flow_sinks(
             }
             deduped
         };
-        for _ in 0..3 {
+        for _ in 0..modules.len().max(3) {
             let mut next = deep.clone();
             let mut changed = false;
             for (caller, module) in modules.iter().enumerate() {
