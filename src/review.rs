@@ -3796,6 +3796,59 @@ def find_orders(customer):
     }
 
     #[test]
+    fn python_try_except_import_into_repository_is_reported() {
+        let repository = r#"import sqlite3
+
+
+def find_orders(customer):
+    conn = sqlite3.connect("shop.db")
+    query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+    return conn.execute(query).fetchall()"#;
+        let views = r#"try:
+    from .repository import find_orders
+except ImportError:
+    find_orders = None
+
+
+@app.route("/orders")
+def orders():
+    customer = request.args.get("customer")
+    return {"orders": find_orders(customer)}
+"#;
+        let found = scan_project(&[("app/views.py", views), ("app/repository.py", repository)]);
+        assert_eq!(
+            found,
+            vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 7)],
+            "try/except import"
+        );
+    }
+
+    #[test]
+    fn python_absolute_star_import_into_repository_is_reported() {
+        let repository = r#"import sqlite3
+
+
+def find_orders(customer):
+    conn = sqlite3.connect("shop.db")
+    query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+    return conn.execute(query).fetchall()"#;
+        let views = r#"from repository import *
+
+
+@app.route("/orders")
+def orders():
+    customer = request.args.get("customer")
+    return {"orders": find_orders(customer)}
+"#;
+        let found = scan_project(&[("app/views.py", views), ("app/repository.py", repository)]);
+        assert_eq!(
+            found,
+            vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 7)],
+            "absolute star"
+        );
+    }
+
+    #[test]
     fn python_parenthesized_import_into_repository_is_reported() {
         let repository = r#"import sqlite3
 
@@ -5075,6 +5128,84 @@ async fn handler(req: HttpRequest) -> HttpResponse {
             ("src/api/v1/users.rs", users.as_str()),
         ]);
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn rust_crate_glob_import_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::*;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)],
+            "crate glob"
+        );
+    }
+
+    #[test]
+    fn rust_double_super_use_call_is_reported_in_store() {
+        let api = "pub mod users;";
+        let users = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use super::super::store::find_user;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let main = "mod api;
+mod store;
+";
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/api.rs", api),
+            ("src/api/users.rs", users),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)],
+            "double super use"
+        );
+    }
+
+    #[test]
+    fn rust_super_glob_import_call_is_reported_in_store() {
+        let api = "pub mod users;";
+        let users = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use super::super::store::*;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let main = "mod api;
+mod store;
+";
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/api.rs", api),
+            ("src/api/users.rs", users),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)],
+            "super glob"
+        );
     }
 
     #[test]
@@ -8117,7 +8248,7 @@ fn cross_file_flow_sinks(
                     let Some(prefix) = segments.first().map(String::as_str) else {
                         continue;
                     };
-                    let Some(base) = (match prefix {
+                    let Some(mut base) = (match prefix {
                         "crate" => crate_base.clone(),
                         "self" => Some(module_dir.clone()),
                         "super" => super_base.clone(),
@@ -8126,6 +8257,16 @@ fn cross_file_flow_sinks(
                         continue;
                     };
                     segments.remove(0);
+                    // `super::super::...`: each further `super` climbs one
+                    // more directory. A chain past the filesystem root is
+                    // left in place and simply resolves to nothing.
+                    while segments.first().map(String::as_str) == Some("super") {
+                        let Some(parent) = base.parent() else {
+                            break;
+                        };
+                        base = parent.to_path_buf();
+                        segments.remove(0);
+                    }
                     let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
                     if segments.last() == Some(&"*") {
                         // `use crate::store::*;` imports every `pub fn`.
@@ -10018,131 +10159,4 @@ fn command_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
             (
                 r#"\b(?:subprocess|commands)\s*\.\s*(getoutput|getstatusoutput)\s*\("#,
                 first_argument,
-                None,
-            ),
-            (
-                r#"\bsubprocess\s*\.\s*(run|call|check_call|check_output|Popen)\s*\("#,
-                first_argument,
-                Some(r#"\bshell\s*=\s*True\b"#),
-            ),
-        ],
-        FlowLanguage::JavaScript => &[
-            (r#"(?:^|[^.\w$])(exec|execSync)\s*\("#, first_argument, None),
-            (
-                r#"\b(?:child_process|childProcess|cp)\s*\.\s*(exec|execSync)\s*\("#,
-                first_argument,
-                None,
-            ),
-        ],
-        FlowLanguage::Java => &[
-            (
-                r#"\bRuntime\s*\.\s*getRuntime\s*\(\s*\)\s*\.\s*(exec)\s*\("#,
-                first_argument,
-                None,
-            ),
-            (
-                r#"\bnew\s+(ProcessBuilder)\s*\("#,
-                shell_command_argument,
-                Some(shell_prefix),
-            ),
-        ],
-        FlowLanguage::Go => &[(
-            r#"\bexec\s*\.\s*(Command|CommandContext)\s*\("#,
-            shell_command_argument,
-            Some(shell_prefix),
-        )],
-        FlowLanguage::Rust => &[(
-            r#"\.\s*(arg)\s*\("#,
-            first_argument,
-            Some(
-                r#"Command\s*::\s*new\s*\(\s*"(?:/bin/)?(?:sh|bash|zsh)"\s*\)\s*\.\s*arg\s*\(\s*"-c""#,
-            ),
-        )],
-    };
-    patterns
-        .iter()
-        .filter_map(|(pattern, arguments, requires)| {
-            let call = Regex::new(pattern).ok()?;
-            let line_requires = match requires {
-                Some(required) => Some(Regex::new(required).ok()?),
-                None => None,
-            };
-            Some(FlowSink {
-                call,
-                arguments: *arguments,
-                line_requires,
-            })
-        })
-        .collect()
-}
-
-#[allow(clippy::items_after_test_module)]
-fn outbound_url_argument(name: &str) -> Vec<usize> {
-    match name {
-        "request" | "NewRequest" => vec![1],
-        "NewRequestWithContext" => vec![2],
-        _ => vec![0],
-    }
-}
-
-/// Find outbound HTTP requests whose URL is built from request input in the
-/// same file.
-///
-/// Sources and propagation match the SQL injection model. Only the URL
-/// argument counts: Python `requests`/`httpx` calls and `urlopen`; JS
-/// `fetch`, `axios`, `got`, and `http(s).get/request`; Java `new URL`,
-/// `URI.create`, and `RestTemplate` calls; Go `http.Get/Post/Head/PostForm`
-/// and `http.NewRequest*`; Rust `reqwest`/`ureq` `get`/`post`/... calls. A
-/// request value sent only as a query parameter,
-/// body, or header of a fixed URL is not reported. Host allowlists are not
-/// modeled as sanitizers; numeric conversions stop the flow. Same-file and
-/// straight-line only; no interprocedural claim.
-#[allow(clippy::items_after_test_module)]
-fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
-    let Some(language) = flow_language(extension) else {
-        return std::collections::HashSet::new();
-    };
-    request_flow_sink_lines(
-        content,
-        language,
-        &ssrf_flow_sinks(language),
-        contains_numeric_conversion,
-    )
-}
-
-#[allow(clippy::items_after_test_module)]
-fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
-    let patterns: &[&str] = match language {
-        FlowLanguage::Python => &[
-            r#"\b(?:requests|httpx|session|client)\s*\.\s*(get|post|put|delete|head|patch|options|request)\s*\("#,
-            r#"\b(?:urllib\s*\.\s*request\s*\.\s*)?(urlopen)\s*\("#,
-        ],
-        FlowLanguage::JavaScript => &[
-            r#"(?:^|[^.\w$])(fetch|got|axios)\s*\("#,
-            r#"\baxios\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
-            r#"\bhttps?\s*\.\s*(get|request)\s*\("#,
-        ],
-        FlowLanguage::Java => &[
-            r#"\bnew\s+(URL)\s*\("#,
-            r#"\bURI\s*\.\s*(create)\s*\("#,
-            r#"\b[A-Za-z_]*[Rr]est[Tt]emplate\s*\.\s*(getForObject|getForEntity|postForObject|postForEntity|exchange)\s*\("#,
-        ],
-        FlowLanguage::Go => {
-            &[r#"\bhttp\s*\.\s*(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\("#]
-        }
-        FlowLanguage::Rust => &[
-            r#"\b(?:reqwest|ureq)\s*::\s*(get|post|put|delete|head|patch)\s*\("#,
-            r#"\b(?:client|reqwest)\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
-        ],
-    };
-    patterns
-        .iter()
-        .filter_map(|pattern| {
-            Regex::new(pattern).ok().map(|call| FlowSink {
-                call,
-                arguments: outbound_url_argument,
-                line_requires: None,
-            })
-        })
-        .collect()
-}
+       
