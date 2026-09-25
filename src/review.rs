@@ -2777,6 +2777,101 @@ exports.search = (req, res) => {
     }
 
     #[test]
+    fn js_deep_barrel_chain_converges_in_service() {
+        // Seven re-export hops: beyond the old fixed pass bound.
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            (
+                "src/services/index.js",
+                "export { findByName } from './v2';",
+            ),
+            ("src/services/v2.js", "export { findByName } from './v3';"),
+            ("src/services/v3.js", "export { findByName } from './v4';"),
+            ("src/services/v4.js", "export { findByName } from './v5';"),
+            ("src/services/v5.js", "export { findByName } from './v6';"),
+            ("src/services/v6.js", "export { findByName } from './v7';"),
+            (
+                "src/services/v7.js",
+                "export { findByName } from './users';",
+            ),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_long_same_file_helper_chain_converges() {
+        // Nine functions deep: beyond the old fixed summary rounds.
+        let route = r#"const store = require('../services/users');
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(store.findByName(name));
+};"#;
+        let service = r#"const db = require('../db');
+
+function h8(name) {
+    const sql = `SELECT id, name FROM users WHERE name = '${name}'`;
+    return db.prepare(sql).all();
+}
+
+function h7(name) {
+    return h8(name);
+}
+
+function h6(name) {
+    return h7(name);
+}
+
+function h5(name) {
+    return h6(name);
+}
+
+function h4(name) {
+    return h5(name);
+}
+
+function h3(name) {
+    return h4(name);
+}
+
+function h2(name) {
+    return h3(name);
+}
+
+function findByName(name) {
+    return h2(name);
+}
+
+module.exports = { findByName };"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/users.js", service),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
     fn js_barrel_reexport_cycle_is_not_resolved() {
         let outer_barrel = "export { findByName } from './v2';";
         let inner_barrel = "export { findByName } from './index';";
@@ -4031,6 +4126,27 @@ pub async fn find_user(pool: &Pool<Postgres>, name: &str) -> Option<String> {
         let found = scan_project(&[
             ("src/lib.rs", lib),
             ("src/intermediate.rs", intermediate),
+            ("src/handler.rs", RUST_HANDLER),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_deep_pub_use_chain_converges_in_store() {
+        // Six re-export hops: beyond the old fixed pass bound.
+        let lib =
+            "mod m1;\nmod m2;\nmod m3;\nmod m4;\nmod m5;\nmod store;\n\npub use m1::find_user;";
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/m1.rs", "pub use crate::m2::find_user;"),
+            ("src/m2.rs", "pub use crate::m3::find_user;"),
+            ("src/m3.rs", "pub use crate::m4::find_user;"),
+            ("src/m4.rs", "pub use crate::m5::find_user;"),
+            ("src/m5.rs", "pub use crate::store::find_user;"),
             ("src/handler.rs", RUST_HANDLER),
             ("src/store.rs", RUST_STORE),
         ]);
@@ -5471,7 +5587,7 @@ fn flow_summaries(
         .iter()
         .map(|function| vec![std::collections::HashSet::new(); function.params.len()])
         .collect();
-    for _ in 0..6 {
+    for _ in 0..functions.len().max(6) {
         let calls = FlowCalls {
             functions,
             summaries: &summaries,
@@ -6320,9 +6436,9 @@ enum ImportBinding {
 /// `as` alias, grouped, or `*` glob, with `crate::`/`self::`/`super::` or
 /// bare relative paths) resolve through a bounded fixpoint, so chained
 /// re-exports (a barrel re-exporting from another barrel) collapse toward
-/// the defining module pass by pass; in both languages a name offered by
-/// two sources at any pass resolves to neither, a re-export cycle offers
-/// nothing, and chains longer than the pass bound stay unresolved. Package imports (JS),
+/// the defining module pass by pass, iterated to convergence; in both
+/// languages a name offered by two sources at any pass resolves to neither,
+/// and a re-export cycle offers nothing. Package imports (JS),
 /// dynamic `require`, `_test.go` files, and calls through instance
 /// variables are not
 /// resolved, nested Rust groups (`use a::{b::{c, d}}`) are not resolved,
@@ -6459,9 +6575,17 @@ fn cross_file_flow_sinks(
     let empty_maps: Vec<std::collections::HashMap<String, (usize, String)>> = (0..modules.len())
         .map(|_| std::collections::HashMap::new())
         .collect();
+    // Iterate until the maps stop changing: each pass collapses one hop
+    // toward the defining module, so chains of any depth converge within
+    // one pass per module and re-export cycles simply stop changing.
     let mut reexport_maps = js_reexports_pass(&empty_maps);
-    for _ in 0..4 {
-        reexport_maps = js_reexports_pass(&reexport_maps);
+    for _ in 0..modules.len().max(4) {
+        let next = js_reexports_pass(&reexport_maps);
+        if next == reexport_maps {
+            reexport_maps = next;
+            break;
+        }
+        reexport_maps = next;
     }
     for (index, module) in modules.iter().enumerate() {
         if module.language != FlowLanguage::JavaScript {
@@ -6495,9 +6619,8 @@ fn cross_file_flow_sinks(
     // re-exporting module's path. Chained re-exports (a module re-exporting
     // a name it only re-exports) resolve through a bounded fixpoint: each
     // pass collapses one hop toward the defining module. A name offered by
-    // two different sources at any pass resolves to neither, a re-export
-    // cycle offers nothing, and chains longer than the pass bound stay
-    // unresolved.
+    // two different sources at any pass resolves to neither, and a
+    // re-export cycle offers nothing.
     let rust_reexports_pass = |old: &[std::collections::HashMap<String, (usize, String)>]| {
         modules
             .iter()
@@ -6622,8 +6745,13 @@ fn cross_file_flow_sinks(
         .map(|_| std::collections::HashMap::new())
         .collect();
     let mut rust_reexport_maps = rust_reexports_pass(&empty_rust_maps);
-    for _ in 0..4 {
-        rust_reexport_maps = rust_reexports_pass(&rust_reexport_maps);
+    for _ in 0..modules.len().max(4) {
+        let next = rust_reexports_pass(&rust_reexport_maps);
+        if next == rust_reexport_maps {
+            rust_reexport_maps = next;
+            break;
+        }
+        rust_reexport_maps = next;
     }
     // Multi-module Go repositories: an import outside a file's own module
     // resolves through a `replace` directive to a local directory or through
