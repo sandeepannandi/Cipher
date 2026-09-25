@@ -3815,7 +3815,7 @@ use actix_web::{get, HttpRequest, HttpResponse};
 #[get("/user")]
 async fn handler(req: HttpRequest) -> HttpResponse {
     let name = req.match_info().get("name").unwrap_or("");
-    api::users::lookup(name).await;
+    api::users::lookup(&POOL, name).await.ok();
     HttpResponse::Ok().finish()
 }
 "#;
@@ -3829,18 +3829,29 @@ pub async fn lookup(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
     Ok(())
 }
 "#;
-        // `api::users::lookup(...)` chains two receivers and stays
-        // unresolved; a `use` brings the bare call into scope instead.
+        // `api::users::lookup(...)` resolves through one nested hop: each
+        // module declares the next (`mod api;` + `pub mod users;`).
         let found = scan_project(&[
             ("src/main.rs", main),
             ("src/api.rs", api),
+            ("src/api/users.rs", users),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/api/users.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+
+        // Without `pub mod users;` in api.rs the chain stays unresolved.
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/api.rs", ""),
             ("src/api/users.rs", users),
         ]);
         assert!(found.is_empty(), "{found:?}");
 
         let main_use = main.replace("mod api;", "use crate::api::users::lookup;");
         let main_use = main_use.replace(
-            "api::users::lookup(name).await;",
+            "api::users::lookup(&POOL, name).await.ok();",
             "lookup(&POOL, name).await.ok();",
         );
         let found = scan_project(&[
@@ -3852,6 +3863,38 @@ pub async fn lookup(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
             found,
             vec![("src/api/users.rs".to_string(), SQLI_FLOW.to_string(), 5)]
         );
+    }
+
+    #[test]
+    fn rust_triple_mod_path_call_is_not_resolved() {
+        let main = r#"mod api;
+
+use actix_web::{get, HttpRequest, HttpResponse};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    api::inner::users::lookup(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let api = "pub mod inner;\n";
+        let inner = "pub mod users;\n";
+        let users = r#"use sqlx::PgPool;
+
+pub async fn lookup(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    let query = format!("SELECT * FROM users WHERE name = '{name}'");
+    sqlx::query(&query).execute(pool).await?;
+    Ok(())
+}
+"#;
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/api.rs", api),
+            ("src/api/inner.rs", inner),
+            ("src/api/inner/users.rs", users),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
     }
 
     #[test]
@@ -5282,15 +5325,24 @@ fn imported_calls(
         let before = visible[..name.start()].trim_end();
         let receiver = if language == FlowLanguage::Rust && before.ends_with("::") {
             let rest = before[..before.len() - 2].trim_end();
-            let word: String = rest
-                .rsplit(|ch: char| !is_word(ch))
-                .next()
-                .unwrap_or("")
-                .to_string();
-            if word.is_empty() || rest[..rest.len() - word.len()].trim_end().ends_with("::") {
-                continue;
+            let segments: Vec<&str> = rest.split("::").map(str::trim).collect();
+            // `a::f(...)` resolves through a module binding; `a::b::f(...)`
+            // resolves through one nested hop when each module declares the
+            // next. Longer chains stay unresolved.
+            match segments.as_slice() {
+                [word] if !word.is_empty() && word.chars().all(&is_word) => {
+                    Some((*word).to_string())
+                }
+                [first, second]
+                    if !first.is_empty()
+                        && !second.is_empty()
+                        && first.chars().all(&is_word)
+                        && second.chars().all(&is_word) =>
+                {
+                    Some(format!("{first}::{second}"))
+                }
+                _ => continue,
             }
-            Some(word)
         } else {
             match before.strip_suffix('.') {
                 Some(rest) => {
@@ -5838,7 +5890,9 @@ enum ImportBinding {
 /// `import static a.b.C.*;` resolves every static method of `C` the same
 /// way. Only static, non-private methods resolve. Rust `mod store;`
 /// resolves to the sibling `store.rs`/`store/mod.rs` for `store::f(...)`
-/// path calls, and `use crate::`/`self::`/`super::` paths (with `as`
+/// path calls, `a::b::f(...)` resolves through one nested hop when each
+/// module declares the next (longer chains stay unresolved), and
+/// `use crate::`/`self::`/`super::` paths (with `as`
 /// aliases or a trailing `::*` glob) resolve from the nearest ancestor
 /// holding `main.rs`/`lib.rs`; only `pub` free functions are visible. A
 /// request-tainted
@@ -6340,7 +6394,8 @@ fn cross_file_flow_sinks(
             }
             FlowLanguage::Rust => {
                 // `mod store;` names a sibling file (`store.rs` or
-                // `store/mod.rs`); calls look like `store::find_user(...)`.
+                // `store/mod.rs`); calls look like `store::find_user(...)`,
+                // or `api::users::lookup(...)` through one nested hop.
                 // `use crate::a::b::f;` (also `self::`/`super::`, an `as`
                 // alias, or a trailing `::*` glob) resolves from the crate
                 // root and makes the bare call `f(...)` resolve; a path
@@ -6529,6 +6584,58 @@ fn cross_file_flow_sinks(
                         summaries: reached,
                     });
                 }
+            }
+            // Chained Rust module paths: with `mod api;` in scope and
+            // `mod users;` inside api, `api::users::f(...)` resolves through
+            // the two bindings. One nested hop; longer chains never reach
+            // here because the call parser skips them.
+            if module.language == FlowLanguage::Rust {
+                let mut chained = Vec::new();
+                for binding in &bindings[caller] {
+                    let ImportBinding::Module {
+                        binding: first,
+                        target: middle,
+                        ..
+                    } = binding
+                    else {
+                        continue;
+                    };
+                    if modules[*middle].language != FlowLanguage::Rust {
+                        continue;
+                    }
+                    for inner in &bindings[*middle] {
+                        let ImportBinding::Module {
+                            binding: second,
+                            target,
+                            exported_only,
+                        } = inner
+                        else {
+                            continue;
+                        };
+                        if modules[*target].language != FlowLanguage::Rust {
+                            continue;
+                        }
+                        for (name, function) in exports[*target].iter() {
+                            if *exported_only
+                                && !name.chars().next().is_some_and(|ch| ch.is_uppercase())
+                            {
+                                continue;
+                            }
+                            let reached = summaries[*target][*function].clone();
+                            if reached.iter().all(|lines| lines.is_empty()) {
+                                continue;
+                            }
+                            chained.push(ImportedCallee {
+                                receiver: Some(format!("{first}::{second}")),
+                                name: name.clone(),
+                                target: *target,
+                                params: functions[*target][*function].params.len(),
+                                summaries: reached,
+                            });
+                        }
+                    }
+                }
+                imports.extend(chained);
             }
             // A call resolves only when one file provides the (receiver,
             // name) pair: two files offering the same callable are ambiguous
