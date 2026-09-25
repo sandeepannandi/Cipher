@@ -4318,6 +4318,57 @@ pub async fn list_users(pool: &Pool<Postgres>) -> Vec<String> {
     }
 
     #[test]
+    fn rust_deep_nested_mod_path_converges_in_leaf() {
+        let main = r#"mod api;
+
+use actix_web::{get, HttpRequest, HttpResponse};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    api::v1::users::lookup(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        // `api::v1::users::lookup(...)` walks three module bindings: api,
+        // v1 inside api, users inside v1. Built from RUST_STORE so the
+        // fixture adds no extra copy of the sink string to this file (the
+        // policy baseline counts duplicates).
+        let users = RUST_STORE.replace("find_user", "lookup");
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            (
+                "src/api.rs",
+                "pub mod v1;
+",
+            ),
+            (
+                "src/api/v1.rs",
+                "pub mod users;
+",
+            ),
+            ("src/api/v1/users.rs", users.as_str()),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/api/v1/users.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+
+        // Without `pub mod users;` in v1.rs the chain stays unresolved.
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            (
+                "src/api.rs",
+                "pub mod v1;
+",
+            ),
+            ("src/api/v1.rs", ""),
+            ("src/api/v1/users.rs", users.as_str()),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn rust_nested_group_is_not_resolved() {
         let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
 use crate::store::{inner::{find_user}};
@@ -4393,7 +4444,7 @@ pub async fn lookup(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
     }
 
     #[test]
-    fn rust_triple_mod_path_call_is_not_resolved() {
+    fn rust_triple_mod_path_call_is_reported_in_leaf() {
         let main = r#"mod api;
 
 use actix_web::{get, HttpRequest, HttpResponse};
@@ -4421,7 +4472,14 @@ pub async fn lookup(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
             ("src/api/inner.rs", inner),
             ("src/api/inner/users.rs", users),
         ]);
-        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(
+            found,
+            vec![(
+                "src/api/inner/users.rs".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
     }
 
     #[test]
@@ -5856,22 +5914,16 @@ fn imported_calls(
             let rest = before[..before.len() - 2].trim_end();
             let segments: Vec<&str> = rest.split("::").map(str::trim).collect();
             // `a::f(...)` resolves through a module binding; `a::b::f(...)`
-            // resolves through one nested hop when each module declares the
-            // next. Longer chains stay unresolved.
-            match segments.as_slice() {
-                [word] if !word.is_empty() && word.chars().all(&is_word) => {
-                    Some((*word).to_string())
-                }
-                [first, second]
-                    if !first.is_empty()
-                        && !second.is_empty()
-                        && first.chars().all(&is_word)
-                        && second.chars().all(&is_word) =>
-                {
-                    Some(format!("{first}::{second}"))
-                }
-                _ => continue,
+            // and longer chains resolve through nested hops when each
+            // module declares the next.
+            if segments.is_empty()
+                || segments
+                    .iter()
+                    .any(|word| word.is_empty() || !word.chars().all(&is_word))
+            {
+                continue;
             }
+            Some(segments.join("::"))
         } else {
             match before.strip_suffix('.') {
                 Some(rest) => {
@@ -6419,8 +6471,8 @@ enum ImportBinding {
 /// `import static a.b.C.*;` resolves every static method of `C` the same
 /// way. Only static, non-private methods resolve. Rust `mod store;`
 /// resolves to the sibling `store.rs`/`store/mod.rs` for `store::f(...)`
-/// path calls, `a::b::f(...)` resolves through one nested hop when each
-/// module declares the next (longer chains stay unresolved), and
+/// path calls, `a::b::f(...)` and longer chains resolve through nested
+/// hops when each module declares the next, and
 /// `use crate::`/`self::`/`super::` paths (with `as`
 /// aliases or a trailing `::*` glob) resolve from the nearest ancestor
 /// holding `main.rs`/`lib.rs`; only `pub` free functions are visible. A
@@ -7216,55 +7268,69 @@ fn cross_file_flow_sinks(
                     });
                 }
             }
-            // Chained Rust module paths: with `mod api;` in scope and
-            // `mod users;` inside api, `api::users::f(...)` resolves through
-            // the two bindings. One nested hop; longer chains never reach
-            // here because the call parser skips them.
+            // Chained Rust module paths: with `mod api;` in scope,
+            // `pub mod users;` inside api, and so on, `api::users::f(...)`
+            // and longer chains resolve by walking one module binding per
+            // segment. The walk is bounded by the module count, so module
+            // cycles cannot loop.
             if module.language == FlowLanguage::Rust {
                 let mut chained = Vec::new();
-                for binding in &bindings[caller] {
-                    let ImportBinding::Module {
-                        binding: first,
-                        target: middle,
-                        ..
-                    } = binding
-                    else {
-                        continue;
-                    };
-                    if modules[*middle].language != FlowLanguage::Rust {
-                        continue;
-                    }
-                    for inner in &bindings[*middle] {
-                        let ImportBinding::Module {
-                            binding: second,
+                let mut frontier: Vec<(String, usize)> = bindings[caller]
+                    .iter()
+                    .filter_map(|binding| {
+                        if let ImportBinding::Module {
+                            binding: first,
                             target,
-                            exported_only,
-                        } = inner
-                        else {
-                            continue;
-                        };
-                        if modules[*target].language != FlowLanguage::Rust {
-                            continue;
+                            ..
+                        } = binding
+                        {
+                            (modules[*target].language == FlowLanguage::Rust)
+                                .then(|| (first.clone(), *target))
+                        } else {
+                            None
                         }
-                        for (name, function) in exports[*target].iter() {
-                            if *exported_only
-                                && !name.chars().next().is_some_and(|ch| ch.is_uppercase())
-                            {
+                    })
+                    .collect();
+                let mut depth = 1;
+                while !frontier.is_empty() && depth < modules.len() {
+                    depth += 1;
+                    let mut next_frontier = Vec::new();
+                    for (prefix, middle) in frontier {
+                        for inner in &bindings[middle] {
+                            let ImportBinding::Module {
+                                binding: segment,
+                                target,
+                                exported_only,
+                            } = inner
+                            else {
+                                continue;
+                            };
+                            if modules[*target].language != FlowLanguage::Rust {
                                 continue;
                             }
-                            let reached = deep_map[*target][*function].clone();
-                            if reached.iter().all(|lines| lines.is_empty()) {
-                                continue;
+                            let receiver = format!("{prefix}::{segment}");
+                            for (name, function) in exports[*target].iter() {
+                                if *exported_only
+                                    && !name.chars().next().is_some_and(|ch| ch.is_uppercase())
+                                {
+                                    continue;
+                                }
+                                let reached = deep_map[*target][*function].clone();
+                                if reached.iter().all(|lines| lines.is_empty()) {
+                                    continue;
+                                }
+                                chained.push(ImportedCallee {
+                                    receiver: Some(receiver.clone()),
+                                    name: name.clone(),
+                                    target: *target,
+                                    params: functions[*target][*function].params.len(),
+                                    summaries: reached,
+                                });
                             }
-                            chained.push(ImportedCallee {
-                                receiver: Some(format!("{first}::{second}")),
-                                name: name.clone(),
-                                target: *target,
-                                params: functions[*target][*function].params.len(),
-                                summaries: reached,
-                            });
+                            next_frontier.push((receiver, *target));
                         }
                     }
+                    frontier = next_frontier;
                 }
                 imports.extend(chained);
             }
