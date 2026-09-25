@@ -2725,6 +2725,94 @@ exports.search = (req, res) => {
     }
 
     #[test]
+    fn js_chained_barrel_reexport_is_reported_in_service() {
+        let outer_barrel = "export { findByName } from './v2';";
+        let inner_barrel = "export { findByName } from './users';";
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", outer_barrel),
+            ("src/services/v2.js", inner_barrel),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_glob_chained_through_named_barrel_is_reported_in_service() {
+        let outer_barrel = "export * from './v2';";
+        let inner_barrel = "export { findByName } from './users';";
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", outer_barrel),
+            ("src/services/v2.js", inner_barrel),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_barrel_reexport_cycle_is_not_resolved() {
+        let outer_barrel = "export { findByName } from './v2';";
+        let inner_barrel = "export { findByName } from './index';";
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", outer_barrel),
+            ("src/services/v2.js", inner_barrel),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn js_chained_barrel_ambiguous_source_is_not_resolved() {
+        let barrel = "export { findByName } from './a';\nexport { findByName } from './b';";
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", barrel),
+            ("src/services/a.js", JS_USERS_SERVICE),
+            ("src/services/b.js", JS_USERS_SERVICE),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn js_ambiguous_glob_reexport_is_not_resolved() {
         let other = r#"const db = require('../db');
 
@@ -3755,6 +3843,50 @@ pub async fn find_user(pool: &Pool<Postgres>, name: &str) -> Option<String> {
             ("src/lib.rs", lib),
             ("src/handler.rs", RUST_HANDLER),
             ("src/store.rs", store),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn rust_pub_use_chained_reexport_is_reported_in_store() {
+        let lib = "mod intermediate;\nmod store;\n\npub use intermediate::find_user;";
+        let intermediate = "pub use crate::store::find_user;";
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/intermediate.rs", intermediate),
+            ("src/handler.rs", RUST_HANDLER),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_pub_use_chained_glob_reexport_is_reported_in_store() {
+        let lib = "mod intermediate;\nmod store;\n\npub use intermediate::*;";
+        let intermediate = "pub use crate::store::*;";
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/intermediate.rs", intermediate),
+            ("src/handler.rs", RUST_HANDLER),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_pub_use_reexport_cycle_is_not_resolved() {
+        let lib = "mod intermediate;\n\npub use intermediate::find_user;";
+        let intermediate = "pub use crate::find_user;";
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/intermediate.rs", intermediate),
+            ("src/handler.rs", RUST_HANDLER),
         ]);
         assert!(found.is_empty(), "{found:?}");
     }
@@ -5899,17 +6031,18 @@ enum ImportBinding {
 /// argument passed to an exported function of another file in a position
 /// that reaches a sink reports the sink line in that file. One import hop is
 /// followed; the callee's own same-file helpers are included through its
-/// summaries. JS/TS re-exports resolve through one bounded barrel hop, and
-/// Rust `pub use` re-exports (named, `as` alias, grouped, or `*` glob, with
-/// `crate::`/`self::`/`super::` or bare relative paths) resolve through one
-/// bounded hop as well; in both cases a name offered by two sources
-/// resolves to neither, and the hop is not chained. Package imports (JS),
+/// summaries. JS/TS re-exports and Rust `pub use` re-exports (named,
+/// `as` alias, grouped, or `*` glob, with `crate::`/`self::`/`super::` or
+/// bare relative paths) resolve through a bounded fixpoint, so chained
+/// re-exports (a barrel re-exporting from another barrel) collapse toward
+/// the defining module pass by pass; in both languages a name offered by
+/// two sources at any pass resolves to neither, a re-export cycle offers
+/// nothing, and chains longer than the pass bound stay unresolved. Package imports (JS),
 /// dynamic `require`, `_test.go` files, and calls through instance
 /// variables are not
-/// resolved, nested Rust groups (`use a::{b::{c, d}}`) and chained Rust
-/// re-exports are
-/// not resolved, and a callable name offered by two different files
-/// resolves to neither.
+/// resolved, nested Rust groups (`use a::{b::{c, d}}`) are not resolved,
+/// and a callable name offered by two different files resolves to
+/// neither.
 #[allow(clippy::items_after_test_module)]
 fn cross_file_flow_sinks(
     files: &[std::path::PathBuf],
@@ -5968,53 +6101,83 @@ fn cross_file_flow_sinks(
         .zip(&lines)
         .map(|(module, lines)| flow_imports(lines, module.language, &module.path, &root, &index_of))
         .collect();
-    // One bounded hop through a JS/TS re-exporting ("barrel") module: named
-    // (`export { f } from './x'`) and glob (`export * from './x'`) re-exports
-    // make the source function visible under the barrel's path. A name
-    // offered by two different sources resolves to neither, and the hop is
-    // not chained.
-    let reexport_maps: Vec<std::collections::HashMap<String, (usize, String)>> = modules
-        .iter()
-        .zip(&lines)
-        .map(|(module, lines)| {
-            let mut map = std::collections::HashMap::new();
-            if module.language != FlowLanguage::JavaScript {
-                return map;
-            }
-            let Some(dir) = module.path.parent() else {
-                return map;
-            };
-            let mut candidates: std::collections::HashMap<String, Vec<(usize, String)>> =
-                std::collections::HashMap::new();
-            for declaration in js_reexports(lines) {
-                match declaration {
-                    JsReexport::Named { spec, source, name } => {
-                        if let Some(target) = resolve_js_specifier(dir, &spec, &index_of) {
-                            candidates.entry(name).or_default().push((target, source));
+    // Re-exporting ("barrel") modules: named (`export { f } from './x'`) and
+    // glob (`export * from './x'`) re-exports make the source function
+    // visible under the barrel's path. Chained barrels (a barrel
+    // re-exporting from another barrel) resolve through a bounded fixpoint:
+    // each pass collapses one hop toward the defining module. A name
+    // offered by two different sources at any pass resolves to neither, a
+    // re-export cycle offers nothing, and chains longer than the pass
+    // bound stay unresolved.
+    let js_reexports_pass = |old: &[std::collections::HashMap<String, (usize, String)>]| {
+        modules
+            .iter()
+            .enumerate()
+            .zip(&lines)
+            .map(|((index, module), lines)| {
+                let mut map = std::collections::HashMap::new();
+                if module.language != FlowLanguage::JavaScript {
+                    return map;
+                }
+                let Some(dir) = module.path.parent() else {
+                    return map;
+                };
+                let mut candidates: std::collections::HashMap<String, Vec<(usize, String)>> =
+                    std::collections::HashMap::new();
+                for declaration in js_reexports(lines) {
+                    match declaration {
+                        JsReexport::Named { spec, source, name } => {
+                            if let Some(target) = resolve_js_specifier(dir, &spec, &index_of) {
+                                // A barrel-of-barrel link collapses to the
+                                // defining module found in the previous pass.
+                                if let Some((definer, original)) = old[target].get(&source) {
+                                    candidates
+                                        .entry(name)
+                                        .or_default()
+                                        .push((*definer, original.clone()));
+                                } else {
+                                    candidates.entry(name).or_default().push((target, source));
+                                }
+                            }
                         }
-                    }
-                    JsReexport::Glob { spec } => {
-                        if let Some(target) = resolve_js_specifier(dir, &spec, &index_of) {
-                            for name in exports[target].keys() {
-                                candidates
-                                    .entry(name.clone())
-                                    .or_default()
-                                    .push((target, name.clone()));
+                        JsReexport::Glob { spec } => {
+                            if let Some(target) = resolve_js_specifier(dir, &spec, &index_of) {
+                                for name in exports[target].keys() {
+                                    candidates
+                                        .entry(name.clone())
+                                        .or_default()
+                                        .push((target, name.clone()));
+                                }
+                                for (name, (definer, original)) in &old[target] {
+                                    candidates
+                                        .entry(name.clone())
+                                        .or_default()
+                                        .push((*definer, original.clone()));
+                                }
                             }
                         }
                     }
                 }
-            }
-            for (name, mut offers) in candidates {
-                offers.sort();
-                offers.dedup();
-                if offers.len() == 1 {
-                    map.insert(name, offers[0].clone());
+                for (name, mut offers) in candidates {
+                    offers.sort();
+                    offers.dedup();
+                    // A link pointing back at this module is a re-export
+                    // cycle: it offers nothing.
+                    if offers.len() == 1 && offers[0].0 != index {
+                        map.insert(name, offers[0].clone());
+                    }
                 }
-            }
-            map
-        })
+                map
+            })
+            .collect::<Vec<_>>()
+    };
+    let empty_maps: Vec<std::collections::HashMap<String, (usize, String)>> = (0..modules.len())
+        .map(|_| std::collections::HashMap::new())
         .collect();
+    let mut reexport_maps = js_reexports_pass(&empty_maps);
+    for _ in 0..4 {
+        reexport_maps = js_reexports_pass(&reexport_maps);
+    }
     for (index, module) in modules.iter().enumerate() {
         if module.language != FlowLanguage::JavaScript {
             continue;
@@ -6042,113 +6205,141 @@ fn cross_file_flow_sinks(
             by_dir.entry(parent.to_path_buf()).or_default().push(*index);
         }
     }
-    // One bounded hop through a Rust re-exporting module: `pub use a::f;`
-    // (named, `as` alias, grouped, or a `*` glob) makes the source function
-    // visible under the re-exporting module's path. A name offered by two
-    // different sources resolves to neither, and the hop is not chained:
-    // only a module that itself exports the function can be the source.
-    let rust_reexport_maps: Vec<std::collections::HashMap<String, (usize, String)>> = modules
-        .iter()
-        .enumerate()
-        .zip(&lines)
-        .map(|((_index, module), lines)| {
-            let mut offers: std::collections::HashMap<String, Vec<(usize, String)>> =
-                std::collections::HashMap::new();
-            if module.language != FlowLanguage::Rust {
-                return std::collections::HashMap::new();
-            }
-            let Some(own_dir) = module
-                .path
-                .parent()
-                .and_then(|parent| std::fs::canonicalize(parent).ok())
-            else {
-                return std::collections::HashMap::new();
-            };
-            let Some(module_dir) = rust_module_dir(&module.path) else {
-                return std::collections::HashMap::new();
-            };
-            let is_mod_rs = module.path.file_stem().is_some_and(|stem| stem == "mod");
-            let super_base = if is_mod_rs {
-                own_dir.parent().map(|parent| parent.to_path_buf())
-            } else {
-                Some(own_dir.clone())
-            };
-            let crate_base = rust_crate_root(&own_dir, &root);
-            let resolve_module = |base: &Path, segments: &[&str]| -> Option<usize> {
-                let mut target = base.to_path_buf();
-                for segment in segments {
-                    target.push(segment);
+    // Rust re-exporting modules: `pub use a::f;` (named, `as` alias,
+    // grouped, or a `*` glob) makes the source function visible under the
+    // re-exporting module's path. Chained re-exports (a module re-exporting
+    // a name it only re-exports) resolve through a bounded fixpoint: each
+    // pass collapses one hop toward the defining module. A name offered by
+    // two different sources at any pass resolves to neither, a re-export
+    // cycle offers nothing, and chains longer than the pass bound stay
+    // unresolved.
+    let rust_reexports_pass = |old: &[std::collections::HashMap<String, (usize, String)>]| {
+        modules
+            .iter()
+            .enumerate()
+            .zip(&lines)
+            .map(|((index, module), lines)| {
+                let mut offers: std::collections::HashMap<String, Vec<(usize, String)>> =
+                    std::collections::HashMap::new();
+                if module.language != FlowLanguage::Rust {
+                    return std::collections::HashMap::new();
                 }
-                let candidates: Vec<std::path::PathBuf> = if segments.is_empty() {
-                    vec![base.join("lib.rs"), base.join("main.rs")]
-                } else {
-                    vec![target.with_extension("rs"), target.join("mod.rs")]
-                };
-                candidates.into_iter().find_map(|candidate| {
-                    std::fs::canonicalize(candidate)
-                        .ok()
-                        .and_then(|canonical| index_of.get(&canonical).copied())
-                        .filter(|&found| modules[found].language == FlowLanguage::Rust)
-                })
-            };
-            for declaration in rust_declarations(lines) {
-                let RustDeclaration::Use {
-                    segments,
-                    alias,
-                    reexport,
-                } = declaration
+                let Some(own_dir) = module
+                    .path
+                    .parent()
+                    .and_then(|parent| std::fs::canonicalize(parent).ok())
                 else {
-                    continue;
+                    return std::collections::HashMap::new();
                 };
-                if !reexport {
-                    continue;
-                }
-                let skip = usize::from(matches!(
-                    segments.first().map(String::as_str),
-                    Some("crate" | "self" | "super")
-                ));
-                let Some(base) = (match segments.first().map(String::as_str) {
-                    Some("crate") => crate_base.clone(),
-                    Some("self") => Some(module_dir.clone()),
-                    Some("super") => super_base.clone(),
-                    // A bare path is relative to the current module; an
-                    // external crate name simply resolves to nothing.
-                    _ => Some(module_dir.clone()),
-                }) else {
-                    continue;
+                let Some(module_dir) = rust_module_dir(&module.path) else {
+                    return std::collections::HashMap::new();
                 };
-                let rest: Vec<&str> = segments[skip..].iter().map(String::as_str).collect();
-                if rest.last() == Some(&"*") {
-                    let module_path = &rest[..rest.len() - 1];
-                    if let Some(source) = resolve_module(&base, module_path) {
-                        for name in exports[source].keys() {
+                let is_mod_rs = module.path.file_stem().is_some_and(|stem| stem == "mod");
+                let super_base = if is_mod_rs {
+                    own_dir.parent().map(|parent| parent.to_path_buf())
+                } else {
+                    Some(own_dir.clone())
+                };
+                let crate_base = rust_crate_root(&own_dir, &root);
+                let resolve_module = |base: &Path, segments: &[&str]| -> Option<usize> {
+                    let mut target = base.to_path_buf();
+                    for segment in segments {
+                        target.push(segment);
+                    }
+                    let candidates: Vec<std::path::PathBuf> = if segments.is_empty() {
+                        vec![base.join("lib.rs"), base.join("main.rs")]
+                    } else {
+                        vec![target.with_extension("rs"), target.join("mod.rs")]
+                    };
+                    candidates.into_iter().find_map(|candidate| {
+                        std::fs::canonicalize(candidate)
+                            .ok()
+                            .and_then(|canonical| index_of.get(&canonical).copied())
+                            .filter(|&found| modules[found].language == FlowLanguage::Rust)
+                    })
+                };
+                for declaration in rust_declarations(lines) {
+                    let RustDeclaration::Use {
+                        segments,
+                        alias,
+                        reexport,
+                    } = declaration
+                    else {
+                        continue;
+                    };
+                    if !reexport {
+                        continue;
+                    }
+                    let skip = usize::from(matches!(
+                        segments.first().map(String::as_str),
+                        Some("crate" | "self" | "super")
+                    ));
+                    let Some(base) = (match segments.first().map(String::as_str) {
+                        Some("crate") => crate_base.clone(),
+                        Some("self") => Some(module_dir.clone()),
+                        Some("super") => super_base.clone(),
+                        // A bare path is relative to the current module; an
+                        // external crate name simply resolves to nothing.
+                        _ => Some(module_dir.clone()),
+                    }) else {
+                        continue;
+                    };
+                    let rest: Vec<&str> = segments[skip..].iter().map(String::as_str).collect();
+                    if rest.last() == Some(&"*") {
+                        let module_path = &rest[..rest.len() - 1];
+                        if let Some(source) = resolve_module(&base, module_path) {
+                            for name in exports[source].keys() {
+                                offers
+                                    .entry(name.clone())
+                                    .or_default()
+                                    .push((source, name.clone()));
+                            }
+                            for (name, (definer, original)) in &old[source] {
+                                offers
+                                    .entry(name.clone())
+                                    .or_default()
+                                    .push((*definer, original.clone()));
+                            }
+                        }
+                        continue;
+                    }
+                    let Some(last) = rest.last().copied() else {
+                        continue;
+                    };
+                    if let Some(source) = resolve_module(&base, &rest[..rest.len() - 1]) {
+                        if exports[source].contains_key(last) {
                             offers
-                                .entry(name.clone())
+                                .entry(alias.clone().unwrap_or_else(|| last.to_string()))
                                 .or_default()
-                                .push((source, name.clone()));
+                                .push((source, last.to_string()));
+                        } else if let Some((definer, original)) = old[source].get(last) {
+                            // A chained re-export collapses to the defining
+                            // module found in the previous pass.
+                            offers
+                                .entry(alias.clone().unwrap_or_else(|| last.to_string()))
+                                .or_default()
+                                .push((*definer, original.clone()));
                         }
                     }
-                    continue;
                 }
-                let Some(last) = rest.last().copied() else {
-                    continue;
-                };
-                if let Some(source) = resolve_module(&base, &rest[..rest.len() - 1]) {
-                    if exports[source].contains_key(last) {
-                        offers
-                            .entry(alias.clone().unwrap_or_else(|| last.to_string()))
-                            .or_default()
-                            .push((source, last.to_string()));
-                    }
-                }
-            }
-            offers
-                .into_iter()
-                .filter(|(_, found)| found.len() == 1)
-                .map(|(name, found)| (name, found[0].clone()))
-                .collect()
-        })
+                offers
+                    .into_iter()
+                    // A link pointing back at this module is a re-export
+                    // cycle: it offers nothing.
+                    .filter(|(_, found)| found.len() == 1 && found[0].0 != index)
+                    .map(|(name, found)| (name, found[0].clone()))
+                    .collect()
+            })
+            .collect::<Vec<_>>()
+    };
+    let empty_rust_maps: Vec<std::collections::HashMap<String, (usize, String)>> = (0..modules
+        .len())
+        .map(|_| std::collections::HashMap::new())
         .collect();
+    let mut rust_reexport_maps = rust_reexports_pass(&empty_rust_maps);
+    for _ in 0..4 {
+        rust_reexport_maps = rust_reexports_pass(&rust_reexport_maps);
+    }
     // Multi-module Go repositories: an import outside a file's own module
     // resolves through a `replace` directive to a local directory or through
     // another go.mod under the project root whose module path prefixes it.
