@@ -399,6 +399,50 @@ fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     scan_file_for_vulns_with(path, patterns, None)
 }
 
+/// Build the finding one pattern produces for a matched line.
+fn pattern_finding(pattern: &VulnPattern, path: &Path, line_number: usize, line: &str) -> Finding {
+    let exploitability = match pattern.severity {
+        Severity::Critical => 0.8,
+        Severity::High => 0.6,
+        Severity::Medium => 0.4,
+        Severity::Low => 0.2,
+        Severity::Info => 0.1,
+    };
+
+    let effort = match pattern.severity {
+        Severity::Critical => RemediationEffort::Hours,
+        Severity::High => RemediationEffort::Hours,
+        Severity::Medium => RemediationEffort::Minutes,
+        Severity::Low => RemediationEffort::Minutes,
+        Severity::Info => RemediationEffort::Minutes,
+    };
+
+    let mut finding = Finding::new(
+        FindingType::Vulnerability,
+        pattern.name,
+        pattern.description,
+        pattern.severity,
+        pattern.confidence,
+        "security-review",
+    )
+    .at(path.to_string_lossy().to_string(), line_number)
+    .with_code(line.to_string())
+    .with_remediation(pattern.remediation)
+    .with_exploitability(exploitability)
+    .with_effort(effort);
+
+    if let Some(owasp) = pattern.owasp {
+        finding = finding.with_owasp(owasp);
+    }
+
+    // Attach a stable CWE identifier derived from the pattern title
+    if let Some(cwe) = crate::finding::cwe_for_title(pattern.name, FindingType::Vulnerability) {
+        finding = finding.with_cwe(cwe);
+    }
+
+    finding
+}
+
 /// Scan one file, also reporting sink lines that other project files reach
 /// through cross-file calls (see [`cross_file_flow_sinks`]).
 fn scan_file_for_vulns_with(
@@ -486,51 +530,45 @@ fn scan_file_for_vulns_with(
                 continue;
             }
 
-            let exploitability = match pattern.severity {
-                Severity::Critical => 0.8,
-                Severity::High => 0.6,
-                Severity::Medium => 0.4,
-                Severity::Low => 0.2,
-                Severity::Info => 0.1,
-            };
-
-            let effort = match pattern.severity {
-                Severity::Critical => RemediationEffort::Hours,
-                Severity::High => RemediationEffort::Hours,
-                Severity::Medium => RemediationEffort::Minutes,
-                Severity::Low => RemediationEffort::Minutes,
-                Severity::Info => RemediationEffort::Minutes,
-            };
-
-            let mut finding = Finding::new(
-                FindingType::Vulnerability,
-                pattern.name,
-                pattern.description,
-                pattern.severity,
-                pattern.confidence,
-                "security-review",
-            )
-            .at(path.to_string_lossy().to_string(), line_number)
-            .with_code(line.to_string())
-            .with_remediation(pattern.remediation)
-            .with_exploitability(exploitability)
-            .with_effort(effort);
-
-            if let Some(owasp) = pattern.owasp {
-                finding = finding.with_owasp(owasp);
-            }
-
-            // Attach a stable CWE identifier derived from the pattern title
-            if let Some(cwe) =
-                crate::finding::cwe_for_title(pattern.name, FindingType::Vulnerability)
-            {
-                finding = finding.with_cwe(cwe);
-            }
-
-            findings.push(finding);
+            findings.push(pattern_finding(pattern, path, line_number, line));
         }
     }
 
+    findings
+}
+
+/// Emit only cross-file flow findings for a file outside the scanned set (a
+/// package entry resolved through `node_modules`). Pattern rules stay off:
+/// package code is reported only when project request input provably reaches
+/// one of its sinks.
+fn scan_file_flow_only(path: &Path, cross_file: &CrossFileSinkLines) -> Vec<Finding> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let patterns = build_vuln_patterns();
+    let mut findings = Vec::new();
+    for (name, sinks) in [
+        (
+            "SQL Injection \u{2014} String Concatenation",
+            &cross_file.sql,
+        ),
+        ("Command Injection", &cross_file.command),
+        ("Server-Side Request Forgery (SSRF)", &cross_file.ssrf),
+    ] {
+        let Some(pattern) = patterns.iter().find(|p| p.name == name) else {
+            continue;
+        };
+        for &line_number in sinks {
+            let Some(line) = line_number
+                .checked_sub(1)
+                .and_then(|index| lines.get(index))
+            else {
+                continue;
+            };
+            findings.push(pattern_finding(pattern, path, line_number, line));
+        }
+    }
     findings
 }
 
@@ -579,6 +617,16 @@ pub(crate) async fn collect_review_findings(
     for path in &files {
         let findings = scan_file_for_vulns_with(path, &patterns, cross_file.get(path));
         report.extend(findings);
+    }
+    // Package entries resolved through node_modules are never part of the
+    // scanned set (the directory is excluded): emit only their cross-file
+    // flow findings, so project request input reaching a package sink is
+    // reported while the package's own pattern surface stays unscanned.
+    let scanned: std::collections::HashSet<&std::path::PathBuf> = files.iter().collect();
+    for (path, sinks) in &cross_file {
+        if !scanned.contains(path) {
+            report.extend(scan_file_flow_only(path, sinks));
+        }
     }
 
     // AI-powered deep analysis
@@ -2841,11 +2889,27 @@ func handler(w http.ResponseWriter, r *http.Request) {
             let path = root.join(relative);
             fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
             fs::write(&path, source).expect("write fixture");
-            paths.push(path);
+            // node_modules fixtures sit on disk for import resolution but are
+            // never scanned directly, mirroring production scans.
+            if !relative.starts_with("node_modules/") && !relative.contains("/node_modules/") {
+                paths.push(path);
+            }
         }
         let cross_file = cross_file_flow_sinks(&paths, &root);
         let patterns = build_vuln_patterns();
         let mut found = Vec::new();
+        let mut collect = |path: &std::path::Path, finding: &Finding| {
+            let relative = path
+                .strip_prefix(&root)
+                .expect("relative")
+                .to_string_lossy()
+                .replace('\\', "/");
+            found.push((
+                relative,
+                finding.title.clone(),
+                finding.line_number.unwrap_or(0),
+            ));
+        };
         for path in &paths {
             for finding in scan_file_for_vulns_with(path, &patterns, cross_file.get(path)) {
                 // Only the flow families; unrelated pattern rules (IDOR on
@@ -2853,21 +2917,170 @@ func handler(w http.ResponseWriter, r *http.Request) {
                 if ![SQLI_FLOW, CMDI, SSRF].contains(&finding.title.as_str()) {
                     continue;
                 }
-                let relative = path
-                    .strip_prefix(&root)
-                    .expect("relative")
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                found.push((
-                    relative,
-                    finding.title.clone(),
-                    finding.line_number.unwrap_or(0),
-                ));
+                collect(path, &finding);
+            }
+        }
+        // Package entries resolved through node_modules emit flow-only
+        // findings, mirroring the production scan loop.
+        let scanned: std::collections::HashSet<&std::path::PathBuf> = paths.iter().collect();
+        for (path, sinks) in &cross_file {
+            if !scanned.contains(path) {
+                for finding in scan_file_flow_only(path, sinks) {
+                    collect(path, &finding);
+                }
             }
         }
         fs::remove_dir_all(&root).expect("cleanup");
         found.sort();
         found
+    }
+
+    const JS_PKG_DEP: &str = r#"const { exec } = require('child_process');
+
+function run(c) {
+    exec('sh -c ' + c);
+}
+
+module.exports = { run };
+"#;
+
+    const JS_PKG_APP_TAINTED: &str = r#"const dep = require('dep');
+
+exports.run = (req, res) => {
+    const { cmd } = req.query;
+    return res.json(dep.run(cmd));
+};
+"#;
+
+    #[test]
+    fn js_package_import_sink_is_reported_in_node_modules_entry() {
+        let found = scan_project(&[
+            (
+                "node_modules/dep/package.json",
+                r#"{"name":"dep","main":"index.js"}"#,
+            ),
+            ("node_modules/dep/index.js", JS_PKG_DEP),
+            ("src/app.js", JS_PKG_APP_TAINTED),
+        ]);
+        assert!(
+            found.contains(&("node_modules/dep/index.js".to_string(), CMDI.to_string(), 4)),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn js_package_import_with_constant_argument_is_clean() {
+        let found = scan_project(&[
+            (
+                "node_modules/dep/package.json",
+                r#"{"name":"dep","main":"index.js"}"#,
+            ),
+            ("node_modules/dep/index.js", JS_PKG_DEP),
+            (
+                "src/app.js",
+                r#"const dep = require('dep');
+dep.run('uptime');
+"#,
+            ),
+        ]);
+        assert!(
+            !found
+                .iter()
+                .any(|(file, _, _)| file.contains("node_modules")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn js_package_subpath_import_stays_unresolved() {
+        let found = scan_project(&[
+            (
+                "node_modules/dep/package.json",
+                r#"{"name":"dep","main":"index.js"}"#,
+            ),
+            ("node_modules/dep/index.js", JS_PKG_DEP),
+            (
+                "src/app.js",
+                r#"const sub = require('dep/sub');
+
+exports.run = (req, res) => {
+    const { cmd } = req.query;
+    return res.json(sub.run(cmd));
+};
+"#,
+            ),
+        ]);
+        assert!(
+            !found
+                .iter()
+                .any(|(file, _, _)| file.contains("node_modules")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn go_test_file_call_into_package_is_reported() {
+        let found = scan_project(&[
+            ("go.mod", "module example.com/t\n\ngo 1.22\n"),
+            (
+                "store.go",
+                r#"package main
+
+import "database/sql"
+
+func FindUser(db *sql.DB, name string) {
+	db.Query("SELECT id FROM users WHERE name = '" + name + "'")
+}
+"#,
+            ),
+            (
+                "main_test.go",
+                r#"package main
+
+import "net/http"
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	FindUser(db, name)
+}
+"#,
+            ),
+        ]);
+        assert!(
+            found.contains(&("store.go".to_string(), SQLI_FLOW.to_string(), 6)),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn go_non_test_file_never_resolves_test_only_function() {
+        let found = scan_project(&[
+            ("go.mod", "module example.com/t\n\ngo 1.22\n"),
+            (
+                "main.go",
+                r#"package main
+
+import "net/http"
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	ExecRaw(q)
+}
+"#,
+            ),
+            (
+                "main_test.go",
+                r#"package main
+
+import "database/sql"
+
+func ExecRaw(q string) {
+	db.Query("SELECT id FROM users WHERE name = '" + q + "'")
+}
+"#,
+            ),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
     }
 
     const JS_USERS_SERVICE: &str = r#"const db = require('../db');
@@ -8074,10 +8287,12 @@ enum ImportBinding {
 /// assigned `Repo(...)` from `from .repo import Repo`, or
 /// `repo.Repo(...)` with `import repo`); methods match by name within
 /// the imported file.
-/// Package imports (JS), dynamic `require`,
-/// `_test.go` files, and other instance receivers are not
-/// resolved, and a callable name offered by two different files resolves
-/// to neither.
+/// Package imports (JS) resolve through the package entry file under
+/// `node_modules` (one hop, see above); dynamic `require` and other
+/// instance receivers stay unresolved. Go `_test.go` files import their
+/// package like any file in it, but are never resolution targets
+/// themselves (non-test code cannot see test-only symbols), and a
+/// callable name offered by two different files resolves to neither.
 #[allow(clippy::items_after_test_module)]
 fn cross_file_flow_sinks(
     files: &[std::path::PathBuf],
@@ -8090,7 +8305,7 @@ fn cross_file_flow_sinks(
         language: FlowLanguage,
         content: String,
     }
-    let modules: Vec<Module> = files
+    let mut modules: Vec<Module> = files
         .iter()
         .filter_map(|path| {
             let language = flow_language(&file_extension(path))?;
@@ -8102,6 +8317,51 @@ fn cross_file_flow_sinks(
             })
         })
         .collect();
+    // JS package imports (`require('pkg')`, `import ... from 'pkg'`) resolve
+    // through node_modules: the scanner excludes the directory, so package
+    // entry files join the module set here, on demand. Bounded: the entry
+    // file only (package.json `main` or an index file), a 512KB cap skips
+    // generated bundles, and one hop — the entry's own imports resolve only
+    // when they point at another included entry.
+    {
+        let scan_root =
+            std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+        let mut seen: std::collections::HashSet<std::path::PathBuf> = modules
+            .iter()
+            .filter_map(|module| std::fs::canonicalize(&module.path).ok())
+            .collect();
+        let mut extra = Vec::new();
+        for module in &modules {
+            if module.language != FlowLanguage::JavaScript {
+                continue;
+            }
+            let Some(dir) = module.path.parent() else {
+                continue;
+            };
+            let module_lines: Vec<&str> = module.content.lines().collect();
+            for statement in js_declarations(&module_lines) {
+                for spec in js_import_specs(&statement) {
+                    if js_package_name(&spec).is_none() {
+                        continue;
+                    }
+                    if let Some(entry) = find_js_package_entry(dir, &scan_root, &spec) {
+                        if let Ok(canonical) = std::fs::canonicalize(&entry) {
+                            if seen.insert(canonical.clone()) {
+                                if let Ok(content) = read_capped(&canonical, 512 * 1024) {
+                                    extra.push(Module {
+                                        path: canonical,
+                                        language: FlowLanguage::JavaScript,
+                                        content,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        modules.extend(extra);
+    }
     if modules.len() < 2 {
         return result;
     }
@@ -8463,10 +8723,6 @@ fn cross_file_flow_sinks(
     // module path of the nearest go.mod; a Java `import a.b.C;` matches the
     // one file whose package and class name line up.
     for (index, module) in modules.iter().enumerate() {
-        let is_test = module
-            .path
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().ends_with("_test.go"));
         let Some(own_dir) = module
             .path
             .parent()
@@ -8476,9 +8732,6 @@ fn cross_file_flow_sinks(
         };
         match module.language {
             FlowLanguage::Go => {
-                if is_test {
-                    continue;
-                }
                 if let Some(package) = go_package_clause(&lines[index]) {
                     if let Some(siblings) = by_dir.get(&own_dir) {
                         for &sibling in siblings {
@@ -10072,6 +10325,126 @@ fn resolve_js_specifier(
         })
 }
 
+/// Package name of a bare JS import specifier: `pkg` or `@scope/pkg`.
+/// Relative (`./`, `../`) and absolute specs, and subpath imports
+/// (`pkg/sub`, `@scope/pkg/sub`), stay unresolved.
+fn js_package_name(spec: &str) -> Option<&str> {
+    if spec.starts_with('.') || spec.starts_with('/') {
+        return None;
+    }
+    if let Some(rest) = spec.strip_prefix('@') {
+        let mut parts = rest.split('/');
+        let scope = parts.next()?;
+        let name = parts.next()?;
+        if scope.is_empty() || name.is_empty() || parts.next().is_some() {
+            return None;
+        }
+        Some(spec)
+    } else if spec.contains('/') {
+        None
+    } else {
+        Some(spec)
+    }
+}
+
+/// Candidate entry files of a package directory: the `package.json` `main`
+/// field (with the usual extension and index fallbacks), then the index
+/// files directly.
+fn js_package_entry(pkg_dir: &Path) -> Option<std::path::PathBuf> {
+    let expand = |base: std::path::PathBuf| -> Vec<std::path::PathBuf> {
+        let mut candidates = vec![base.clone()];
+        for ext in ["js", "cjs", "mjs"] {
+            candidates.push(std::path::PathBuf::from(format!(
+                "{}.{ext}",
+                base.to_string_lossy()
+            )));
+        }
+        for ext in ["js", "cjs", "mjs"] {
+            candidates.push(base.join(format!("index.{ext}")));
+        }
+        candidates
+    };
+    if let Ok(body) = std::fs::read_to_string(pkg_dir.join("package.json")) {
+        if let Ok(re) = Regex::new(r#""main"\s*:\s*"([^"]+)""#) {
+            if let Some(captures) = re.captures(&body) {
+                let main = captures[1].trim_start_matches("./");
+                for candidate in expand(pkg_dir.join(main)) {
+                    if candidate.is_file() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+    expand(pkg_dir.join("index"))
+        .into_iter()
+        .find(|p| p.is_file())
+}
+
+/// Find a package's entry file on disk: walk from the importing directory up
+/// to the project root; the first `node_modules/<pkg>` with a resolvable
+/// entry wins, mirroring Node's lookup.
+fn find_js_package_entry(dir: &Path, root: &Path, spec: &str) -> Option<std::path::PathBuf> {
+    let package = js_package_name(spec)?;
+    let mut current = Some(dir);
+    while let Some(base) = current {
+        let pkg_dir = base.join("node_modules").join(package);
+        if pkg_dir.is_dir() {
+            if let Some(entry) = js_package_entry(&pkg_dir) {
+                return Some(entry);
+            }
+        }
+        if base == root {
+            break;
+        }
+        current = base.parent();
+    }
+    None
+}
+
+/// Resolve a bare package import to a package entry included in the module
+/// set. Returns None when the package is not installed anywhere visible.
+fn resolve_js_package(
+    dir: &Path,
+    root: &Path,
+    spec: &str,
+    index_of: &std::collections::HashMap<std::path::PathBuf, usize>,
+) -> Option<usize> {
+    let entry = find_js_package_entry(dir, root, spec)?;
+    std::fs::canonicalize(entry)
+        .ok()
+        .and_then(|canonical| index_of.get(&canonical).copied())
+}
+
+/// Specifiers of the import and require declarations in one joined
+/// statement: `require('x')`, `import ... from 'x'`, and side-effect
+/// `import 'x'`.
+fn js_import_specs(statement: &str) -> Vec<String> {
+    let mut specs = Vec::new();
+    if let Ok(re) = Regex::new(r#"require\(\s*['"]([^'"]+)['"]"#) {
+        for captures in re.captures_iter(statement) {
+            specs.push(captures[1].to_string());
+        }
+    }
+    if let Ok(re) = Regex::new(r#"(?:from|import)\s+['"]([^'"]+)['"]"#) {
+        for captures in re.captures_iter(statement) {
+            specs.push(captures[1].to_string());
+        }
+    }
+    specs
+}
+
+/// Read a text file, refusing anything over `cap` bytes (generated bundles).
+fn read_capped(path: &Path, cap: u64) -> std::io::Result<String> {
+    if std::fs::metadata(path)?.len() > cap {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file over size cap",
+        ));
+    }
+    std::fs::read_to_string(path)
+}
+
 /// A re-export declaration of a JS/TS ("barrel") file.
 enum JsReexport {
     Named {
@@ -10244,7 +10617,10 @@ fn flow_imports(
     };
     match language {
         FlowLanguage::JavaScript => {
-            let resolve = |spec: &str| resolve_js_specifier(dir, spec, index_of);
+            let resolve = |spec: &str| {
+                resolve_js_specifier(dir, spec, index_of)
+                    .or_else(|| resolve_js_package(dir, root, spec, index_of))
+            };
             let (
                 Ok(module_require),
                 Ok(named_require),
