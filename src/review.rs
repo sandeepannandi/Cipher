@@ -3645,6 +3645,40 @@ def find_orders(customer):
     }
 
     #[test]
+    fn python_parenthesized_import_into_repository_is_reported() {
+        let repository = r#"import sqlite3
+
+
+def find_orders(customer):
+    conn = sqlite3.connect("shop.db")
+    query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+    return conn.execute(query).fetchall()"#;
+        for import in [
+            "from .repository import (find_orders)",
+            "from .repository import (\n    find_orders,\n)",
+            "from . import (repository)",
+        ] {
+            let (import, call) = if import.contains("repository)") {
+                (import, "repository.find_orders(customer)")
+            } else {
+                (import, "find_orders(customer)")
+            };
+            let views = format!(
+                "{import}\n\n\n@app.route(\"/orders\")\ndef orders():\n    customer = request.args.get(\"customer\")\n    return {{\"orders\": {call}}}\n"
+            );
+            let found = scan_project(&[
+                ("app/views.py", views.as_str()),
+                ("app/repository.py", repository),
+            ]);
+            assert_eq!(
+                found,
+                vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 7)],
+                "{import}"
+            );
+        }
+    }
+
+    #[test]
     fn python_numeric_conversion_before_cross_file_call_is_clean() {
         let found = scan_project(&[
             (
@@ -7087,7 +7121,8 @@ enum ImportBinding {
 /// files (`require`/`import` of `./x`, `../x`, `x/index`; Python `from .x
 /// import f`, `from x import f`, `import x as m` resolved next to the
 /// importing file or at the project root; multi-line JS import, require,
-/// and re-export declarations are joined before matching). Go files in one directory share a
+/// and re-export declarations are joined before matching, as are
+/// parenthesized Python from-imports). Go files in one directory share a
 /// package namespace, so a bare call resolves to a function defined in a
 /// sibling file; `import "mod/pkg"` (optionally aliased, single or grouped
 /// form) resolves through the module path of the nearest `go.mod`, and only
@@ -9160,489 +9195,4 @@ fn flow_imports(
             for statement in js_declarations(lines) {
                 let line = statement.as_str();
                 for (re, module) in [(&module_require, true), (&namespace_import, true)] {
-                    if let Some(captures) = re.captures(line) {
-                        if let (Some(binding), Some(spec)) = (captures.get(1), captures.get(2)) {
-                            if let Some(target) = resolve(spec.as_str()) {
-                                if module {
-                                    bindings.push(ImportBinding::Module {
-                                        binding: binding.as_str().to_string(),
-                                        target,
-                                        exported_only: false,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                // `import f from './x'` binds the local name to the target's
-                // `default` export; `import f, { g } from './x'` binds both.
-                // `import type ...` lines are skipped: they never produce a
-                // callable binding.
-                if !line.trim_start().starts_with("import type") {
-                    if let Some(captures) = mixed_import.captures(line) {
-                        if let (Some(local), Some(names), Some(spec)) =
-                            (captures.get(1), captures.get(2), captures.get(3))
-                        {
-                            if let Some(target) = resolve(spec.as_str()) {
-                                bindings.push(ImportBinding::Function {
-                                    local: local.as_str().to_string(),
-                                    exported: "default".to_string(),
-                                    target,
-                                });
-                                for entry in names.as_str().split(',') {
-                                    let entry = entry.trim();
-                                    let (exported, local) = match entry.split_once(" as ") {
-                                        Some((left, right)) => (left.trim(), right.trim()),
-                                        None => (entry, entry),
-                                    };
-                                    if is_identifier(exported) && is_identifier(local) {
-                                        bindings.push(ImportBinding::Function {
-                                            local: local.to_string(),
-                                            exported: exported.to_string(),
-                                            target,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    } else if let Some(captures) = default_import.captures(line) {
-                        if let (Some(local), Some(spec)) = (captures.get(1), captures.get(2)) {
-                            if let Some(target) = resolve(spec.as_str()) {
-                                bindings.push(ImportBinding::Function {
-                                    local: local.as_str().to_string(),
-                                    exported: "default".to_string(),
-                                    target,
-                                });
-                            }
-                        }
-                    }
-                }
-                for (re, separator) in [(&named_require, ":"), (&named_import, " as ")] {
-                    if let Some(captures) = re.captures(line) {
-                        if let (Some(names), Some(spec)) = (captures.get(1), captures.get(2)) {
-                            let Some(target) = resolve(spec.as_str()) else {
-                                continue;
-                            };
-                            for entry in names.as_str().split(',') {
-                                let entry = entry.trim();
-                                let (exported, local) = match entry.split_once(separator) {
-                                    Some((left, right)) => (left.trim(), right.trim()),
-                                    None => (entry, entry),
-                                };
-                                if is_identifier(exported) && is_identifier(local) {
-                                    bindings.push(ImportBinding::Function {
-                                        local: local.to_string(),
-                                        exported: exported.to_string(),
-                                        target,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        FlowLanguage::Python => {
-            let resolve_module = |dots: usize, dotted: &str| -> Option<usize> {
-                let relative: std::path::PathBuf =
-                    dotted.split('.').filter(|p| !p.is_empty()).collect();
-                let bases: Vec<std::path::PathBuf> = if dots > 0 {
-                    let mut base = dir.to_path_buf();
-                    for _ in 1..dots {
-                        base = base.parent()?.to_path_buf();
-                    }
-                    vec![base]
-                } else {
-                    vec![dir.to_path_buf(), root.to_path_buf()]
-                };
-                bases.into_iter().find_map(|base| {
-                    let target = base.join(&relative);
-                    [
-                        std::path::PathBuf::from(format!("{}.py", target.to_string_lossy())),
-                        target.join("__init__.py"),
-                    ]
-                    .into_iter()
-                    .filter(|candidate| candidate.is_file())
-                    .find_map(lookup)
-                })
-            };
-            let (Ok(from_import), Ok(plain_import)) = (
-                Regex::new(
-                    r#"^from\s+(\.*)([A-Za-z_][A-Za-z0-9_.]*)?\s+import\s+([A-Za-z_][A-Za-z0-9_,\s]*)$"#,
-                ),
-                Regex::new(
-                    r#"^import\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$"#,
-                ),
-            ) else {
-                return bindings;
-            };
-            for line in lines {
-                let code = line.split('#').next().unwrap_or("").trim_end();
-                if let Some(captures) = from_import.captures(code) {
-                    let dots = captures.get(1).map_or(0, |m| m.as_str().len());
-                    let dotted = captures.get(2).map_or("", |m| m.as_str());
-                    let names = captures.get(3).map_or("", |m| m.as_str());
-                    if dots == 0 && dotted.is_empty() {
-                        continue;
-                    }
-                    let module_target = if dotted.is_empty() {
-                        None
-                    } else {
-                        resolve_module(dots, dotted)
-                    };
-                    for entry in names.split(',') {
-                        let entry = entry.trim();
-                        let (exported, local) = match entry.split_once(" as ") {
-                            Some((left, right)) => (left.trim(), right.trim()),
-                            None => (entry, entry),
-                        };
-                        if !is_identifier(exported) || !is_identifier(local) {
-                            continue;
-                        }
-                        // `from .pkg import service` may name a module.
-                        let submodule = if dotted.is_empty() {
-                            resolve_module(dots, exported)
-                        } else {
-                            resolve_module(dots, &format!("{dotted}.{exported}"))
-                        };
-                        if let Some(target) = submodule {
-                            bindings.push(ImportBinding::Module {
-                                binding: local.to_string(),
-                                target,
-                                exported_only: false,
-                            });
-                        } else if let Some(target) = module_target {
-                            bindings.push(ImportBinding::Function {
-                                local: local.to_string(),
-                                exported: exported.to_string(),
-                                target,
-                            });
-                        }
-                    }
-                    continue;
-                }
-                if let Some(captures) = plain_import.captures(code) {
-                    let dotted = captures.get(1).map_or("", |m| m.as_str());
-                    let binding = match captures.get(2) {
-                        Some(alias) => alias.as_str().to_string(),
-                        None if !dotted.contains('.') => dotted.to_string(),
-                        None => continue,
-                    };
-                    if let Some(target) = resolve_module(0, dotted) {
-                        bindings.push(ImportBinding::Module {
-                            binding,
-                            target,
-                            exported_only: false,
-                        });
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-    bindings
-}
-
-#[allow(clippy::items_after_test_module)]
-fn first_argument(_name: &str) -> Vec<usize> {
-    vec![0]
-}
-
-#[allow(clippy::items_after_test_module)]
-fn go_sql_query_argument(name: &str) -> Vec<usize> {
-    if name.ends_with("Context") {
-        vec![1]
-    } else {
-        vec![0]
-    }
-}
-
-#[allow(clippy::items_after_test_module)]
-fn contains_numeric_conversion(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    [
-        "int(",
-        "float(",
-        "number(",
-        "parseint(",
-        "parsefloat(",
-        "integer.parseint(",
-        "integer.valueof(",
-        "long.parselong(",
-        "long.valueof(",
-        "uuid.fromstring(",
-        "strconv.atoi(",
-        "strconv.parseint(",
-        "strconv.parseuint(",
-        "strconv.parsefloat(",
-        "parse::<i",
-        "parse::<u",
-        "parse::<f",
-    ]
-    .iter()
-    .any(|marker| {
-        lower.match_indices(marker).any(|(index, _)| {
-            index == 0 || {
-                let before = lower.as_bytes()[index - 1];
-                !(before.is_ascii_alphanumeric() || before == b'_')
-            }
-        })
-    })
-}
-
-/// Find SQL query sinks whose query argument is built from request input in
-/// the same file.
-///
-/// Sources are the request inputs used by the path-traversal models (plus JS
-/// destructuring from `req.query`/`req.body`/`req.params`). Taint follows
-/// aliases and string construction (concatenation, template literals,
-/// f-strings, `format`/`String.format`/`fmt.Sprintf`) and is stopped by
-/// numeric conversions. A tainted value passed only as a bind parameter of a
-/// parameterized query is not reported. The model is same-file and
-/// straight-line only; it makes no interprocedural claim.
-#[allow(clippy::items_after_test_module)]
-fn sql_injection_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
-    let Some(language) = flow_language(extension) else {
-        return std::collections::HashSet::new();
-    };
-    request_flow_sink_lines(
-        content,
-        language,
-        &sql_flow_sinks(language),
-        contains_numeric_conversion,
-    )
-}
-
-#[allow(clippy::items_after_test_module)]
-fn sql_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
-    let patterns: &[(&str, FlowArguments)] = match language {
-        FlowLanguage::Python => &[
-            (
-                r#"\b[A-Za-z_][A-Za-z0-9_]*\s*\.\s*(execute|executemany|executescript)\s*\("#,
-                first_argument,
-            ),
-            (r#"\.\s*objects\s*\.\s*(raw)\s*\("#, first_argument),
-        ],
-        FlowLanguage::JavaScript => &[(
-            r#"\b(?:db|conn|connection|pool|client|knex|sequelize|database|sql|tx|trx)\s*\.\s*(query|execute|prepare|exec|raw)\s*\("#,
-            first_argument,
-        )],
-        FlowLanguage::Java => &[
-            (
-                r#"\.\s*(executeQuery|executeUpdate|executeLargeUpdate|execute|addBatch|prepareStatement|prepareCall|create(?:Native|SQL)?Query)\s*\("#,
-                first_argument,
-            ),
-            (
-                r#"\b[A-Za-z_]*[Jj]dbc[Tt]emplate\s*\.\s*(query[A-Za-z]*|update|execute)\s*\("#,
-                first_argument,
-            ),
-        ],
-        FlowLanguage::Go => &[(
-            r#"\b[A-Za-z_][A-Za-z0-9_]*\s*\.\s*(Query|QueryRow|QueryContext|QueryRowContext|Exec|ExecContext|Prepare|PrepareContext)\s*\("#,
-            go_sql_query_argument,
-        )],
-        FlowLanguage::Rust => &[
-            (
-                r#"\bsqlx\s*::\s*(query|query_as|query_scalar|raw_sql)\s*\("#,
-                first_argument,
-            ),
-            (
-                r#"\b(?:conn|db|tx|pool|client|connection)\s*\.\s*(execute|query|query_row|query_map|query_one|query_opt|query_and_then|prepare|batch_execute)\s*\("#,
-                first_argument,
-            ),
-        ],
-    };
-    patterns
-        .iter()
-        .filter_map(|(pattern, arguments)| {
-            Regex::new(pattern).ok().map(|call| FlowSink {
-                call,
-                arguments: *arguments,
-                line_requires: None,
-            })
-        })
-        .collect()
-}
-
-#[allow(clippy::items_after_test_module)]
-fn shell_command_argument(name: &str) -> Vec<usize> {
-    match name {
-        "Command" => vec![2],
-        "CommandContext" => vec![3],
-        _ => vec![2],
-    }
-}
-
-#[allow(clippy::items_after_test_module)]
-fn contains_command_sanitizer(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("shlex.quote(")
-        || lower.contains("pipes.quote(")
-        || contains_numeric_conversion(text)
-}
-
-/// Find OS command sinks whose command text is built from request input in
-/// the same file.
-///
-/// Sources and propagation match the SQL injection model. Sinks are calls that
-/// hand a command string to a shell: Python `os.system`/`os.popen`,
-/// `subprocess.getoutput`, and `subprocess` calls with `shell=True`; Node
-/// `child_process` `exec`/`execSync`; Java `Runtime.exec` and
-/// `ProcessBuilder("sh", "-c", ...)`; Go `exec.Command("sh", "-c", ...)`;
-/// Rust `Command::new("sh").arg("-c").arg(cmd)` single-line chains.
-/// Argument-vector process calls without a shell are not sinks.
-/// `shlex.quote` and numeric conversions stop the flow. Same-file and
-/// straight-line only; no interprocedural claim.
-#[allow(clippy::items_after_test_module)]
-fn command_injection_sink_lines(
-    content: &str,
-    extension: &str,
-) -> std::collections::HashSet<usize> {
-    let Some(language) = flow_language(extension) else {
-        return std::collections::HashSet::new();
-    };
-    request_flow_sink_lines(
-        content,
-        language,
-        &command_flow_sinks(language),
-        contains_command_sanitizer,
-    )
-}
-
-#[allow(clippy::items_after_test_module)]
-fn command_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
-    let shell_prefix = r#""(?:/bin/)?(?:sh|bash|zsh)"\s*,\s*"-c"|"cmd(?:\.exe)?"\s*,\s*"/c""#;
-    let patterns: &[(&str, FlowArguments, Option<&str>)] = match language {
-        FlowLanguage::Python => &[
-            (r#"\bos\s*\.\s*(system|popen)\s*\("#, first_argument, None),
-            (
-                r#"\b(?:subprocess|commands)\s*\.\s*(getoutput|getstatusoutput)\s*\("#,
-                first_argument,
-                None,
-            ),
-            (
-                r#"\bsubprocess\s*\.\s*(run|call|check_call|check_output|Popen)\s*\("#,
-                first_argument,
-                Some(r#"\bshell\s*=\s*True\b"#),
-            ),
-        ],
-        FlowLanguage::JavaScript => &[
-            (r#"(?:^|[^.\w$])(exec|execSync)\s*\("#, first_argument, None),
-            (
-                r#"\b(?:child_process|childProcess|cp)\s*\.\s*(exec|execSync)\s*\("#,
-                first_argument,
-                None,
-            ),
-        ],
-        FlowLanguage::Java => &[
-            (
-                r#"\bRuntime\s*\.\s*getRuntime\s*\(\s*\)\s*\.\s*(exec)\s*\("#,
-                first_argument,
-                None,
-            ),
-            (
-                r#"\bnew\s+(ProcessBuilder)\s*\("#,
-                shell_command_argument,
-                Some(shell_prefix),
-            ),
-        ],
-        FlowLanguage::Go => &[(
-            r#"\bexec\s*\.\s*(Command|CommandContext)\s*\("#,
-            shell_command_argument,
-            Some(shell_prefix),
-        )],
-        FlowLanguage::Rust => &[(
-            r#"\.\s*(arg)\s*\("#,
-            first_argument,
-            Some(
-                r#"Command\s*::\s*new\s*\(\s*"(?:/bin/)?(?:sh|bash|zsh)"\s*\)\s*\.\s*arg\s*\(\s*"-c""#,
-            ),
-        )],
-    };
-    patterns
-        .iter()
-        .filter_map(|(pattern, arguments, requires)| {
-            let call = Regex::new(pattern).ok()?;
-            let line_requires = match requires {
-                Some(required) => Some(Regex::new(required).ok()?),
-                None => None,
-            };
-            Some(FlowSink {
-                call,
-                arguments: *arguments,
-                line_requires,
-            })
-        })
-        .collect()
-}
-
-#[allow(clippy::items_after_test_module)]
-fn outbound_url_argument(name: &str) -> Vec<usize> {
-    match name {
-        "request" | "NewRequest" => vec![1],
-        "NewRequestWithContext" => vec![2],
-        _ => vec![0],
-    }
-}
-
-/// Find outbound HTTP requests whose URL is built from request input in the
-/// same file.
-///
-/// Sources and propagation match the SQL injection model. Only the URL
-/// argument counts: Python `requests`/`httpx` calls and `urlopen`; JS
-/// `fetch`, `axios`, `got`, and `http(s).get/request`; Java `new URL`,
-/// `URI.create`, and `RestTemplate` calls; Go `http.Get/Post/Head/PostForm`
-/// and `http.NewRequest*`; Rust `reqwest`/`ureq` `get`/`post`/... calls. A
-/// request value sent only as a query parameter,
-/// body, or header of a fixed URL is not reported. Host allowlists are not
-/// modeled as sanitizers; numeric conversions stop the flow. Same-file and
-/// straight-line only; no interprocedural claim.
-#[allow(clippy::items_after_test_module)]
-fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
-    let Some(language) = flow_language(extension) else {
-        return std::collections::HashSet::new();
-    };
-    request_flow_sink_lines(
-        content,
-        language,
-        &ssrf_flow_sinks(language),
-        contains_numeric_conversion,
-    )
-}
-
-#[allow(clippy::items_after_test_module)]
-fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
-    let patterns: &[&str] = match language {
-        FlowLanguage::Python => &[
-            r#"\b(?:requests|httpx|session|client)\s*\.\s*(get|post|put|delete|head|patch|options|request)\s*\("#,
-            r#"\b(?:urllib\s*\.\s*request\s*\.\s*)?(urlopen)\s*\("#,
-        ],
-        FlowLanguage::JavaScript => &[
-            r#"(?:^|[^.\w$])(fetch|got|axios)\s*\("#,
-            r#"\baxios\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
-            r#"\bhttps?\s*\.\s*(get|request)\s*\("#,
-        ],
-        FlowLanguage::Java => &[
-            r#"\bnew\s+(URL)\s*\("#,
-            r#"\bURI\s*\.\s*(create)\s*\("#,
-            r#"\b[A-Za-z_]*[Rr]est[Tt]emplate\s*\.\s*(getForObject|getForEntity|postForObject|postForEntity|exchange)\s*\("#,
-        ],
-        FlowLanguage::Go => {
-            &[r#"\bhttp\s*\.\s*(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\("#]
-        }
-        FlowLanguage::Rust => &[
-            r#"\b(?:reqwest|ureq)\s*::\s*(get|post|put|delete|head|patch)\s*\("#,
-            r#"\b(?:client|reqwest)\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
-        ],
-    };
-    patterns
-        .iter()
-        .filter_map(|pattern| {
-            Regex::new(pattern).ok().map(|call| FlowSink {
-                call,
-                arguments: outbound_url_argument,
-                line_requires: None,
-            })
-        })
-        .collect()
-}
+                    if let 
