@@ -35,3 +35,16 @@ jobs:
 
       - name: Test
         run: cargo test --all-targets --all-features --locked
+
+  release-tests:
+    name: Release tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.88.0
+
+      - name: Test (release profile)
+        run: cargo test --release --all-targets --all-features --locked

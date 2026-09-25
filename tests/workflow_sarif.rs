@@ -69,6 +69,9 @@ fn committed_policy_is_a_unique_versioned_baseline() {
     let fingerprints = value["baseline"]["fingerprints"].as_sequence().unwrap();
     let unique: std::collections::BTreeSet<_> =
         fingerprints.iter().map(|v| v.as_str().unwrap()).collect();
-    assert_eq!(fingerprints.len(), 65);
+    // Exact size of the committed baseline: regenerated with root-relative
+    // fingerprints (see `policy_findings_view`), so the count changes only
+    // when the baseline is deliberately regenerated.
+    assert_eq!(fingerprints.len(), 70);
     assert_eq!(unique.len(), fingerprints.len());
 }
