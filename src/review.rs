@@ -1804,6 +1804,38 @@ cursor.execute(query)"#,
     }
 
     #[test]
+    fn python_request_header_value_built_into_executed_query_is_reported() {
+        let findings = scan(
+            r#"token = request.headers.get("X-Token")
+query = f"SELECT * FROM sessions WHERE token = '{token}'"
+cursor.execute(query)"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn python_request_cookie_value_built_into_executed_query_is_reported() {
+        let findings = scan(
+            r#"sid = request.cookies.get("session_id")
+query = f"SELECT * FROM sessions WHERE id = '{sid}'"
+cursor.execute(query)"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn python_request_json_value_built_into_executed_query_is_reported() {
+        let findings = scan(
+            r#"user_id = request.json.get("id")
+query = f"SELECT * FROM users WHERE id = '{user_id}'"
+cursor.execute(query)"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+    #[test]
     fn python_parameterized_query_with_request_value_is_clean() {
         let findings = scan(
             r#"user_id = request.args.get("id")
@@ -1850,6 +1882,37 @@ const rows = db.query(sql);"#,
     }
 
     #[test]
+    fn js_destructured_header_value_in_template_query_is_reported() {
+        let findings = scan(
+            r#"const { host } = req.headers;
+const sql = `SELECT * FROM hosts WHERE name = '${host}'`;
+const rows = db.query(sql);"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+    #[test]
+    fn js_request_header_value_in_template_query_is_reported() {
+        let findings = scan(
+            r#"const host = req.headers.host;
+const sql = `SELECT * FROM hosts WHERE name = '${host}'`;
+const rows = db.query(sql);"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn js_request_cookie_value_in_template_query_is_reported() {
+        let findings = scan(
+            r#"const sid = req.cookies.sid;
+const sql = `SELECT * FROM sessions WHERE id = '${sid}'`;
+const rows = db.query(sql);"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+    #[test]
     fn js_placeholder_query_with_request_value_is_clean() {
         let findings = scan(
             r#"const name = req.query.name;
@@ -1872,6 +1935,16 @@ ResultSet rs = stmt.executeQuery(sql);"#,
         assert_eq!(findings[0].line_number, Some(3));
     }
 
+    #[test]
+    fn java_query_string_value_concatenated_into_statement_is_reported() {
+        let findings = scan(
+            r#"String qs = request.getQueryString();
+String sql = "SELECT * FROM users WHERE name = '" + qs + "'";
+ResultSet rs = stmt.executeQuery(sql);"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
     #[test]
     fn java_prepared_statement_bind_value_is_clean() {
         let findings = scan(
@@ -6044,7 +6117,7 @@ fn python_path_traversal_sink_lines(
     }
 
     let Ok(source) = Regex::new(
-        r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:request\.(?:args|form|values|GET|POST)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#,
+        r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:request\.(?:args|form|values|GET|POST|headers|cookies|json|data)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#,
     ) else {
         return std::collections::HashSet::new();
     };
@@ -6124,7 +6197,7 @@ fn java_path_traversal_sink_lines(
     }
 
     let Ok(source) = Regex::new(
-        r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo)\s*\("#,
+        r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo|getQueryString)\s*\("#,
     ) else {
         return std::collections::HashSet::new();
     };
@@ -6300,7 +6373,7 @@ fn js_path_traversal_sink_lines(
     }
 
     let Ok(source) = Regex::new(
-        r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#,
+        r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body|headers|cookies)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#,
     ) else {
         return std::collections::HashSet::new();
     };
@@ -6508,13 +6581,13 @@ fn call_arguments(text: &str, open: usize) -> Vec<String> {
 fn flow_source_regex(language: FlowLanguage) -> Option<Regex> {
     let pattern = match language {
         FlowLanguage::JavaScript => {
-            r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#
+            r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body|headers|cookies)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#
         }
         FlowLanguage::Python => {
-            r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:request\.(?:args|form|values|GET|POST)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#
+            r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:request\.(?:args|form|values|GET|POST|headers|cookies|json|data)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#
         }
         FlowLanguage::Java => {
-            r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo)\s*\("#
+            r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo|getQueryString)\s*\("#
         }
         FlowLanguage::Go => {
             r#"^\s*(?:(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+string)?\s*(?::=|=)\s*(?:(?:r|req|request)\s*\.\s*(?:URL\s*\.\s*Query\s*\(\s*\)\s*\.\s*Get\s*\(|FormValue\s*\(|PostFormValue\s*\(|URL\s*\.\s*Path\b)|(?:c|ctx)\s*\.\s*(?:Param|Query|DefaultQuery|QueryArray|PostForm|DefaultPostForm|PostFormArray|FormValue|QueryParam|GetHeader|Cookie)\s*\()|(?:if\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s*:?=\s*)?(?:c|ctx)\s*\.\s*(?:Bind|BindJSON|BindQuery|BindUri|ShouldBind|ShouldBindJSON|ShouldBindQuery|ShouldBindUri|ShouldBindWith)\s*\(\s*&\s*([A-Za-z_][A-Za-z0-9_]*))"#
@@ -6791,7 +6864,7 @@ fn flow_pass(
         return (sink_lines, callee_sink_lines, imported_sink_lines);
     };
     let destructure = Regex::new(
-        r#"^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:req|request)\s*\.\s*(?:params|query|body)\s*;?\s*$"#,
+        r#"^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:req|request)\s*\.\s*(?:params|query|body|headers|cookies)\s*;?\s*$"#,
     )
     .ok();
 
