@@ -3796,6 +3796,59 @@ def find_orders(customer):
     }
 
     #[test]
+    fn python_try_except_import_into_repository_is_reported() {
+        let repository = r#"import sqlite3
+
+
+def find_orders(customer):
+    conn = sqlite3.connect("shop.db")
+    query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+    return conn.execute(query).fetchall()"#;
+        let views = r#"try:
+    from .repository import find_orders
+except ImportError:
+    find_orders = None
+
+
+@app.route("/orders")
+def orders():
+    customer = request.args.get("customer")
+    return {"orders": find_orders(customer)}
+"#;
+        let found = scan_project(&[("app/views.py", views), ("app/repository.py", repository)]);
+        assert_eq!(
+            found,
+            vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 7)],
+            "try/except import"
+        );
+    }
+
+    #[test]
+    fn python_absolute_star_import_into_repository_is_reported() {
+        let repository = r#"import sqlite3
+
+
+def find_orders(customer):
+    conn = sqlite3.connect("shop.db")
+    query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+    return conn.execute(query).fetchall()"#;
+        let views = r#"from repository import *
+
+
+@app.route("/orders")
+def orders():
+    customer = request.args.get("customer")
+    return {"orders": find_orders(customer)}
+"#;
+        let found = scan_project(&[("app/views.py", views), ("app/repository.py", repository)]);
+        assert_eq!(
+            found,
+            vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 7)],
+            "absolute star"
+        );
+    }
+
+    #[test]
     fn python_parenthesized_import_into_repository_is_reported() {
         let repository = r#"import sqlite3
 
@@ -5075,6 +5128,84 @@ async fn handler(req: HttpRequest) -> HttpResponse {
             ("src/api/v1/users.rs", users.as_str()),
         ]);
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn rust_crate_glob_import_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::*;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)],
+            "crate glob"
+        );
+    }
+
+    #[test]
+    fn rust_double_super_use_call_is_reported_in_store() {
+        let api = "pub mod users;";
+        let users = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use super::super::store::find_user;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let main = "mod api;
+mod store;
+";
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/api.rs", api),
+            ("src/api/users.rs", users),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)],
+            "double super use"
+        );
+    }
+
+    #[test]
+    fn rust_super_glob_import_call_is_reported_in_store() {
+        let api = "pub mod users;";
+        let users = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use super::super::store::*;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let main = "mod api;
+mod store;
+";
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/api.rs", api),
+            ("src/api/users.rs", users),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)],
+            "super glob"
+        );
     }
 
     #[test]
@@ -8117,7 +8248,7 @@ fn cross_file_flow_sinks(
                     let Some(prefix) = segments.first().map(String::as_str) else {
                         continue;
                     };
-                    let Some(base) = (match prefix {
+                    let Some(mut base) = (match prefix {
                         "crate" => crate_base.clone(),
                         "self" => Some(module_dir.clone()),
                         "super" => super_base.clone(),
@@ -8126,6 +8257,16 @@ fn cross_file_flow_sinks(
                         continue;
                     };
                     segments.remove(0);
+                    // `super::super::...`: each further `super` climbs one
+                    // more directory. A chain past the filesystem root is
+                    // left in place and simply resolves to nothing.
+                    while segments.first().map(String::as_str) == Some("super") {
+                        let Some(parent) = base.parent() else {
+                            break;
+                        };
+                        base = parent.to_path_buf();
+                        segments.remove(0);
+                    }
                     let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
                     if segments.last() == Some(&"*") {
                         // `use crate::store::*;` imports every `pub fn`.
