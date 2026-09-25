@@ -1877,6 +1877,35 @@ cursor.execute(query)"#,
         );
         assert!(findings.is_empty());
     }
+
+    #[test]
+    fn python_fstring_embedded_request_read_is_reported() {
+        let findings = scan(
+            r#"query = f"SELECT * FROM users WHERE id = '{request.args.get('id')}'"
+cursor.execute(query)"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn python_inline_request_read_at_sink_is_reported() {
+        let findings = scan(
+            r#"cursor.execute(f"SELECT * FROM users WHERE id = '{request.args.get('id')}'")"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn python_inline_request_read_as_parameter_is_clean() {
+        let findings = scan(
+            r#"query = "SELECT * FROM users WHERE id = %s"
+cursor.execute(query, (request.args.get("id"),))"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
     #[test]
     fn python_parameterized_query_with_request_value_is_clean() {
         let findings = scan(
@@ -1986,6 +2015,34 @@ const rows = db.query(sql);"#,
         );
         assert!(findings.is_empty());
     }
+
+    #[test]
+    fn js_template_embedded_request_read_is_reported() {
+        let findings = scan(
+            r#"const sql = `SELECT * FROM users WHERE id = '${req.query.id}'`;
+const rows = db.query(sql);"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn js_inline_request_read_at_sink_is_reported() {
+        let findings = scan(
+            r#"const rows = db.query(`SELECT * FROM users WHERE id = '${req.query.id}'`);"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn js_inline_request_read_as_parameter_is_clean() {
+        let findings = scan(
+            r#"const rows = db.query("SELECT * FROM users WHERE id = ?", [req.query.id]);"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
     #[test]
     fn js_placeholder_query_with_request_value_is_clean() {
         let findings = scan(
@@ -2052,6 +2109,16 @@ ResultSet rs = stmt.executeQuery(sql);"#,
             "java",
         );
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn java_concat_embedded_request_read_is_reported() {
+        let findings = scan(
+            r#"String sql = "SELECT * FROM users WHERE id = '" + request.getParameter("id") + "'";
+ResultSet rs = stmt.executeQuery(sql);"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
     }
     #[test]
     fn java_prepared_statement_bind_value_is_clean() {
@@ -6711,6 +6778,30 @@ fn flow_source_regex(language: FlowLanguage) -> Option<Regex> {
     Regex::new(pattern).ok()
 }
 
+/// Unanchored request-read patterns, used to catch reads embedded inside a
+/// larger expression (an f-string, template literal, or concatenation)
+/// rather than at the start of a binding. Applied per expression (a binding
+/// right-hand side or a single sink argument), never per line, so a read
+/// passed as a separate parameter argument is not treated as embedded in
+/// the query. Go and Rust return None: their format-string shapes are not
+/// modeled yet.
+#[allow(clippy::items_after_test_module)]
+fn flow_inline_read_regex(language: FlowLanguage) -> Option<Regex> {
+    let pattern = match language {
+        FlowLanguage::Python => {
+            r#"(?i)request\.(?:args|form|values|GET|POST|headers|cookies|json|data)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path"#
+        }
+        FlowLanguage::JavaScript => {
+            r#"(?i)(?:req|request)\.(?:params|query|body|headers|cookies)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#
+        }
+        FlowLanguage::Java => {
+            r#"(?i)(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo|getQueryString)\s*\("#
+        }
+        FlowLanguage::Go | FlowLanguage::Rust => return None,
+    };
+    Regex::new(pattern).ok()
+}
+
 /// Plain local bindings (`lhs = rhs`) for each language.
 #[allow(clippy::items_after_test_module)]
 fn flow_binding_regex(language: FlowLanguage) -> Option<Regex> {
@@ -6975,6 +7066,7 @@ fn flow_pass(
     else {
         return (sink_lines, callee_sink_lines, imported_sink_lines);
     };
+    let inline_read = flow_inline_read_regex(language);
     let destructure = Regex::new(
         r#"^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:req|request)\s*\.\s*(?:params|query|body|headers|cookies)\s*;?\s*$"#,
     )
@@ -7039,7 +7131,8 @@ fn flow_pass(
         if let Some(captures) = binding.captures(&visible) {
             if let (Some(lhs), Some(rhs)) = (captures.get(1), captures.get(2)) {
                 let rhs = rhs.as_str();
-                let derives = tainted.iter().any(|name| identifier_in(rhs, name));
+                let derives = tainted.iter().any(|name| identifier_in(rhs, name))
+                    || inline_read.as_ref().is_some_and(|re| re.is_match(rhs));
                 if derives && !sanitized(rhs) {
                     tainted.insert(lhs.as_str().to_string());
                 } else {
@@ -7047,7 +7140,7 @@ fn flow_pass(
                 }
             }
         }
-        if tainted.is_empty() {
+        if tainted.is_empty() && !inline_read.as_ref().is_some_and(|re| re.is_match(code)) {
             continue;
         }
 
@@ -7067,7 +7160,9 @@ fn flow_pass(
                 let args = call_arguments(&visible, whole.end() - 1);
                 (sink.arguments)(name).into_iter().any(|position| {
                     args.get(position).is_some_and(|arg| {
-                        !sanitized(arg) && tainted.iter().any(|name| identifier_in(arg, name))
+                        !sanitized(arg)
+                            && (tainted.iter().any(|name| identifier_in(arg, name))
+                                || inline_read.as_ref().is_some_and(|re| re.is_match(arg)))
                     })
                 })
             })
