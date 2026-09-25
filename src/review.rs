@@ -2540,6 +2540,146 @@ exports.search = (req, res) => {
     }
 
     #[test]
+    fn js_instance_variable_call_is_reported_in_service() {
+        let route = r#"const Repo = require('../services/repo');
+
+class Handler {
+    constructor() {
+        this.repo = new Repo();
+    }
+
+    async search(req, res) {
+        const { name } = req.query;
+        return res.json(await this.repo.findByName(name));
+    }
+}
+
+module.exports = new Handler();
+"#;
+        let repo = r#"const db = require('../db');
+
+class Repo {
+    async findByName(name) {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    }
+}
+
+module.exports = Repo;
+"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/services/repo.js".to_string(), SQLI_FLOW.to_string(), 6)]
+        );
+    }
+
+    #[test]
+    fn js_instance_variable_other_name_call_is_reported_in_service() {
+        let route = r#"const Repo = require('../services/repo');
+
+class Handler {
+    constructor() {
+        this.store = new Repo();
+    }
+
+    async search(req, res) {
+        const { name } = req.query;
+        return res.json(await this.store.findByName(name));
+    }
+}
+
+module.exports = new Handler();
+"#;
+        let repo = r#"const db = require('../db');
+
+class Repo {
+    async findByName(name) {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    }
+}
+
+module.exports = Repo;
+"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/services/repo.js".to_string(), SQLI_FLOW.to_string(), 6)]
+        );
+    }
+
+    #[test]
+    fn js_unassigned_instance_variable_call_is_not_resolved() {
+        let route = r#"const Repo = require('../services/repo');
+
+class Handler {
+    async search(req, res) {
+        const { name } = req.query;
+        return res.json(await this.repo.findByName(name));
+    }
+}
+
+module.exports = new Handler();
+"#;
+        let repo = r#"const db = require('../db');
+
+class Repo {
+    async findByName(name) {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    }
+}
+
+module.exports = Repo;
+"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn js_instance_variable_without_import_is_not_resolved() {
+        let route = r#"class Handler {
+    constructor() {
+        this.repo = new Repo();
+    }
+
+    async search(req, res) {
+        const { name } = req.query;
+        return res.json(await this.repo.findByName(name));
+    }
+}
+
+module.exports = new Handler();
+"#;
+        let repo = r#"const db = require('../db');
+
+class Repo {
+    async findByName(name) {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    }
+}
+
+module.exports = Repo;
+"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn js_default_export_call_is_reported_in_service() {
         let service = r#"const db = require('../db');
 
@@ -5988,7 +6128,9 @@ fn flow_pass(
 /// Calls on one line that resolve to an imported function: `binding.name(...)`
 /// for a module binding, or a bare `name(...)` for a function imported by
 /// name. A same-file definition with the same name shadows the import.
-/// Chained receivers, keyword or spread arguments, and extra arguments are
+/// `this.repo.name(...)` resolves when the instance variable was assigned
+/// `new Repo(...)` and `Repo` is a whole-module import here. Longer
+/// receiver chains, keyword or spread arguments, and extra arguments are
 /// skipped.
 #[allow(clippy::items_after_test_module)]
 fn imported_calls(
@@ -6033,11 +6175,30 @@ fn imported_calls(
                         .next()
                         .unwrap_or("")
                         .to_string();
-                    if word.is_empty() || rest[..rest.len() - word.len()].trim_end().ends_with('.')
-                    {
+                    if word.is_empty() {
                         continue;
                     }
-                    Some(word)
+                    let ahead = rest[..rest.len() - word.len()].trim_end();
+                    if let Some(stripped) = ahead.strip_suffix('.') {
+                        // One instance-variable hop: `this.repo.find(...)`
+                        // / `self.repo.find(...)`. Longer chains stay
+                        // unresolved.
+                        if language != FlowLanguage::JavaScript && language != FlowLanguage::Python
+                        {
+                            continue;
+                        }
+                        let owner = stripped
+                            .trim_end()
+                            .rsplit(|ch: char| !is_word(ch))
+                            .next()
+                            .unwrap_or("");
+                        if owner != "this" && owner != "self" {
+                            continue;
+                        }
+                        Some(format!("{owner}.{word}"))
+                    } else {
+                        Some(word)
+                    }
                 }
                 None => {
                     if before.chars().last().is_some_and(is_word) {
@@ -6590,9 +6751,11 @@ enum ImportBinding {
 /// re-exports (a barrel re-exporting from another barrel) collapse toward
 /// the defining module pass by pass, iterated to convergence; in both
 /// languages a name offered by two sources at any pass resolves to neither,
-/// and a re-export cycle offers nothing. Package imports (JS),
-/// dynamic `require`, `_test.go` files, and calls through instance
-/// variables are not
+/// and a re-export cycle offers nothing. JS calls through instance
+/// variables (`this.repo.m(...)`) resolve when the variable is assigned
+/// `new Repo(...)` and `Repo` is a whole-module import; methods match by
+/// name within the imported file. Package imports (JS), dynamic `require`,
+/// `_test.go` files, and other instance receivers are not
 /// resolved, Rust `use` trees spanning several lines are not recognized,
 /// and a callable name offered by two different files resolves to
 /// neither.
@@ -7267,6 +7430,9 @@ fn cross_file_flow_sinks(
         return result;
     }
 
+    let instance_new = Regex::new(
+        r#"^\s*this\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*new\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
+    );
     type Family = (fn(FlowLanguage) -> Vec<FlowSink>, fn(&str) -> bool, u8);
     let families: [Family; 3] = [
         (sql_flow_sinks, contains_numeric_conversion, 0),
@@ -7433,6 +7599,57 @@ fn cross_file_flow_sinks(
                     frontier = next_frontier;
                 }
                 imports.extend(chained);
+            }
+            // JS instance variables: `this.repo = new Repo(...)` where
+            // `Repo` is a whole-module import (`const Repo =
+            // require('./repo')`) lets `this.repo.m(...)` resolve to a
+            // method of the imported file. Methods match by name within
+            // that file, whichever of its classes defines them.
+            if module.language == FlowLanguage::JavaScript {
+                let Ok(instance_new) = instance_new.as_ref() else {
+                    return imports;
+                };
+                for line in &lines[caller] {
+                    let Some(captures) = instance_new.captures(line) else {
+                        continue;
+                    };
+                    let (Some(variable), Some(class)) = (captures.get(1), captures.get(2)) else {
+                        continue;
+                    };
+                    let target = bindings[caller].iter().find_map(|binding| {
+                        if let ImportBinding::Module {
+                            binding: name,
+                            target,
+                            ..
+                        } = binding
+                        {
+                            (name.as_str() == class.as_str()
+                                && modules[*target].language == FlowLanguage::JavaScript)
+                                .then_some(*target)
+                        } else {
+                            None
+                        }
+                    });
+                    let Some(target) = target else {
+                        continue;
+                    };
+                    for (position, function) in functions[target].iter().enumerate() {
+                        if !function.method {
+                            continue;
+                        }
+                        let reached = deep_map[target][position].clone();
+                        if reached.iter().all(|lines| lines.is_empty()) {
+                            continue;
+                        }
+                        imports.push(ImportedCallee {
+                            receiver: Some(format!("this.{}", variable.as_str())),
+                            name: function.name.clone(),
+                            target,
+                            params: function.params.len(),
+                            summaries: reached,
+                        });
+                    }
+                }
             }
             // A call resolves only when one file provides the (receiver,
             // name) pair: two files offering the same callable are ambiguous
