@@ -2616,6 +2616,114 @@ module.exports = Repo;
     }
 
     #[test]
+    fn js_instance_variable_default_import_call_is_reported_in_service() {
+        let route = r#"import Repo from '../services/repo';
+
+class Handler {
+    constructor() {
+        this.repo = new Repo();
+    }
+
+    async search(req, res) {
+        const { name } = req.query;
+        return res.json(await this.repo.findByName(name));
+    }
+}
+
+export default new Handler();
+"#;
+        let repo = r#"import db from '../db';
+
+export default class Repo {
+    async findByName(name) {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/services/repo.js".to_string(), SQLI_FLOW.to_string(), 6)]
+        );
+    }
+
+    #[test]
+    fn js_instance_variable_named_import_call_is_reported_in_service() {
+        let route = r#"import { Repo } from '../services/repo';
+
+class Handler {
+    constructor() {
+        this.repo = new Repo();
+    }
+
+    async search(req, res) {
+        const { name } = req.query;
+        return res.json(await this.repo.findByName(name));
+    }
+}
+
+export default new Handler();
+"#;
+        let repo = r#"import db from '../db';
+
+export class Repo {
+    async findByName(name) {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/services/repo.js".to_string(), SQLI_FLOW.to_string(), 6)]
+        );
+    }
+
+    #[test]
+    fn js_instance_variable_aliased_import_call_is_reported_in_service() {
+        let route = r#"import { Repo as Store } from '../services/repo';
+
+class Handler {
+    constructor() {
+        this.repo = new Store();
+    }
+
+    async search(req, res) {
+        const { name } = req.query;
+        return res.json(await this.repo.findByName(name));
+    }
+}
+
+export default new Handler();
+"#;
+        let repo = r#"import db from '../db';
+
+export class Repo {
+    async findByName(name) {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/services/repo.js".to_string(), SQLI_FLOW.to_string(), 6)]
+        );
+    }
+
+    #[test]
     fn js_unassigned_instance_variable_call_is_not_resolved() {
         let route = r#"const Repo = require('../services/repo');
 
@@ -6935,10 +7043,11 @@ enum ImportBinding {
 /// languages a name offered by two sources at any pass resolves to neither,
 /// and a re-export cycle offers nothing. Calls through instance
 /// variables resolve for JS (`this.repo.m(...)` when the variable is
-/// assigned `new Repo(...)` and `Repo` is a whole-module import) and for
-/// Python (`self.repo.m(...)` when the variable is assigned `Repo(...)`
-/// from `from .repo import Repo`, or `repo.Repo(...)` with
-/// `import repo`); methods match by name within the imported file.
+/// assigned `new Repo(...)` and `Repo` is a whole-module or class
+/// import) and for Python (`self.repo.m(...)` when the variable is
+/// assigned `Repo(...)` from `from .repo import Repo`, or
+/// `repo.Repo(...)` with `import repo`); methods match by name within
+/// the imported file.
 /// Package imports (JS), dynamic `require`,
 /// `_test.go` files, and other instance receivers are not
 /// resolved, and a callable name offered by two different files resolves
@@ -7790,10 +7899,13 @@ fn cross_file_flow_sinks(
                 imports.extend(chained);
             }
             // JS instance variables: `this.repo = new Repo(...)` where
-            // `Repo` is a whole-module import (`const Repo =
-            // require('./repo')`) lets `this.repo.m(...)` resolve to a
-            // method of the imported file. Methods match by name within
-            // that file, whichever of its classes defines them.
+            // `Repo` is imported - a whole-module import (`const Repo =
+            // require('./repo')`, `import * as Repo from './repo'`) or a
+            // class import (`import Repo from './repo'`, `import { Repo }
+            // from './repo'`, optionally `as`-aliased) - lets
+            // `this.repo.m(...)` resolve to a method of the imported
+            // file. Methods match by name within that file, whichever of
+            // its classes defines them.
             if module.language == FlowLanguage::JavaScript {
                 let Ok(instance_new) = instance_new.as_ref() else {
                     return imports;
@@ -7806,18 +7918,19 @@ fn cross_file_flow_sinks(
                         continue;
                     };
                     let target = bindings[caller].iter().find_map(|binding| {
-                        if let ImportBinding::Module {
-                            binding: name,
-                            target,
-                            ..
-                        } = binding
-                        {
-                            (name.as_str() == class.as_str()
-                                && modules[*target].language == FlowLanguage::JavaScript)
-                                .then_some(*target)
-                        } else {
-                            None
-                        }
+                        let (name, target) = match binding {
+                            ImportBinding::Module {
+                                binding: name,
+                                target,
+                                ..
+                            } => (name.as_str(), *target),
+                            ImportBinding::Function { local, target, .. } => {
+                                (local.as_str(), *target)
+                            }
+                        };
+                        (name == class.as_str()
+                            && modules[target].language == FlowLanguage::JavaScript)
+                            .then_some(target)
                     });
                     let Some(target) = target else {
                         continue;
