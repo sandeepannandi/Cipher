@@ -2211,6 +2211,44 @@ rows, err := db.Query(query)"#,
         assert!(findings.is_empty());
     }
 
+    #[test]
+    fn go_sprintf_embedded_request_read_is_reported() {
+        let findings = scan(
+            r#"query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", r.URL.Query().Get("name"))
+rows, err := db.Query(query)"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn go_inline_request_read_at_sink_is_reported() {
+        let findings = scan(
+            r#"rows, err := db.Query(fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", r.URL.Query().Get("name")))"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn go_inline_request_read_as_parameter_is_clean() {
+        let findings = scan(
+            r#"rows, err := db.QueryContext(ctx, "SELECT * FROM users WHERE name = $1", r.URL.Query().Get("name"))"#,
+            "go",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn go_concat_embedded_request_read_is_reported() {
+        let findings = scan(
+            r#"query := "SELECT * FROM users WHERE name = '" + r.FormValue("name") + "'"
+rows, err := db.Query(query)"#,
+            "go",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
     const CMDI: &str = "Command Injection";
 
     #[test]
@@ -5943,6 +5981,33 @@ async fn handler(req: HttpRequest) -> HttpResponse {
     }
 
     #[test]
+    fn rust_format_macro_embedded_request_read_is_reported() {
+        let findings = scan(
+            "let query = format!(\"SELECT * FROM users WHERE name = '{}'\", params.get(\"name\"));\nsqlx::query(&query)",
+            "rs",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn rust_inline_request_read_at_sink_is_reported() {
+        let findings = scan(
+            "sqlx::query(&format!(\"SELECT * FROM users WHERE name = '{}'\", params.get(\"name\")))",
+            "rs",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn rust_inline_request_read_as_parameter_is_clean() {
+        let findings = scan(
+            r#"conn.execute("INSERT INTO users (name) VALUES ($1)", &[&params.get("name")])"#,
+            "rs",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
     fn go_gin_query_param_reaching_query_is_reported() {
         let findings = scan(
             r#"name := c.Query("name")
@@ -6828,8 +6893,10 @@ fn flow_source_regex(language: FlowLanguage) -> Option<Regex> {
 /// rather than at the start of a binding. Applied per expression (a binding
 /// right-hand side or a single sink argument), never per line, so a read
 /// passed as a separate parameter argument is not treated as embedded in
-/// the query. Go and Rust return None: their format-string shapes are not
-/// modeled yet.
+/// the query. Go covers the net/http receiver shapes (r/req/request); Gin
+/// ctx reads inline are not modeled (binding-position reads already seed).
+/// Rust extractor maps (params/query/form) require a string-literal key so
+/// unrelated `.get(index)` / `[range]` uses on lookalike names stay clean.
 #[allow(clippy::items_after_test_module)]
 fn flow_inline_read_regex(language: FlowLanguage) -> Option<Regex> {
     let pattern = match language {
@@ -6842,7 +6909,12 @@ fn flow_inline_read_regex(language: FlowLanguage) -> Option<Regex> {
         FlowLanguage::Java => {
             r#"(?i)(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo|getQueryString)\s*\("#
         }
-        FlowLanguage::Go | FlowLanguage::Rust => return None,
+        FlowLanguage::Go => {
+            r#"(?:r|req|request)\s*\.\s*(?:URL\s*\.\s*Query\s*\(\s*\)\s*\.\s*Get\s*\(|FormValue\s*\(|PostFormValue\s*\(|URL\s*\.\s*Path\b)"#
+        }
+        FlowLanguage::Rust => {
+            r#"(?:req|request)\s*\.\s*(?:match_info|query_params|query_string|param|params)\s*\(|(?:params|query|form)\s*(?:\.\s*get\s*\(\s*"|\[\s*")"#
+        }
     };
     Regex::new(pattern).ok()
 }
