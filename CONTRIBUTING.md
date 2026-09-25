@@ -31,7 +31,7 @@ cargo fmt --check
 Pull requests and the nightly scan enforce a policy gate (`review --fail-on-policy`): findings that are not in the accepted `.cipher-ai-policy.yml` baseline (or whose suppression expired) fail CI. Run the same check locally before pushing:
 
 ```bash
-scripts/policy-precheck.sh
+bash scripts/policy-precheck.sh
 ```
 
 The script builds the release binary if needed, scans a copy of the working tree (excluding `.git/`, `target/`, and the intentionally vulnerable `benchmarks/accuracy/` corpus, matching the CI boundary), and exits non-zero with the offending fingerprints when the gate would fail.
