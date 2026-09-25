@@ -2540,6 +2540,86 @@ exports.search = (req, res) => {
     }
 
     #[test]
+    fn js_multiline_import_and_require_resolve() {
+        for import in [
+            "import {\n    findByName as lookup\n} from '../services/users';",
+            "const {\n    findByName: lookup\n} = require('../services/users');",
+        ] {
+            let route = format!(
+                "{import}\n\nexports.search = (req, res) => {{\n    const name = req.query.name;\n    return res.json(lookup(name));\n}};"
+            );
+            let found = scan_project(&[
+                ("src/routes/users.js", route.as_str()),
+                ("src/services/users.js", JS_USERS_SERVICE),
+            ]);
+            assert_eq!(found.len(), 1, "{import}");
+            assert_eq!(found[0].2, 5, "{import}");
+        }
+    }
+
+    #[test]
+    fn js_multiline_reexport_resolves() {
+        let barrel = "export {\n    findByName\n} from './users';";
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", barrel),
+            ("src/services/users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_instance_variable_mixed_import_call_is_reported_in_service() {
+        let route = r#"import Repo, { helper } from '../services/repo';
+
+class Handler {
+    constructor() {
+        this.repo = new Repo();
+    }
+
+    async search(req, res) {
+        const { name } = req.query;
+        return res.json(await this.repo.findByName(name));
+    }
+}
+
+module.exports = new Handler();
+"#;
+        let repo = r#"const db = require('../db');
+
+class Repo {
+    async findByName(name) {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    }
+}
+
+module.exports = Repo;
+"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/services/repo.js".to_string(), SQLI_FLOW.to_string(), 6)]
+        );
+    }
+
+    #[test]
     fn js_instance_variable_call_is_reported_in_service() {
         let route = r#"const Repo = require('../services/repo');
 
@@ -7006,7 +7086,8 @@ enum ImportBinding {
 /// the same-file engine. JS/TS and Python imports are resolved to project
 /// files (`require`/`import` of `./x`, `../x`, `x/index`; Python `from .x
 /// import f`, `from x import f`, `import x as m` resolved next to the
-/// importing file or at the project root). Go files in one directory share a
+/// importing file or at the project root; multi-line JS import, require,
+/// and re-export declarations are joined before matching). Go files in one directory share a
 /// package namespace, so a bare call resolves to a function defined in a
 /// sibling file; `import "mod/pkg"` (optionally aliased, single or grouped
 /// form) resolves through the module path of the nearest `go.mod`, and only
@@ -8908,6 +8989,70 @@ enum JsReexport {
 /// Re-export declarations of one JS/TS file: `export { a, b as c } from
 /// './x'` and `export * from './x'`.
 #[allow(clippy::items_after_test_module)]
+/// JS declaration statements with multi-line ones joined: an `import`,
+/// an `export { ... } from` / `export * from` re-export, or a
+/// `const`/`let`/`var` destructuring that spans lines is flattened into
+/// one space-separated statement so the single-line import and re-export
+/// shapes still match. Joining starts only on a declaration opener and
+/// stops once braces and parentheses balance and the statement
+/// terminates (`;`, a closing quote, or `)`), bounded at 20 lines; every
+/// other line passes through untouched. `//` comments are stripped per
+/// line, so a specifier containing `//` does not join (relative
+/// specifiers never contain one).
+fn js_declarations(lines: &[&str]) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let code = lines[index].split("//").next().unwrap_or("").trim();
+        let destructures = ["const {", "let {", "var {"]
+            .iter()
+            .any(|head| code.starts_with(head));
+        let opens = code.starts_with("import ")
+            || code.starts_with("import{")
+            || code.starts_with("import*")
+            || code.starts_with("export {")
+            || code.starts_with("export *")
+            || ((code.starts_with("const ")
+                || code.starts_with("let ")
+                || code.starts_with("var "))
+                && (destructures || code.contains("require(")));
+        let balance = |text: &str| {
+            let braces = text.matches('{').count() as i64 - text.matches('}').count() as i64;
+            let parens = text.matches('(').count() as i64 - text.matches(')').count() as i64;
+            (braces, parens)
+        };
+        let terminated = |text: &str, braces: i64, parens: i64| {
+            braces <= 0
+                && parens <= 0
+                && (text.ends_with(';')
+                    || text.ends_with('\'')
+                    || text.ends_with('"')
+                    || text.ends_with(')'))
+        };
+        if !opens {
+            index += 1;
+            continue;
+        }
+        let mut joined = code.to_string();
+        let (mut braces, mut parens) = balance(&joined);
+        let mut used = 1;
+        while !terminated(&joined, braces, parens) && used < 20 && index + used < lines.len() {
+            let next = lines[index + used].split("//").next().unwrap_or("").trim();
+            if !next.is_empty() {
+                joined.push(' ');
+                joined.push_str(next);
+                let (b, p) = balance(&joined);
+                braces = b;
+                parens = p;
+            }
+            used += 1;
+        }
+        statements.push(joined);
+        index += used;
+    }
+    statements
+}
+
 fn js_reexports(lines: &[&str]) -> Vec<JsReexport> {
     let mut declarations = Vec::new();
     let (Ok(named), Ok(glob)) = (
@@ -8922,8 +9067,8 @@ fn js_reexports(lines: &[&str]) -> Vec<JsReexport> {
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
     };
-    for line in lines {
-        let code = line.split("//").next().unwrap_or("");
+    for statement in js_declarations(lines) {
+        let code = statement.as_str();
         if let Some(captures) = named.captures(code) {
             let names = captures.get(1).map(|m| m.as_str()).unwrap_or("");
             let spec = captures
@@ -9012,7 +9157,8 @@ fn flow_imports(
             else {
                 return bindings;
             };
-            for line in lines {
+            for statement in js_declarations(lines) {
+                let line = statement.as_str();
                 for (re, module) in [(&module_require, true), (&namespace_import, true)] {
                     if let Some(captures) = re.captures(line) {
                         if let (Some(binding), Some(spec)) = (captures.get(1), captures.get(2)) {
