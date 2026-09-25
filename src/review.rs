@@ -1651,6 +1651,16 @@ cmd.arg(input);"#,
     }
 
     #[test]
+    fn rust_annotated_parse_is_clean() {
+        let findings = scan(
+            r#"let id: i64 = params.get("id").parse().unwrap_or(0);
+let q = format!("SELECT * FROM users WHERE id = {}", id);
+conn.execute(q)?;"#,
+            "rs",
+        );
+        assert!(findings.is_empty());
+    }
+    #[test]
     fn java_runtime_exec_with_composed_shell_command_is_reported() {
         let findings = scan(
             r#"Runtime.getRuntime().exec("sh -c '" + input + "'");"#,
@@ -1714,6 +1724,16 @@ with open(target, "rb") as handle:
         assert!(findings.is_empty());
     }
 
+    #[test]
+    fn python_pathlib_name_sanitized_path_is_clean() {
+        let findings = scan(
+            r#"requested = request.args.get("filename")
+name = Path(requested).name
+content = open(name).read()"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
     #[test]
     fn java_request_path_reaching_file_stream_is_reported() {
         let findings = scan(
@@ -1859,6 +1879,16 @@ cursor.execute(query)"#,
     }
 
     #[test]
+    fn python_uuid_conversion_is_clean() {
+        let findings = scan(
+            r#"uid = uuid.UUID(request.args.get("id"))
+query = f"SELECT * FROM users WHERE id = '{uid}'"
+cursor.execute(query)"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+    #[test]
     fn python_identifier_only_inside_plain_string_is_clean() {
         let findings = scan(
             r#"name = request.args.get("name")
@@ -1945,6 +1975,19 @@ ResultSet rs = stmt.executeQuery(sql);"#,
         );
         assert_eq!(titles(&findings), vec![SQLI]);
     }
+
+    #[test]
+    fn java_double_parse_is_clean() {
+        let findings = scan(
+            r#"String s = request.getParameter("score");
+double d = Double.parseDouble(s);
+String sql = "SELECT * FROM users WHERE score > " + d;
+ResultSet rs = stmt.executeQuery(sql);"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
+
     #[test]
     fn java_prepared_statement_bind_value_is_clean() {
         let findings = scan(
@@ -6354,7 +6397,11 @@ fn contains_go_path_sanitizer(text: &str) -> bool {
 #[allow(clippy::items_after_test_module)]
 fn contains_python_path_sanitizer(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    lower.contains("os.path.basename") || lower.contains("path.basename")
+    lower.contains("os.path.basename")
+        || lower.contains("path.basename")
+        // `pathlib.Path(value).name` keeps only the final component, the same
+        // guarantee `os.path.basename` gives.
+        || (lower.contains("path(") && lower.contains(").name"))
 }
 
 /// Find JavaScript/TypeScript filesystem sinks reached by a request-path value.
@@ -10082,6 +10129,8 @@ fn contains_numeric_conversion(text: &str) -> bool {
         "parsefloat(",
         "integer.parseint(",
         "integer.valueof(",
+        "double.parsedouble(",
+        "float.parsefloat(",
         "long.parselong(",
         "long.valueof(",
         "uuid.fromstring(",
@@ -10101,7 +10150,17 @@ fn contains_numeric_conversion(text: &str) -> bool {
                 !(before.is_ascii_alphanumeric() || before == b'_')
             }
         })
-    })
+    }) || {
+        // Rust's `.parse()` relies on the target type for safety; only a
+        // numeric type annotation on the same line makes it a sanitizer.
+        lower.contains(".parse()")
+            && [
+                ": i8", ": i16", ": i32", ": i64", ": i128", ": isize", ": u8", ": u16", ": u32",
+                ": u64", ": u128", ": usize", ": f32", ": f64",
+            ]
+            .iter()
+            .any(|annotation| lower.contains(annotation))
+    }
 }
 
 /// Find SQL query sinks whose query argument is built from request input in
