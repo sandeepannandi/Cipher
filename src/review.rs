@@ -3580,6 +3580,26 @@ exports.search = (req, res) => {
     }
 
     #[test]
+    fn java_import_resolving_outside_the_project_does_not_panic() {
+        // `import java.io.File` names no class in the project; with a second
+        // Java file present the class resolver used to index its empty match
+        // list eagerly and panic the whole review.
+        let reader = r#"package com.example;
+import java.io.File;
+public class A {
+    public String read(String path) { return new File(path).getName(); }
+}
+"#;
+        let other = r#"package com.example;
+public class B {
+    public String go(String p) { return p; }
+}
+"#;
+        let found = scan_project(&[("src/A.java", reader), ("src/B.java", other)]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn js_reexport_of_parameterized_service_stays_clean() {
         let barrel = "export { findById } from './users';";
         let route = r#"import { findById } from '../services';
@@ -7752,7 +7772,14 @@ fn cross_file_flow_sinks(
                         })
                         .map(|(other, _)| other)
                         .collect();
-                    (matches.len() == 1).then_some(matches[0])
+                    // `then`, not `then_some`: the match list is empty for
+                    // imports that resolve outside the project (jdk, libraries),
+                    // and `then_some` would index it eagerly and panic.
+                    if matches.len() == 1 {
+                        matches.first().copied()
+                    } else {
+                        None
+                    }
                 };
                 for import in java_imports(&lines[index]) {
                     match import {
