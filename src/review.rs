@@ -3600,6 +3600,89 @@ public class B {
     }
 
     #[test]
+    fn python_star_import_name_offered_by_two_modules_resolves_to_neither() {
+        let repository = r#"import sqlite3
+
+
+def find_orders(customer):
+    conn = sqlite3.connect("shop.db")
+    query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+    return conn.execute(query).fetchall()"#;
+        let views = r#"from .repository_a import *
+from .repository_b import *
+
+
+@app.route("/orders")
+def orders():
+    customer = request.args.get("customer")
+    return {"orders": find_orders(customer)}
+"#;
+        let found = scan_project(&[
+            ("app/views.py", views),
+            ("app/repository_a.py", repository),
+            ("app/repository_b.py", repository),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn python_star_import_into_repository_is_reported() {
+        let repository = r#"import sqlite3
+
+
+def find_orders(customer):
+    conn = sqlite3.connect("shop.db")
+    query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+    return conn.execute(query).fetchall()"#;
+        let views = r#"from .repository import *
+
+
+@app.route("/orders")
+def orders():
+    customer = request.args.get("customer")
+    return {"orders": find_orders(customer)}
+"#;
+        let found = scan_project(&[("app/views.py", views), ("app/repository.py", repository)]);
+        assert_eq!(
+            found,
+            vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 7)],
+            "star import"
+        );
+    }
+
+    #[test]
+    fn js_default_reexport_through_barrel_is_reported_in_service() {
+        let service = r#"const db = require('../db');
+
+export default function findByName(name) {
+    const sql = `SELECT id FROM users WHERE name = '${name}'`;
+    return db.prepare(sql).all();
+}
+"#;
+        let barrel = "export { default as findByName } from './users';";
+        let route = r#"import { findByName } from '../services';
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(findByName(name));
+};"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/index.js", barrel),
+            ("src/services/users.js", service),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )],
+            "default-as reexport"
+        );
+    }
+
+    #[test]
     fn js_reexport_of_parameterized_service_stays_clean() {
         let barrel = "export { findById } from './users';";
         let route = r#"import { findById } from '../services';
@@ -7180,6 +7263,10 @@ enum ImportBinding {
         exported: String,
         target: usize,
     },
+    /// `from .service import *`: every exported name of `target` is
+    /// callable bare. Expanded into Function bindings once exports are
+    /// known, so later passes never see this variant.
+    Star { target: usize },
 }
 
 /// Cross-file request flow for JS/TS, Python, Java, Go, and Rust projects.
@@ -7187,7 +7274,7 @@ enum ImportBinding {
 /// Each file's functions are summarized with the same per-parameter pass as
 /// the same-file engine. JS/TS and Python imports are resolved to project
 /// files (`require`/`import` of `./x`, `../x`, `x/index`; Python `from .x
-/// import f`, `from x import f`, `import x as m` resolved next to the
+/// import f`, `from .x import *`, `from x import f`, `import x as m` resolved next to the
 /// importing file or at the project root; multi-line JS import, require,
 /// and re-export declarations are joined before matching, as are
 /// parenthesized Python from-imports). Go files in one directory share a
@@ -7294,6 +7381,57 @@ fn cross_file_flow_sinks(
         .zip(&lines)
         .map(|(module, lines)| flow_imports(lines, module.language, &module.path, &root, &index_of))
         .collect();
+    // Python `from .x import *`: every name the target exports is callable
+    // bare in the importing module. Expand eagerly into Function bindings.
+    // A name the module defines or binds explicitly stays local; a name
+    // offered by two star imports resolves to neither; private
+    // (underscore) names are not visible through a star.
+    for index in 0..modules.len() {
+        if modules[index].language != FlowLanguage::Python {
+            continue;
+        }
+        let star_targets: Vec<usize> = bindings[index]
+            .iter()
+            .filter_map(|binding| match binding {
+                ImportBinding::Star { target } => Some(*target),
+                _ => None,
+            })
+            .collect();
+        if star_targets.is_empty() {
+            continue;
+        }
+        bindings[index].retain(|binding| !matches!(binding, ImportBinding::Star { .. }));
+        let mut offers: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        for target in star_targets {
+            for name in exports[target].keys() {
+                if name.starts_with('_') {
+                    continue;
+                }
+                offers.entry(name.clone()).or_default().push(target);
+            }
+        }
+        for (name, mut targets) in offers {
+            targets.sort();
+            targets.dedup();
+            if targets.len() != 1 || exports[index].contains_key(&name) {
+                continue;
+            }
+            let shadowed = bindings[index].iter().any(|binding| match binding {
+                ImportBinding::Function { local, .. } => local == &name,
+                ImportBinding::Module { binding, .. } => binding == &name,
+                ImportBinding::Star { .. } => false,
+            });
+            if shadowed {
+                continue;
+            }
+            bindings[index].push(ImportBinding::Function {
+                local: name.clone(),
+                exported: name,
+                target: targets[0],
+            });
+        }
+    }
     // Re-exporting ("barrel") modules: named (`export { f } from './x'`) and
     // glob (`export * from './x'`) re-exports make the source function
     // visible under the barrel's path. Chained barrels (a barrel
@@ -8062,6 +8200,9 @@ fn cross_file_flow_sinks(
                                 .map(|function| vec![(local.clone(), *function)])
                                 .unwrap_or_default(),
                         ),
+                        // Star bindings are expanded into Function bindings
+                        // before this pass; none remain here.
+                        ImportBinding::Star { target } => (None, *target, Vec::new()),
                     };
                 // Only resolve within one language family.
                 if modules[target].language != module.language {
@@ -8177,6 +8318,7 @@ fn cross_file_flow_sinks(
                             ImportBinding::Function { local, target, .. } => {
                                 (local.as_str(), *target)
                             }
+                            ImportBinding::Star { .. } => return None,
                         };
                         (name == class.as_str()
                             && modules[target].language == FlowLanguage::JavaScript)
@@ -9453,13 +9595,14 @@ fn flow_imports(
                     .find_map(lookup)
                 })
             };
-            let (Ok(from_import), Ok(plain_import)) = (
+            let (Ok(from_import), Ok(plain_import), Ok(star_import)) = (
                 Regex::new(
                     r#"^from\s+(\.*)([A-Za-z_][A-Za-z0-9_.]*)?\s+import\s+([A-Za-z_][A-Za-z0-9_,\s]*)$"#,
                 ),
                 Regex::new(
                     r#"^import\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$"#,
                 ),
+                Regex::new(r#"^from\s+(\.*)([A-Za-z_][A-Za-z0-9_.]*)?\s+import\s+\*\s*$"#),
             ) else {
                 return bindings;
             };
@@ -9495,6 +9638,17 @@ fn flow_imports(
             }
             for code in &normalized {
                 let code = code.as_str();
+                if let Some(captures) = star_import.captures(code) {
+                    let dots = captures.get(1).map_or(0, |m| m.as_str().len());
+                    let dotted = captures.get(2).map_or("", |m| m.as_str());
+                    if dots == 0 && dotted.is_empty() {
+                        continue;
+                    }
+                    if let Some(target) = resolve_module(dots, dotted) {
+                        bindings.push(ImportBinding::Star { target });
+                    }
+                    continue;
+                }
                 if let Some(captures) = from_import.captures(code) {
                     let dots = captures.get(1).map_or(0, |m| m.as_str().len());
                     let dotted = captures.get(2).map_or("", |m| m.as_str());
