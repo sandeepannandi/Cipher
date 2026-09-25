@@ -6894,7 +6894,10 @@ fn cross_file_flow_sinks(
         // value onward also contributes the sinks those imports reach.
         // Three bounded rounds propagate through two import hops, and
         // import cycles simply stop changing.
-        let mut deep: Vec<Vec<Vec<std::collections::HashSet<(usize, usize)>>>> = modules
+        // Per parameter, the `(file index, sink line)` pairs reached; per
+        // function, one set per parameter; per module, one entry per callee.
+        type DeepSummaries = Vec<Vec<std::collections::HashSet<(usize, usize)>>>;
+        let mut deep: Vec<DeepSummaries> = modules
             .iter()
             .enumerate()
             .map(|(index, _)| {
@@ -6909,9 +6912,7 @@ fn cross_file_flow_sinks(
                     .collect()
             })
             .collect();
-        let build_imports = |caller: usize,
-                             deep_map: &[Vec<Vec<std::collections::HashSet<(usize, usize)>>>]|
-         -> Vec<ImportedCallee> {
+        let build_imports = |caller: usize, deep_map: &[DeepSummaries]| -> Vec<ImportedCallee> {
             let module = &modules[caller];
             let mut imports = Vec::new();
             for binding in &bindings[caller] {
