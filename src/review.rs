@@ -4369,7 +4369,7 @@ async fn handler(req: HttpRequest) -> HttpResponse {
     }
 
     #[test]
-    fn rust_nested_group_is_not_resolved() {
+    fn rust_nested_group_missing_module_is_clean() {
         let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
 use crate::store::{inner::{find_user}};
 
@@ -4382,6 +4382,106 @@ async fn handler(req: HttpRequest) -> HttpResponse {
 "#;
         let found = scan_project(&[("src/main.rs", main), ("src/store.rs", RUST_STORE)]);
         assert!(found.is_empty());
+    }
+
+    #[test]
+    fn rust_nested_group_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{inner::{find_user}};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let store = "pub mod inner;
+";
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/store.rs", store),
+            ("src/store/inner.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store/inner.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_nested_group_alias_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{inner::{find_user as fetch_user}};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    fetch_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let store = "pub mod inner;
+";
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/store.rs", store),
+            ("src/store/inner.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store/inner.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_nested_group_glob_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{inner::{*}};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let store = "pub mod inner;
+";
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/store.rs", store),
+            ("src/store/inner.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store/inner.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_nested_path_item_call_is_reported_in_store() {
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::store::{inner::find_user};
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let store = "pub mod inner;
+";
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/store.rs", store),
+            ("src/store/inner.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store/inner.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
     }
 
     #[test]
@@ -6493,7 +6593,7 @@ enum ImportBinding {
 /// and a re-export cycle offers nothing. Package imports (JS),
 /// dynamic `require`, `_test.go` files, and calls through instance
 /// variables are not
-/// resolved, nested Rust groups (`use a::{b::{c, d}}`) are not resolved,
+/// resolved, Rust `use` trees spanning several lines are not recognized,
 /// and a callable name offered by two different files resolves to
 /// neither.
 #[allow(clippy::items_after_test_module)]
@@ -7683,25 +7783,19 @@ enum RustDeclaration {
 
 /// The `mod`/`use` declarations of a Rust file. Grouped `use a::{b, c}`
 /// items are expanded to one declaration each (`as` aliases and a `*` glob
-/// item included); `pub use` re-exports are recognized and flagged so the
-/// cross-file pass can resolve one hop through them. Nested groups
-/// (`use a::{b::{c, d}}`) are not recognized.
+/// item included); nested groups (`use a::{b::{c, d}}`) and nested path
+/// items (`use a::{b::c, d}`) flatten to their full segment lists, and
+/// `pub use` re-exports are recognized and flagged so the cross-file pass
+/// can resolve one hop through them. A `use` tree spanning several lines
+/// is not recognized.
 #[allow(clippy::items_after_test_module)]
 fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
     let mut declarations = Vec::new();
-    let (Ok(mod_decl), Ok(use_decl), Ok(group_decl)) = (
+    let (Ok(mod_decl), Ok(use_decl)) = (
         Regex::new(r#"^\s*(?:pub\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"#),
-        Regex::new(r#"^\s*(pub\s+)?use\s+([^;{]+?)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;"#),
-        Regex::new(r#"^\s*(pub\s+)?use\s+([^;{}]+?)::\s*\{([^}]*)\}\s*;"#),
+        Regex::new(r#"^\s*(pub\s+)?use\s+(.+?)\s*;"#),
     ) else {
         return declarations;
-    };
-    let split_path = |path_text: &str| -> Vec<String> {
-        path_text
-            .split("::")
-            .map(|segment| segment.trim().to_string())
-            .filter(|segment| !segment.is_empty())
-            .collect()
     };
     for line in lines {
         let code = line.split("//").next().unwrap_or("");
@@ -7709,62 +7803,10 @@ fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
             declarations.push(RustDeclaration::Mod(name.as_str().to_string()));
             continue;
         }
-        if let Some(captures) = group_decl.captures(code) {
-            let reexport = captures.get(1).is_some();
-            let prefix = split_path(captures.get(2).map(|m| m.as_str()).unwrap_or(""));
-            if prefix.is_empty() {
-                continue;
-            }
-            let items = captures.get(3).map(|m| m.as_str()).unwrap_or("");
-            for item in items.split(',') {
-                let item = item.trim();
-                if item.is_empty() || item.contains('{') {
-                    // Nested groups are skipped rather than guessed.
-                    continue;
-                }
-                let (name, alias) = match item.split_once(" as ") {
-                    Some((name, alias)) => {
-                        let alias = alias.trim();
-                        if alias.is_empty()
-                            || !alias
-                                .chars()
-                                .next()
-                                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                        {
-                            continue;
-                        }
-                        (name.trim(), Some(alias.to_string()))
-                    }
-                    None => (item, None),
-                };
-                if name != "*"
-                    && !name
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                {
-                    continue;
-                }
-                let mut segments = prefix.clone();
-                segments.push(name.to_string());
-                declarations.push(RustDeclaration::Use {
-                    segments,
-                    alias,
-                    reexport,
-                });
-            }
-            continue;
-        }
         if let Some(captures) = use_decl.captures(code) {
             let reexport = captures.get(1).is_some();
-            let path_text = captures.get(2).map(|m| m.as_str()).unwrap_or("");
-            let alias = captures.get(3).map(|m| m.as_str().to_string());
-            let segments: Vec<String> = path_text
-                .split("::")
-                .map(|segment| segment.trim().to_string())
-                .filter(|segment| !segment.is_empty())
-                .collect();
-            if !segments.is_empty() {
+            let body = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+            for (segments, alias) in expand_use_tree(body) {
                 declarations.push(RustDeclaration::Use {
                     segments,
                     alias,
@@ -7774,6 +7816,107 @@ fn rust_declarations(lines: &[&str]) -> Vec<RustDeclaration> {
         }
     }
     declarations
+}
+
+/// Every leaf of one `use` tree: the full segment list plus an optional
+/// `as` alias. `body` is the text between `use` and the final `;`.
+fn expand_use_tree(body: &str) -> Vec<(Vec<String>, Option<String>)> {
+    let mut leaves = Vec::new();
+    let mut cursor = body.trim();
+    expand_use_tree_at(&mut Vec::new(), &mut cursor, &mut leaves);
+    leaves
+}
+
+/// Parses one tree from the front of `cursor`, appending each leaf reached
+/// to `leaves`. `prefix` carries the segments enclosing groups already
+/// consumed; a malformed tail abandons only its own branch.
+fn expand_use_tree_at(
+    prefix: &mut Vec<String>,
+    cursor: &mut &str,
+    leaves: &mut Vec<(Vec<String>, Option<String>)>,
+) {
+    loop {
+        *cursor = cursor.trim_start();
+        if let Some(rest) = cursor.strip_prefix('{') {
+            *cursor = rest;
+            expand_use_group_at(prefix, cursor, leaves);
+            return;
+        }
+        let Some(name) = take_use_ident(cursor) else {
+            return;
+        };
+        prefix.push(name);
+        *cursor = cursor.trim_start();
+        if let Some(rest) = cursor.strip_prefix("as") {
+            if rest.chars().next().is_some_and(char::is_whitespace) {
+                *cursor = rest.trim_start();
+                if let Some(alias) = take_use_ident(cursor) {
+                    leaves.push((prefix.clone(), Some(alias)));
+                }
+                return;
+            }
+        }
+        if let Some(rest) = cursor.strip_prefix("::") {
+            *cursor = rest;
+            continue;
+        }
+        leaves.push((prefix.clone(), None));
+        return;
+    }
+}
+
+/// Parses the comma-separated trees of one `{ ... }` group, each extending
+/// `prefix`, through the closing brace.
+fn expand_use_group_at(
+    prefix: &[String],
+    cursor: &mut &str,
+    leaves: &mut Vec<(Vec<String>, Option<String>)>,
+) {
+    loop {
+        *cursor = cursor.trim_start();
+        if let Some(rest) = cursor.strip_prefix('}') {
+            *cursor = rest;
+            return;
+        }
+        if cursor.is_empty() {
+            return;
+        }
+        let mut branch = prefix.to_owned();
+        expand_use_tree_at(&mut branch, cursor, leaves);
+        *cursor = cursor.trim_start();
+        if let Some(rest) = cursor.strip_prefix(',') {
+            *cursor = rest;
+            continue;
+        }
+        if let Some(rest) = cursor.strip_prefix('}') {
+            *cursor = rest;
+        }
+        return;
+    }
+}
+
+/// Takes one tree item (`*` or an identifier) from the front of `cursor`.
+fn take_use_ident(cursor: &mut &str) -> Option<String> {
+    if let Some(rest) = cursor.strip_prefix('*') {
+        *cursor = rest;
+        return Some("*".to_string());
+    }
+    let len: usize = cursor
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .map(char::len_utf8)
+        .sum();
+    let ident = &cursor[..len];
+    if ident
+        .chars()
+        .next()
+        .is_none_or(|c| !(c.is_ascii_alphabetic() || c == '_'))
+    {
+        return None;
+    }
+    let ident = ident.to_string();
+    *cursor = &cursor[len..];
+    Some(ident)
 }
 
 /// The `package` clause of a Go file; files sharing it in one directory
