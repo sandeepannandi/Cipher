@@ -72,6 +72,6 @@ fn committed_policy_is_a_unique_versioned_baseline() {
     // Exact size of the committed baseline: regenerated with root-relative
     // fingerprints (see `policy_findings_view`), so the count changes only
     // when the baseline is deliberately regenerated.
-    assert_eq!(fingerprints.len(), 70);
+    assert_eq!(fingerprints.len(), 72);
     assert_eq!(unique.len(), fingerprints.len());
 }
