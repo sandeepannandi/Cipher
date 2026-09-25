@@ -3261,6 +3261,7 @@ public class UserService {
         ]);
         assert!(found.is_empty(), "{found:?}");
     }
+
     const JAVA_SERVICE_PACKAGE: &str = r#"package com.example.service;
 
 import java.sql.*;
