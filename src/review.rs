@@ -10135,3 +10135,14 @@ fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
             r#"\b(?:client|reqwest)\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
         ],
     };
+    patterns
+        .iter()
+        .filter_map(|pattern| {
+            Regex::new(pattern).ok().map(|call| FlowSink {
+                call,
+                arguments: outbound_url_argument,
+                line_requires: None,
+            })
+        })
+        .collect()
+}
