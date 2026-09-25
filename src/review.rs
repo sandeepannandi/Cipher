@@ -2813,6 +2813,91 @@ exports.search = (req, res) => {
     }
 
     #[test]
+    fn js_two_import_hop_is_reported_in_final_service() {
+        let route = r#"const search = require('../services/search');
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(search.byName(name));
+};"#;
+        let middle = r#"const store = require('./db-users');
+
+function byName(name) {
+    return store.findByName(name);
+}
+
+module.exports = { byName };"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/search.js", middle),
+            ("src/services/db-users.js", JS_USERS_SERVICE),
+        ]);
+        assert_eq!(
+            found,
+            vec![(
+                "src/services/db-users.js".to_string(),
+                SQLI_FLOW.to_string(),
+                5
+            )]
+        );
+    }
+
+    #[test]
+    fn js_two_import_hop_parameterized_service_is_clean() {
+        let route = r#"const search = require('../services/search');
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(search.byName(name));
+};"#;
+        let middle = r#"const store = require('./db-users');
+
+function byName(name) {
+    return store.findByName(name);
+}
+
+module.exports = { byName };"#;
+        let service = r#"const db = require('../db');
+
+function findByName(name) {
+    return db.prepare('SELECT id, name FROM users WHERE name = ?').get(name);
+}
+
+module.exports = { findByName };"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/search.js", middle),
+            ("src/services/db-users.js", service),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn js_two_import_hop_ambiguous_middle_import_is_not_resolved() {
+        let route = r#"const search = require('../services/search');
+
+exports.search = (req, res) => {
+    const name = req.query.name;
+    return res.json(search.byName(name));
+};"#;
+        let middle = r#"const { findByName } = require('./a');
+const { findByName } = require('./b');
+
+function byName(name) {
+    return findByName(name);
+}
+
+module.exports = { byName };"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/search.js", middle),
+            ("src/services/a.js", JS_USERS_SERVICE),
+            ("src/services/b.js", JS_USERS_SERVICE),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn js_ambiguous_glob_reexport_is_not_resolved() {
         let other = r#"const db = require('../db');
 
@@ -3887,6 +3972,80 @@ pub async fn find_user(pool: &Pool<Postgres>, name: &str) -> Option<String> {
             ("src/lib.rs", lib),
             ("src/intermediate.rs", intermediate),
             ("src/handler.rs", RUST_HANDLER),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn rust_two_import_hop_is_reported_in_store() {
+        let lib = "mod intermediate;\nmod store;";
+        let handler = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::intermediate::find_user;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let intermediate = r#"use sqlx::PgPool;
+
+use crate::store::query_user;
+
+pub async fn find_user(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    query_user(pool, name).await
+}
+"#;
+        // Built from RUST_STORE so the fixture adds no extra copy of the
+        // sink string to this file (the policy baseline counts duplicates).
+        let store = RUST_STORE.replace("find_user", "query_user");
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", handler),
+            ("src/intermediate.rs", intermediate),
+            ("src/store.rs", store.as_str()),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)]
+        );
+    }
+
+    #[test]
+    fn rust_two_import_hop_cycle_without_sink_is_clean() {
+        let lib = "mod intermediate;\nmod store;";
+        let handler = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::intermediate::find_user;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let intermediate = r#"use sqlx::PgPool;
+
+use crate::store::query_user;
+
+pub async fn find_user(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    query_user(pool, name).await
+}
+"#;
+        let store = r#"use sqlx::PgPool;
+
+use crate::intermediate::find_user;
+
+pub async fn query_user(pool: &PgPool, name: &str) -> Result<(), sqlx::Error> {
+    find_user(pool, name).await
+}
+"#;
+        let found = scan_project(&[
+            ("src/lib.rs", lib),
+            ("src/handler.rs", handler),
+            ("src/intermediate.rs", intermediate),
+            ("src/store.rs", store),
         ]);
         assert!(found.is_empty(), "{found:?}");
     }
@@ -5168,8 +5327,11 @@ struct ImportedCallee {
     target: usize,
     /// Parameter count of the target function.
     params: usize,
-    /// Per parameter, the sink lines it reaches inside the target file.
-    summaries: Vec<std::collections::HashSet<usize>>,
+    /// Per parameter, the `(file index, sink line)` pairs a value passed in
+    /// that position reaches. Pairs point at the defining file of each
+    /// sink, so a callee whose own imports forward the value onward
+    /// contributes sink lines in those files as well.
+    summaries: Vec<std::collections::HashSet<(usize, usize)>>,
 }
 
 /// Compute parameter-to-sink summaries for every recognized function. Each
@@ -5419,8 +5581,7 @@ fn flow_pass(
                         !sanitized(arg) && tainted.iter().any(|name| identifier_in(arg, name));
                     if carries_taint {
                         if let Some(reached) = callee.summaries.get(position) {
-                            imported_sink_lines
-                                .extend(reached.iter().map(|line| (callee.target, *line)));
+                            imported_sink_lines.extend(reached.iter().copied());
                         }
                     }
                 }
@@ -6029,9 +6190,12 @@ enum ImportBinding {
 /// holding `main.rs`/`lib.rs`; only `pub` free functions are visible. A
 /// request-tainted
 /// argument passed to an exported function of another file in a position
-/// that reaches a sink reports the sink line in that file. One import hop is
-/// followed; the callee's own same-file helpers are included through its
-/// summaries. JS/TS re-exports and Rust `pub use` re-exports (named,
+/// that reaches a sink reports the sink line in that file. Import hops are
+/// followed through a bounded fixpoint: a callee whose own imports forward
+/// the value onward contributes the sinks those imports reach, so a call
+/// chain across two import hops resolves; the callee's same-file helpers
+/// are included through its summaries, import cycles simply stop changing,
+/// and longer chains stay unresolved. JS/TS re-exports and Rust `pub use` re-exports (named,
 /// `as` alias, grouped, or `*` glob, with `crate::`/`self::`/`super::` or
 /// bare relative paths) resolve through a bounded fixpoint, so chained
 /// re-exports (a barrel re-exporting from another barrel) collapse toward
@@ -6723,7 +6887,33 @@ fn cross_file_flow_sinks(
                 )
             })
             .collect();
-        for (caller, module) in modules.iter().enumerate() {
+        // Deep callee summaries: per file, function, and parameter, the
+        // `(file index, sink line)` pairs a value passed in that position
+        // reaches. They start from the shallow summaries pinned to their
+        // own file, then iterate: a callee whose own imports forward the
+        // value onward also contributes the sinks those imports reach.
+        // Three bounded rounds propagate through two import hops, and
+        // import cycles simply stop changing.
+        // Per parameter, the `(file index, sink line)` pairs reached; per
+        // function, one set per parameter; per module, one entry per callee.
+        type DeepSummaries = Vec<Vec<std::collections::HashSet<(usize, usize)>>>;
+        let mut deep: Vec<DeepSummaries> = modules
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                summaries[index]
+                    .iter()
+                    .map(|function| {
+                        function
+                            .iter()
+                            .map(|lines| lines.iter().map(|line| (index, *line)).collect())
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        let build_imports = |caller: usize, deep_map: &[DeepSummaries]| -> Vec<ImportedCallee> {
+            let module = &modules[caller];
             let mut imports = Vec::new();
             for binding in &bindings[caller] {
                 let (receiver, target, pairs): (Option<String>, usize, Vec<(String, usize)>) =
@@ -6763,7 +6953,7 @@ fn cross_file_flow_sinks(
                 }
                 for (name, function) in pairs {
                     let params = functions[target][function].params.len();
-                    let reached = summaries[target][function].clone();
+                    let reached = deep_map[target][function].clone();
                     if reached.iter().all(|lines| lines.is_empty()) {
                         continue;
                     }
@@ -6812,7 +7002,7 @@ fn cross_file_flow_sinks(
                             {
                                 continue;
                             }
-                            let reached = summaries[*target][*function].clone();
+                            let reached = deep_map[*target][*function].clone();
                             if reached.iter().all(|lines| lines.is_empty()) {
                                 continue;
                             }
@@ -6862,7 +7052,54 @@ fn cross_file_flow_sinks(
                     deduped.push(callee);
                 }
             }
-            let imports = deduped;
+            deduped
+        };
+        for _ in 0..3 {
+            let mut next = deep.clone();
+            let mut changed = false;
+            for (caller, module) in modules.iter().enumerate() {
+                let imports = build_imports(caller, &deep);
+                if imports.is_empty() {
+                    continue;
+                }
+                let sinks = build_sinks(module.language);
+                let calls = FlowCalls {
+                    functions: &functions[caller],
+                    summaries: &summaries[caller],
+                    imports: &imports,
+                };
+                for (function_index, function) in functions[caller].iter().enumerate() {
+                    for (position, param) in function.params.iter().enumerate() {
+                        let (reached, via_calls, imported) = flow_pass(
+                            &lines[caller],
+                            function.body.clone(),
+                            module.language,
+                            &sinks,
+                            sanitized,
+                            std::slice::from_ref(param),
+                            false,
+                            Some(&calls),
+                        );
+                        let mut pairs: std::collections::HashSet<(usize, usize)> = reached
+                            .iter()
+                            .chain(via_calls.iter())
+                            .map(|line| (caller, *line))
+                            .collect();
+                        pairs.extend(imported.iter().copied());
+                        if pairs != next[caller][function_index][position] {
+                            next[caller][function_index][position] = pairs;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            deep = next;
+            if !changed {
+                break;
+            }
+        }
+        for (caller, module) in modules.iter().enumerate() {
+            let imports = build_imports(caller, &deep);
             if imports.is_empty() {
                 continue;
             }
