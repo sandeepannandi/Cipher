@@ -3645,6 +3645,40 @@ def find_orders(customer):
     }
 
     #[test]
+    fn python_parenthesized_import_into_repository_is_reported() {
+        let repository = r#"import sqlite3
+
+
+def find_orders(customer):
+    conn = sqlite3.connect("shop.db")
+    query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+    return conn.execute(query).fetchall()"#;
+        for import in [
+            "from .repository import (find_orders)",
+            "from .repository import (\n    find_orders,\n)",
+            "from . import (repository)",
+        ] {
+            let (import, call) = if import.contains("repository)") {
+                (import, "repository.find_orders(customer)")
+            } else {
+                (import, "find_orders(customer)")
+            };
+            let views = format!(
+                "{import}\n\n\n@app.route(\"/orders\")\ndef orders():\n    customer = request.args.get(\"customer\")\n    return {{\"orders\": {call}}}\n"
+            );
+            let found = scan_project(&[
+                ("app/views.py", views.as_str()),
+                ("app/repository.py", repository),
+            ]);
+            assert_eq!(
+                found,
+                vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 7)],
+                "{import}"
+            );
+        }
+    }
+
+    #[test]
     fn python_numeric_conversion_before_cross_file_call_is_clean() {
         let found = scan_project(&[
             (
@@ -7087,7 +7121,8 @@ enum ImportBinding {
 /// files (`require`/`import` of `./x`, `../x`, `x/index`; Python `from .x
 /// import f`, `from x import f`, `import x as m` resolved next to the
 /// importing file or at the project root; multi-line JS import, require,
-/// and re-export declarations are joined before matching). Go files in one directory share a
+/// and re-export declarations are joined before matching, as are
+/// parenthesized Python from-imports). Go files in one directory share a
 /// package namespace, so a bare call resolves to a function defined in a
 /// sibling file; `import "mod/pkg"` (optionally aliased, single or grouped
 /// form) resolves through the module path of the nearest `go.mod`, and only
@@ -9276,8 +9311,38 @@ fn flow_imports(
             ) else {
                 return bindings;
             };
-            for line in lines {
-                let code = line.split('#').next().unwrap_or("").trim_end();
+            // Parenthesized from-imports (`from .x import (\n a,\n b\n)`,
+            // black's format, and single-line `from .x import (a)`) are
+            // flattened to the plain shape first: lines join until the
+            // parens balance (bounded 40 lines), then the parens drop.
+            let mut normalized: Vec<String> = Vec::with_capacity(lines.len());
+            {
+                let mut index = 0;
+                while index < lines.len() {
+                    let code = lines[index].split('#').next().unwrap_or("").trim();
+                    if !(code.starts_with("from ") && code.contains(" import (")) {
+                        normalized.push(code.to_string());
+                        index += 1;
+                        continue;
+                    }
+                    let mut joined = code.to_string();
+                    let mut balance =
+                        joined.matches('(').count() as i64 - joined.matches(')').count() as i64;
+                    let mut used = 1;
+                    while balance > 0 && used < 40 && index + used < lines.len() {
+                        let next = lines[index + used].split('#').next().unwrap_or("").trim();
+                        joined.push(' ');
+                        joined.push_str(next);
+                        balance =
+                            joined.matches('(').count() as i64 - joined.matches(')').count() as i64;
+                        used += 1;
+                    }
+                    normalized.push(joined.replace(['(', ')'], ""));
+                    index += used;
+                }
+            }
+            for code in &normalized {
+                let code = code.as_str();
                 if let Some(captures) = from_import.captures(code) {
                     let dots = captures.get(1).map_or(0, |m| m.as_str().len());
                     let dotted = captures.get(2).map_or("", |m| m.as_str());
