@@ -592,6 +592,59 @@ pub(crate) async fn collect_review_findings(
     Ok(report)
 }
 
+/// Policy fingerprints must be portable: they key on the finding's file path,
+/// which the scanner records as absolute. Rewriting paths root-relative before
+/// evaluation keeps a baseline written on one machine (a CI checkout at a fixed
+/// path, a contributor clone anywhere else) valid on every other. Paths outside
+/// the scanned root are left as-is.
+fn policy_findings_view(findings: &[Finding], root: &std::path::Path) -> Vec<Finding> {
+    findings
+        .iter()
+        .map(|finding| {
+            let mut viewed = finding.clone();
+            if let Some(path) = viewed.file_path.as_deref() {
+                if let Ok(relative) = std::path::Path::new(path).strip_prefix(root) {
+                    viewed.file_path = Some(relative.to_string_lossy().replace('\\', "/"));
+                }
+            }
+            viewed
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod policy_view_tests {
+    use super::*;
+
+    fn inj(file: &str) -> Finding {
+        Finding::new(
+            FindingType::Injection,
+            "SQL Injection",
+            "d",
+            Severity::High,
+            Confidence::High,
+            "r",
+        )
+        .at(file, 4)
+    }
+
+    #[test]
+    fn policy_view_relativizes_paths_under_root() {
+        let root = std::path::Path::new("/repo");
+        let under = inj("/repo/src/app.rs");
+        let outside = inj("/other/app.rs");
+        let viewed = policy_findings_view(&[under, outside], root);
+        assert_eq!(viewed[0].file_path.as_deref(), Some("src/app.rs"));
+        // Paths outside the scanned root are left untouched.
+        assert_eq!(viewed[1].file_path.as_deref(), Some("/other/app.rs"));
+        // The relativized view fingerprints exactly like a natively relative finding.
+        assert_eq!(
+            stable_fingerprints(&viewed[..1]),
+            stable_fingerprints(&[inj("src/app.rs")])
+        );
+    }
+}
+
 /// Run the `cipher-ai review` command
 #[allow(clippy::too_many_arguments)]
 pub async fn run_review(
@@ -699,7 +752,8 @@ pub async fn run_review(
     }
 
     if let Some(path) = write_policy_baseline {
-        let baseline = crate::policy::Policy::baseline_from(&report.findings);
+        let policy_findings = policy_findings_view(&report.findings, &canonical_path);
+        let baseline = crate::policy::Policy::baseline_from(&policy_findings);
         baseline.write(path)?;
         eprintln!(
             "  [POLICY] Accepted {} stable fingerprints in {}",
@@ -715,7 +769,8 @@ pub async fn run_review(
         .or_else(|| default_policy.is_file().then_some(default_policy));
     let policy_evaluation = if let Some(path) = effective_policy.as_deref() {
         let policy = crate::policy::Policy::load(path)?;
-        let evaluation = policy.evaluate(&report.findings)?;
+        let policy_findings = policy_findings_view(&report.findings, &canonical_path);
+        let evaluation = policy.evaluate(&policy_findings)?;
         eprintln!(
             "  [POLICY] {} new, {} baseline, {} suppressed, {} expired, {} below threshold",
             evaluation.new,
