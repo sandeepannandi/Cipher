@@ -2680,6 +2680,114 @@ module.exports = Repo;
     }
 
     #[test]
+    fn python_instance_variable_call_is_reported_in_store() {
+        let views = r#"from .repository import Store
+
+
+class Views:
+    def __init__(self):
+        self.store = Store()
+
+    @app.route("/orders")
+    def orders(self):
+        customer = request.args.get("customer")
+        return {"orders": self.store.find_orders(customer)}
+"#;
+        let repository = r#"import sqlite3
+
+
+class Store:
+    def find_orders(self, customer):
+        conn = sqlite3.connect("shop.db")
+        query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+        return conn.execute(query).fetchall()
+"#;
+        let found = scan_project(&[("app/views.py", views), ("app/repository.py", repository)]);
+        assert_eq!(
+            found,
+            vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 8)]
+        );
+    }
+
+    #[test]
+    fn python_instance_variable_module_call_is_reported_in_store() {
+        let views = r#"from . import repository
+
+
+class Views:
+    def __init__(self):
+        self.store = repository.Store()
+
+    @app.route("/orders")
+    def orders(self):
+        customer = request.args.get("customer")
+        return {"orders": self.store.find_orders(customer)}
+"#;
+        let repository = r#"import sqlite3
+
+
+class Store:
+    def find_orders(self, customer):
+        conn = sqlite3.connect("shop.db")
+        query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+        return conn.execute(query).fetchall()
+"#;
+        let found = scan_project(&[("app/views.py", views), ("app/repository.py", repository)]);
+        assert_eq!(
+            found,
+            vec![("app/repository.py".to_string(), SQLI_FLOW.to_string(), 8)]
+        );
+    }
+
+    #[test]
+    fn python_unassigned_instance_variable_call_is_not_resolved() {
+        let views = r#"from .repository import Store
+
+
+class Views:
+    @app.route("/orders")
+    def orders(self):
+        customer = request.args.get("customer")
+        return {"orders": self.store.find_orders(customer)}
+"#;
+        let repository = r#"import sqlite3
+
+
+class Store:
+    def find_orders(self, customer):
+        conn = sqlite3.connect("shop.db")
+        query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+        return conn.execute(query).fetchall()
+"#;
+        let found = scan_project(&[("app/views.py", views), ("app/repository.py", repository)]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn python_instance_variable_without_import_is_not_resolved() {
+        let views = r#"class Views:
+    def __init__(self):
+        self.store = Store()
+
+    @app.route("/orders")
+    def orders(self):
+        customer = request.args.get("customer")
+        return {"orders": self.store.find_orders(customer)}
+"#;
+        let repository = r#"import sqlite3
+
+
+class Store:
+    def find_orders(self, customer):
+        conn = sqlite3.connect("shop.db")
+        query = "SELECT id FROM orders WHERE customer = '%s'" % customer
+        return conn.execute(query).fetchall()
+"#;
+        let found = scan_project(&[("app/views.py", views), ("app/repository.py", repository)]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn js_default_export_call_is_reported_in_service() {
         let service = r#"const db = require('../db');
 
@@ -6128,9 +6236,10 @@ fn flow_pass(
 /// Calls on one line that resolve to an imported function: `binding.name(...)`
 /// for a module binding, or a bare `name(...)` for a function imported by
 /// name. A same-file definition with the same name shadows the import.
-/// `this.repo.name(...)` resolves when the instance variable was assigned
-/// `new Repo(...)` and `Repo` is a whole-module import here. Longer
-/// receiver chains, keyword or spread arguments, and extra arguments are
+/// `this.repo.name(...)` / `self.repo.name(...)` resolve when the
+/// instance variable was assigned an imported class (`new Repo(...)` for
+/// JS, `Repo(...)` or `repo.Repo(...)` for Python). Longer receiver
+/// chains, keyword or spread arguments, and extra arguments are
 /// skipped.
 #[allow(clippy::items_after_test_module)]
 fn imported_calls(
@@ -6751,10 +6860,13 @@ enum ImportBinding {
 /// re-exports (a barrel re-exporting from another barrel) collapse toward
 /// the defining module pass by pass, iterated to convergence; in both
 /// languages a name offered by two sources at any pass resolves to neither,
-/// and a re-export cycle offers nothing. JS calls through instance
-/// variables (`this.repo.m(...)`) resolve when the variable is assigned
-/// `new Repo(...)` and `Repo` is a whole-module import; methods match by
-/// name within the imported file. Package imports (JS), dynamic `require`,
+/// and a re-export cycle offers nothing. Calls through instance
+/// variables resolve for JS (`this.repo.m(...)` when the variable is
+/// assigned `new Repo(...)` and `Repo` is a whole-module import) and for
+/// Python (`self.repo.m(...)` when the variable is assigned `Repo(...)`
+/// from `from .repo import Repo`, or `repo.Repo(...)` with
+/// `import repo`); methods match by name within the imported file.
+/// Package imports (JS), dynamic `require`,
 /// `_test.go` files, and other instance receivers are not
 /// resolved, Rust `use` trees spanning several lines are not recognized,
 /// and a callable name offered by two different files resolves to
@@ -7433,6 +7545,11 @@ fn cross_file_flow_sinks(
     let instance_new = Regex::new(
         r#"^\s*this\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*new\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
     );
+    let instance_plain =
+        Regex::new(r#"^\s*self\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\("#);
+    let instance_attr = Regex::new(
+        r#"^\s*self\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\("#,
+    );
     type Family = (fn(FlowLanguage) -> Vec<FlowSink>, fn(&str) -> bool, u8);
     let families: [Family; 3] = [
         (sql_flow_sinks, contains_numeric_conversion, 0),
@@ -7643,6 +7760,80 @@ fn cross_file_flow_sinks(
                         }
                         imports.push(ImportedCallee {
                             receiver: Some(format!("this.{}", variable.as_str())),
+                            name: function.name.clone(),
+                            target,
+                            params: function.params.len(),
+                            summaries: reached,
+                        });
+                    }
+                }
+            }
+            // Python instance variables: `self.repo = Store(...)` where
+            // `Store` comes from `from .store import Store`, or
+            // `self.repo = store.Store(...)` with `import store`, lets
+            // `self.repo.m(...)` resolve to a method of the imported
+            // file. Methods match by name within that file, whichever of
+            // its classes defines them.
+            if module.language == FlowLanguage::Python {
+                let (Ok(instance_plain), Ok(instance_attr)) =
+                    (instance_plain.as_ref(), instance_attr.as_ref())
+                else {
+                    return imports;
+                };
+                for line in &lines[caller] {
+                    let code = line.split('#').next().unwrap_or("");
+                    let (variable, target) = if let Some(captures) = instance_attr.captures(code) {
+                        let (Some(variable), Some(module_name)) =
+                            (captures.get(1), captures.get(2))
+                        else {
+                            continue;
+                        };
+                        let target = bindings[caller].iter().find_map(|binding| {
+                            if let ImportBinding::Module {
+                                binding: name,
+                                target,
+                                ..
+                            } = binding
+                            {
+                                (name.as_str() == module_name.as_str()
+                                    && modules[*target].language == FlowLanguage::Python)
+                                    .then_some(*target)
+                            } else {
+                                None
+                            }
+                        });
+                        (variable, target)
+                    } else if let Some(captures) = instance_plain.captures(code) {
+                        let (Some(variable), Some(class)) = (captures.get(1), captures.get(2))
+                        else {
+                            continue;
+                        };
+                        let target = bindings[caller].iter().find_map(|binding| {
+                            if let ImportBinding::Function { local, target, .. } = binding {
+                                (local.as_str() == class.as_str()
+                                    && modules[*target].language == FlowLanguage::Python)
+                                    .then_some(*target)
+                            } else {
+                                None
+                            }
+                        });
+                        (variable, target)
+                    } else {
+                        continue;
+                    };
+                    let Some(target) = target else {
+                        continue;
+                    };
+                    for (position, function) in functions[target].iter().enumerate() {
+                        if !function.method {
+                            continue;
+                        }
+                        let reached = deep_map[target][position].clone();
+                        if reached.iter().all(|lines| lines.is_empty()) {
+                            continue;
+                        }
+                        imports.push(ImportedCallee {
+                            receiver: Some(format!("self.{}", variable.as_str())),
                             name: function.name.clone(),
                             target,
                             params: function.params.len(),
