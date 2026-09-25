@@ -1906,6 +1906,51 @@ cursor.execute(query, (request.args.get("id"),))"#,
         );
         assert!(findings.is_empty());
     }
+
+    #[test]
+    fn python_flask_route_param_reaching_query_is_reported() {
+        let findings = scan(
+            r#"@app.route("/user/<name>")
+def show_user(name):
+    query = f"SELECT * FROM users WHERE name = '{name}'"
+    cursor.execute(query)"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn python_flask_int_converter_param_is_clean() {
+        let findings = scan(
+            r#"@app.route("/user/<int:uid>")
+def show_user(uid):
+    query = "SELECT * FROM users WHERE id = " + str(uid)
+    cursor.execute(query)"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn python_django_view_kwarg_reaching_query_is_reported() {
+        let findings = scan(
+            r#"def update_user(request, user_id):
+    cursor.execute(f"UPDATE users SET admin = 1 WHERE id = '{user_id}'")"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn python_plain_helper_param_is_not_seeded() {
+        let findings = scan(
+            r#"def build_query(name):
+    query = f"SELECT * FROM users WHERE name = '{name}'"
+    cursor.execute(query)"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
     #[test]
     fn python_parameterized_query_with_request_value_is_clean() {
         let findings = scan(
@@ -6880,7 +6925,10 @@ fn request_flow_sink_lines(
         Some(&calls),
     );
     sink_lines.extend(callee_sink_lines);
-    for (body, seeds) in spring_annotated_seeds(&lines, language, &functions) {
+    for (body, seeds) in spring_annotated_seeds(&lines, language, &functions)
+        .into_iter()
+        .chain(python_route_seeds(&lines, language, &functions))
+    {
         let (seeded, seeded_callee, _) = flow_pass(
             &lines,
             body,
@@ -6994,6 +7042,62 @@ fn flow_summaries(
         summaries = next;
     }
     summaries
+}
+
+/// Flask route captures and Django view keyword arguments enter the view
+/// already attacker-controlled from the URL pattern, mirroring
+/// `spring_annotated_seeds` for Python. A `@<something>.route(".../<name>")`
+/// decorator in the few lines above the function seeds the named parameter
+/// unless its converter renders a canonical safe type (`int`, `float`,
+/// `uuid`). Any function whose first parameter is literally `request` is
+/// treated as a Django-style view, seeding the remaining parameters (URL
+/// captures); Flask's global `request` object needs no seeding.
+#[allow(clippy::items_after_test_module)]
+fn python_route_seeds(
+    lines: &[&str],
+    language: FlowLanguage,
+    functions: &[FlowFunction],
+) -> Vec<(std::ops::Range<usize>, Vec<String>)> {
+    if language != FlowLanguage::Python {
+        return Vec::new();
+    }
+    let Ok(route) = Regex::new(r#"@[A-Za-z_][A-Za-z0-9_.]*\.route\s*\(\s*['\"]([^'\"]*)['\"]"#)
+    else {
+        return Vec::new();
+    };
+    let Ok(capture) = Regex::new(r"<(?:([A-Za-z_][A-Za-z0-9_]*):)?([A-Za-z_][A-Za-z0-9_]*)>")
+    else {
+        return Vec::new();
+    };
+    functions
+        .iter()
+        .filter(|function| !function.params.is_empty())
+        .filter_map(|function| {
+            let mut seeds: Vec<String> = Vec::new();
+            let window_start = function.header.saturating_sub(5);
+            for line in &lines[window_start..function.header] {
+                if let Some(pattern) = route.captures(line).and_then(|c| c.get(1)) {
+                    for cap in capture.captures_iter(pattern.as_str()) {
+                        let converter = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                        let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+                        if !matches!(converter, "int" | "float" | "uuid")
+                            && function.params.iter().any(|param| param == name)
+                        {
+                            seeds.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            if function
+                .params
+                .first()
+                .is_some_and(|param| param == "request")
+            {
+                seeds.extend(function.params[1..].iter().cloned());
+            }
+            (!seeds.is_empty()).then(|| (function.body.clone(), seeds))
+        })
+        .collect()
 }
 
 /// Spring-style handler parameters (`@RequestParam`, `@PathVariable`,
@@ -9072,6 +9176,12 @@ fn cross_file_flow_sinks(
             );
             for (body, seeds) in
                 spring_annotated_seeds(&lines[caller], module.language, &functions[caller])
+                    .into_iter()
+                    .chain(python_route_seeds(
+                        &lines[caller],
+                        module.language,
+                        &functions[caller],
+                    ))
             {
                 let (_, _, seeded_reached) = flow_pass(
                     &lines[caller],
