@@ -4305,6 +4305,94 @@ func FindUser(name string) (*sql.Rows, error) {
     }
 
     #[test]
+    fn go_dot_import_name_offered_by_two_packages_resolves_to_neither() {
+        let store = r#"package store
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+var db *sql.DB
+
+func FindUser(name string) (*sql.Rows, error) {
+	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+	return db.Query(query)
+}
+"#;
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	. "example.com/shop/store"
+	. "example.com/shop/store2"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	FindUser(name)
+}
+"#;
+        let found = scan_project(&[
+            (
+                "go.mod",
+                "module example.com/shop
+",
+            ),
+            ("main.go", main),
+            ("store/store.go", store),
+            ("store2/store2.go", store),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn go_dot_import_call_is_reported_in_store() {
+        let store = r#"package store
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+var db *sql.DB
+
+func FindUser(name string) (*sql.Rows, error) {
+	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name)
+	return db.Query(query)
+}
+"#;
+        let main = r#"package main
+
+import (
+	"net/http"
+
+	. "example.com/shop/store"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	FindUser(name)
+}
+"#;
+        let found = scan_project(&[
+            (
+                "go.mod",
+                "module example.com/shop
+",
+            ),
+            ("main.go", main),
+            ("store/store.go", store),
+        ]);
+        assert_eq!(
+            found,
+            vec![("store/store.go".to_string(), SQLI_FLOW.to_string(), 12)],
+            "dot import"
+        );
+    }
+
+    #[test]
     fn go_replace_module_call_is_reported_in_store() {
         let main = r#"package main
 
@@ -4987,6 +5075,31 @@ async fn handler(req: HttpRequest) -> HttpResponse {
             ("src/api/v1/users.rs", users.as_str()),
         ]);
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn rust_pubuse_barrel_call_is_reported_in_store() {
+        let barrel = "pub use crate::store::find_user;";
+        let main = r#"use actix_web::{get, HttpRequest, HttpResponse};
+use crate::barrel::find_user;
+
+#[get("/user")]
+async fn handler(req: HttpRequest) -> HttpResponse {
+    let name = req.match_info().get("name").unwrap_or("");
+    find_user(&POOL, name).await.ok();
+    HttpResponse::Ok().finish()
+}
+"#;
+        let found = scan_project(&[
+            ("src/main.rs", main),
+            ("src/barrel.rs", barrel),
+            ("src/store.rs", RUST_STORE),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/store.rs".to_string(), SQLI_FLOW.to_string(), 5)],
+            "pub use barrel"
+        );
     }
 
     #[test]
@@ -7263,9 +7376,9 @@ enum ImportBinding {
         exported: String,
         target: usize,
     },
-    /// `from .service import *`: every exported name of `target` is
-    /// callable bare. Expanded into Function bindings once exports are
-    /// known, so later passes never see this variant.
+    /// `from .service import *`, Go `import . "pkg"`: every exported
+    /// name of `target` is callable bare. Expanded into Function bindings
+    /// once exports are known, so later passes never see this variant.
     Star { target: usize },
 }
 
@@ -7381,57 +7494,6 @@ fn cross_file_flow_sinks(
         .zip(&lines)
         .map(|(module, lines)| flow_imports(lines, module.language, &module.path, &root, &index_of))
         .collect();
-    // Python `from .x import *`: every name the target exports is callable
-    // bare in the importing module. Expand eagerly into Function bindings.
-    // A name the module defines or binds explicitly stays local; a name
-    // offered by two star imports resolves to neither; private
-    // (underscore) names are not visible through a star.
-    for index in 0..modules.len() {
-        if modules[index].language != FlowLanguage::Python {
-            continue;
-        }
-        let star_targets: Vec<usize> = bindings[index]
-            .iter()
-            .filter_map(|binding| match binding {
-                ImportBinding::Star { target } => Some(*target),
-                _ => None,
-            })
-            .collect();
-        if star_targets.is_empty() {
-            continue;
-        }
-        bindings[index].retain(|binding| !matches!(binding, ImportBinding::Star { .. }));
-        let mut offers: std::collections::HashMap<String, Vec<usize>> =
-            std::collections::HashMap::new();
-        for target in star_targets {
-            for name in exports[target].keys() {
-                if name.starts_with('_') {
-                    continue;
-                }
-                offers.entry(name.clone()).or_default().push(target);
-            }
-        }
-        for (name, mut targets) in offers {
-            targets.sort();
-            targets.dedup();
-            if targets.len() != 1 || exports[index].contains_key(&name) {
-                continue;
-            }
-            let shadowed = bindings[index].iter().any(|binding| match binding {
-                ImportBinding::Function { local, .. } => local == &name,
-                ImportBinding::Module { binding, .. } => binding == &name,
-                ImportBinding::Star { .. } => false,
-            });
-            if shadowed {
-                continue;
-            }
-            bindings[index].push(ImportBinding::Function {
-                local: name.clone(),
-                exported: name,
-                target: targets[0],
-            });
-        }
-    }
     // Re-exporting ("barrel") modules: named (`export { f } from './x'`) and
     // glob (`export * from './x'`) re-exports make the source function
     // visible under the barrel's path. Chained barrels (a barrel
@@ -7856,6 +7918,14 @@ fn cross_file_flow_sinks(
                             first
                         }
                     };
+                    if binding == "." {
+                        // Dot import: the package's exported names are
+                        // callable bare. Expanded once exports are known.
+                        for target in targets {
+                            bindings[index].push(ImportBinding::Star { target });
+                        }
+                        continue;
+                    }
                     for target in targets {
                         bindings[index].push(ImportBinding::Module {
                             binding: binding.clone(),
@@ -8105,6 +8175,65 @@ fn cross_file_flow_sinks(
                 }
             }
             _ => {}
+        }
+    }
+    // Python `from .x import *` and Go `import . "pkg"`: every name the
+    // target exports is callable bare in the importing module. Expand
+    // eagerly into Function bindings. A name the module defines or binds
+    // explicitly stays local; a name offered by two star imports resolves
+    // to neither; names that are not visible through a star (private in
+    // Python, unexported in Go) are skipped.
+    for index in 0..modules.len() {
+        if !matches!(
+            modules[index].language,
+            FlowLanguage::Python | FlowLanguage::Go
+        ) {
+            continue;
+        }
+        let star_targets: Vec<usize> = bindings[index]
+            .iter()
+            .filter_map(|binding| match binding {
+                ImportBinding::Star { target } => Some(*target),
+                _ => None,
+            })
+            .collect();
+        if star_targets.is_empty() {
+            continue;
+        }
+        bindings[index].retain(|binding| !matches!(binding, ImportBinding::Star { .. }));
+        let mut offers: std::collections::HashMap<String, Vec<usize>> =
+            std::collections::HashMap::new();
+        for target in star_targets {
+            for name in exports[target].keys() {
+                let visible = match modules[index].language {
+                    FlowLanguage::Go => name.chars().next().is_some_and(|ch| ch.is_uppercase()),
+                    _ => !name.starts_with('_'),
+                };
+                if !visible {
+                    continue;
+                }
+                offers.entry(name.clone()).or_default().push(target);
+            }
+        }
+        for (name, mut targets) in offers {
+            targets.sort();
+            targets.dedup();
+            if targets.len() != 1 || exports[index].contains_key(&name) {
+                continue;
+            }
+            let shadowed = bindings[index].iter().any(|binding| match binding {
+                ImportBinding::Function { local, .. } => local == &name,
+                ImportBinding::Module { binding, .. } => binding == &name,
+                ImportBinding::Star { .. } => false,
+            });
+            if shadowed {
+                continue;
+            }
+            bindings[index].push(ImportBinding::Function {
+                local: name.clone(),
+                exported: name,
+                target: targets[0],
+            });
         }
     }
     if bindings.iter().all(|found| found.is_empty()) {
@@ -8980,9 +9109,9 @@ fn java_class_name(lines: &[&str], path: &Path) -> Option<String> {
 fn go_import_specs(lines: &[&str]) -> Vec<(Option<String>, String)> {
     let mut specs = Vec::new();
     let (Ok(single), Ok(group_start), Ok(entry)) = (
-        Regex::new(r#"^\s*import\s+(?:([A-Za-z_][A-Za-z0-9_.]*)\s+)?"([^"]+)""#),
+        Regex::new(r#"^\s*import\s+(?:([A-Za-z_][A-Za-z0-9_]*|[._])\s+)?"([^"]+)""#),
         Regex::new(r#"^\s*import\s*\(\s*$"#),
-        Regex::new(r#"^\s*(?:([A-Za-z_][A-Za-z0-9_.]*)\s+)?"([^"]+)""#),
+        Regex::new(r#"^\s*(?:([A-Za-z_][A-Za-z0-9_]*|[._])\s+)?"([^"]+)""#),
     ) else {
         return specs;
     };
@@ -8996,7 +9125,7 @@ fn go_import_specs(lines: &[&str]) -> Vec<(Option<String>, String)> {
             }
             if let Some(captures) = entry.captures(code) {
                 let alias = captures.get(1).map(|name| name.as_str().to_string());
-                if !matches!(alias.as_deref(), Some("_") | Some(".")) {
+                if !matches!(alias.as_deref(), Some("_")) {
                     let path = captures.get(2).map_or("", |spec| spec.as_str());
                     specs.push((alias, path.to_string()));
                 }
@@ -9009,7 +9138,7 @@ fn go_import_specs(lines: &[&str]) -> Vec<(Option<String>, String)> {
         }
         if let Some(captures) = single.captures(code) {
             let alias = captures.get(1).map(|name| name.as_str().to_string());
-            if !matches!(alias.as_deref(), Some("_") | Some(".")) {
+            if !matches!(alias.as_deref(), Some("_")) {
                 let path = captures.get(2).map_or("", |spec| spec.as_str());
                 specs.push((alias, path.to_string()));
             }
@@ -10006,14 +10135,3 @@ fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
             r#"\b(?:client|reqwest)\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
         ],
     };
-    patterns
-        .iter()
-        .filter_map(|pattern| {
-            Regex::new(pattern).ok().map(|call| FlowSink {
-                call,
-                arguments: outbound_url_argument,
-                line_requires: None,
-            })
-        })
-        .collect()
-}
