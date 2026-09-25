@@ -1855,6 +1855,28 @@ cursor.execute(query)"#,
         );
         assert_eq!(titles(&findings), vec![SQLI]);
     }
+
+    #[test]
+    fn python_str_wrapped_request_value_is_reported() {
+        let findings = scan(
+            r#"q = str(request.args.get("q"))
+query = f"SELECT * FROM items WHERE name = '{q}'"
+cursor.execute(query)"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn python_int_wrapped_request_value_is_clean() {
+        let findings = scan(
+            r#"n = int(request.args.get("n"))
+query = "SELECT * FROM items WHERE id = " + str(n)
+cursor.execute(query)"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
     #[test]
     fn python_parameterized_query_with_request_value_is_clean() {
         let findings = scan(
@@ -1942,6 +1964,28 @@ const rows = db.query(sql);"#,
         );
         assert_eq!(titles(&findings), vec![SQLI]);
     }
+
+    #[test]
+    fn js_string_wrapped_request_value_is_reported() {
+        let findings = scan(
+            r#"const q = String(req.query.q);
+const sql = `SELECT * FROM items WHERE name = '${q}'`;
+const rows = db.query(sql);"#,
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn js_number_wrapped_request_value_is_clean() {
+        let findings = scan(
+            r#"const n = Number(req.query.n);
+const sql = "SELECT * FROM items WHERE id = " + n;
+const rows = db.query(sql);"#,
+            "js",
+        );
+        assert!(findings.is_empty());
+    }
     #[test]
     fn js_placeholder_query_with_request_value_is_clean() {
         let findings = scan(
@@ -1988,6 +2032,27 @@ ResultSet rs = stmt.executeQuery(sql);"#,
         assert!(findings.is_empty());
     }
 
+    #[test]
+    fn java_valueof_wrapped_request_value_is_reported() {
+        let findings = scan(
+            r#"String s = String.valueOf(request.getParameter("q"));
+String sql = "SELECT * FROM items WHERE name = '" + s + "'";
+ResultSet rs = stmt.executeQuery(sql);"#,
+            "java",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+    }
+
+    #[test]
+    fn java_parseint_wrapped_request_value_is_clean() {
+        let findings = scan(
+            r#"int n = Integer.parseInt(request.getParameter("n"));
+String sql = "SELECT * FROM items WHERE id = " + n;
+ResultSet rs = stmt.executeQuery(sql);"#,
+            "java",
+        );
+        assert!(findings.is_empty());
+    }
     #[test]
     fn java_prepared_statement_bind_value_is_clean() {
         let findings = scan(
@@ -6160,7 +6225,7 @@ fn python_path_traversal_sink_lines(
     }
 
     let Ok(source) = Regex::new(
-        r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:request\.(?:args|form|values|GET|POST|headers|cookies|json|data)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#,
+        r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:[A-Za-z_][A-Za-z0-9_.]*\s*\(\s*)?(?:request\.(?:args|form|values|GET|POST|headers|cookies|json|data)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#,
     ) else {
         return std::collections::HashSet::new();
     };
@@ -6240,7 +6305,7 @@ fn java_path_traversal_sink_lines(
     }
 
     let Ok(source) = Regex::new(
-        r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo|getQueryString)\s*\("#,
+        r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:[A-Za-z_][A-Za-z0-9_.]*\s*\(\s*)?(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo|getQueryString)\s*\("#,
     ) else {
         return std::collections::HashSet::new();
     };
@@ -6420,7 +6485,7 @@ fn js_path_traversal_sink_lines(
     }
 
     let Ok(source) = Regex::new(
-        r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body|headers|cookies)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#,
+        r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:[A-Za-z_$][A-Za-z0-9_$]*\s*\(\s*)?(?:req|request)\.(?:params|query|body|headers|cookies)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#,
     ) else {
         return std::collections::HashSet::new();
     };
@@ -6628,13 +6693,13 @@ fn call_arguments(text: &str, open: usize) -> Vec<String> {
 fn flow_source_regex(language: FlowLanguage) -> Option<Regex> {
     let pattern = match language {
         FlowLanguage::JavaScript => {
-            r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:req|request)\.(?:params|query|body|headers|cookies)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#
+            r#"(?i)^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:[A-Za-z_$][A-Za-z0-9_$]*\s*\(\s*)?(?:req|request)\.(?:params|query|body|headers|cookies)(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\s*\[[^\]]+\])"#
         }
         FlowLanguage::Python => {
-            r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:request\.(?:args|form|values|GET|POST|headers|cookies|json|data)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#
+            r#"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:[A-Za-z_][A-Za-z0-9_.]*\s*\(\s*)?(?:request\.(?:args|form|values|GET|POST|headers|cookies|json|data)(?:\.get\s*\([^)]*\)|\s*\[[^\]]+\])|request\.path)"#
         }
         FlowLanguage::Java => {
-            r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo|getQueryString)\s*\("#
+            r#"(?i)^\s*(?:final\s+)?(?:[A-Za-z_][A-Za-z0-9_.<>\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:[A-Za-z_][A-Za-z0-9_.]*\s*\(\s*)?(?:req|request)\s*\.\s*(?:getParameter|getHeader|getPathInfo|getQueryString)\s*\("#
         }
         FlowLanguage::Go => {
             r#"^\s*(?:(?:var\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s+string)?\s*(?::=|=)\s*(?:(?:r|req|request)\s*\.\s*(?:URL\s*\.\s*Query\s*\(\s*\)\s*\.\s*Get\s*\(|FormValue\s*\(|PostFormValue\s*\(|URL\s*\.\s*Path\b)|(?:c|ctx)\s*\.\s*(?:Param|Query|DefaultQuery|QueryArray|PostForm|DefaultPostForm|PostFormArray|FormValue|QueryParam|GetHeader|Cookie)\s*\()|(?:if\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s*:?=\s*)?(?:c|ctx)\s*\.\s*(?:Bind|BindJSON|BindQuery|BindUri|ShouldBind|ShouldBindJSON|ShouldBindQuery|ShouldBindUri|ShouldBindWith)\s*\(\s*&\s*([A-Za-z_][A-Za-z0-9_]*))"#
@@ -10134,6 +10199,7 @@ fn contains_numeric_conversion(text: &str) -> bool {
         "long.parselong(",
         "long.valueof(",
         "uuid.fromstring(",
+        "uuid.uuid(",
         "strconv.atoi(",
         "strconv.parseint(",
         "strconv.parseuint(",
