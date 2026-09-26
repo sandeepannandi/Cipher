@@ -7673,7 +7673,9 @@ fn flow_pass(
             if code.contains("=")
                 && code.contains('{')
                 && !code.contains('}')
-                && (code.contains("req") || code.contains("request"))
+                && (code.trim_start().starts_with("const {")
+                    || code.trim_start().starts_with("let {")
+                    || code.trim_start().starts_with("var {"))
             {
                 destructuring_names = Some(code.to_string());
                 continue;
