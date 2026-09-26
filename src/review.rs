@@ -85,6 +85,17 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Code Injection",
+        "Untrusted request data is evaluated as JavaScript code.",
+        Severity::Critical,
+        Confidence::High,
+        Some(OwaspCategory::A03Injection),
+        r#"(?i)(?:eval|Function)\s*\([^)]*(?:req|request)\.(?:params|query|body|headers|cookies)"#,
+        &["js", "ts"],
+        "Avoid eval/new Function on request data; use safe data parsing and validation."
+    );
+
+    add_vuln!(
         "Command Injection",
         "User input is passed to a shell command, which could allow command injection attacks.",
         Severity::Critical, Confidence::High, Some(OwaspCategory::A03Injection),
@@ -1948,6 +1959,21 @@ return algorithm(payload).hexdigest()"#,
             "py",
         );
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn js_eval_request_and_function_are_reported_static_is_clean() {
+        let findings = scan(
+            "eval(req.body.code);\neval(1+2);\nnew Function(req.query.code);",
+            "js",
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.title == "Code Injection")
+                .count(),
+            2
+        );
     }
 
     const SQLI: &str = "SQL Injection — String Concatenation";
@@ -6724,7 +6750,7 @@ fn python_path_traversal_sink_lines(
         return std::collections::HashSet::new();
     };
 
-    let mut tainted = std::collections::HashSet::new();
+    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sink_lines = std::collections::HashSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let code = line.split('#').next().unwrap_or("").trim();
@@ -6803,7 +6829,7 @@ fn java_path_traversal_sink_lines(
         return std::collections::HashSet::new();
     };
 
-    let mut tainted = std::collections::HashSet::new();
+    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sink_lines = std::collections::HashSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let code = line.trim();
@@ -6890,7 +6916,7 @@ fn go_path_traversal_sink_lines(
         return std::collections::HashSet::new();
     };
 
-    let mut tainted = std::collections::HashSet::new();
+    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sink_lines = std::collections::HashSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let code = line.trim();
@@ -6983,7 +7009,7 @@ fn js_path_traversal_sink_lines(
         return std::collections::HashSet::new();
     };
 
-    let mut tainted = std::collections::HashSet::new();
+    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sink_lines = std::collections::HashSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let trimmed = line.trim();
@@ -11078,6 +11104,7 @@ fn contains_command_sanitizer(text: &str) -> bool {
 /// Argument-vector process calls without a shell are not sinks.
 /// `shlex.quote` and numeric conversions stop the flow. Same-file and
 /// straight-line only; no interprocedural claim.
+
 #[allow(clippy::items_after_test_module)]
 fn command_injection_sink_lines(
     content: &str,
