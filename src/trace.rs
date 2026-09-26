@@ -174,7 +174,7 @@ fn collect_functions(project_path: &Path) -> Vec<FunctionDef> {
         }
         let Ok(entry) = result else { continue };
         let path = entry.path();
-        if !path.is_file() || scan::should_exclude(path) || scan::is_binary(path) {
+        if !path.is_file() || scan::should_exclude_in(path, project_path) || scan::is_binary(path) {
             continue;
         }
         let ext = path

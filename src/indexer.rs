@@ -483,7 +483,10 @@ pub async fn run_init(project_path: &Path, force: bool) -> Result<()> {
         match result {
             Ok(entry) => {
                 let path = entry.path();
-                if path.is_file() && !scan::should_exclude(path) && is_supported(path) {
+                if path.is_file()
+                    && !scan::should_exclude_in(path, &canonical_path)
+                    && is_supported(path)
+                {
                     files.push(path.to_path_buf());
                 }
             }

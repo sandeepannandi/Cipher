@@ -1523,7 +1523,10 @@ pub async fn collect_zeroday_findings(
 
         if let Ok(entry) = result {
             let path = entry.path();
-            if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
+            if path.is_file()
+                && !scan::should_exclude_in(path, &canonical_path)
+                && !scan::is_binary(path)
+            {
                 let ext = path
                     .extension()
                     .map(|e| e.to_str().unwrap_or("").to_lowercase())
