@@ -3022,7 +3022,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
             for finding in scan_file_for_vulns_with(path, &patterns, cross_file.get(path)) {
                 // Only the flow families; unrelated pattern rules (IDOR on
                 // `id` lookups, etc.) are covered by their own tests.
-                if ![SQLI_FLOW, CMDI, SSRF].contains(&finding.title.as_str()) {
+                if ![SQLI_FLOW, CMDI, SSRF, "Code Injection"].contains(&finding.title.as_str()) {
                     continue;
                 }
                 collect(path, &finding);
