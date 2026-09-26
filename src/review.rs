@@ -7616,6 +7616,7 @@ fn flow_pass(
     .ok();
 
     let mut tainted: std::collections::HashSet<String> = seeds.iter().cloned().collect();
+    let mut destructuring_names: Option<String> = None;
     for line_index in range {
         let Some(line) = lines.get(line_index) else {
             break;
@@ -7635,6 +7636,44 @@ fn flow_pass(
         }
 
         if track_sources && language == FlowLanguage::JavaScript {
+            if let Some(names) = destructuring_names.as_mut() {
+                names.push(' ');
+                names.push_str(code);
+                if names.contains('}') {
+                    if let Some(captures) = destructure.as_ref().and_then(|re| re.captures(names)) {
+                        if let Some(members) = captures.get(1) {
+                            for part in members.as_str().split(',') {
+                                let local = part
+                                    .split('=')
+                                    .next()
+                                    .unwrap_or("")
+                                    .rsplit(':')
+                                    .next()
+                                    .unwrap_or("")
+                                    .trim();
+                                if !local.is_empty() {
+                                    tainted.insert(local.to_string());
+                                }
+                            }
+                        }
+                    }
+                    destructuring_names = None;
+                }
+                continue;
+            }
+            if code.contains("=")
+                && code.contains('{')
+                && !code.contains('}')
+                && (code.contains("req.query")
+                    || code.contains("req.params")
+                    || code.contains("req.body")
+                    || code.contains("request.query")
+                    || code.contains("request.params")
+                    || code.contains("request.body"))
+            {
+                destructuring_names = Some(code.to_string());
+                continue;
+            }
             if let Some(names) = destructure
                 .as_ref()
                 .and_then(|re| re.captures(code))
