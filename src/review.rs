@@ -2637,16 +2637,25 @@ req, err := http.NewRequest("POST", "https://api.example.com/search", strings.Ne
         let route = r#"const AllocationsDAO = require('../data/allocations-dao');
 function allocations(req) {
   const allocationsDAO = new AllocationsDAO(db);
-  const threshold = req.query.threshold;
-  allocationsDAO.getByUserIdAndThreshold(req.session.userId, threshold);
+  const {
+    threshold
+  } = req.query;
+  allocationsDAO.getByUserIdAndThreshold(req.session.userId, threshold, callback);
 }"#;
-        let dao = r#"function AllocationsDAO(db) {
-  this.getByUserIdAndThreshold = (userId, threshold) => {
-    const query = { $where: `this.userId == '${userId}' && this.threshold > ${threshold}` };
-    return db.collection('allocations').find(query);
+        let dao = r#"const AllocationsDAO = function(db) {
+  this.getByUserIdAndThreshold = (userId, threshold, callback) => {
+    const parsedUserId = parseInt(userId);
+    const searchCriteria = () => {
+      if (threshold) {
+        return {
+          $where: `this.userId == ${parsedUserId} && this.stocks > '${threshold}'`
+        };
+      }
+    };
+    return db.collection('allocations').find(searchCriteria());
   };
 }
-module.exports = AllocationsDAO;"#;
+exports.AllocationsDAO = AllocationsDAO;"#;
         let found = scan_project(&[
             ("app/routes/allocations.js", route),
             ("app/data/allocations-dao.js", dao),
