@@ -7673,12 +7673,7 @@ fn flow_pass(
             if code.contains("=")
                 && code.contains('{')
                 && !code.contains('}')
-                && (code.contains("req.query")
-                    || code.contains("req.params")
-                    || code.contains("req.body")
-                    || code.contains("request.query")
-                    || code.contains("request.params")
-                    || code.contains("request.body"))
+                && (code.contains("req") || code.contains("request"))
             {
                 destructuring_names = Some(code.to_string());
                 continue;
