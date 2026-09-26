@@ -484,6 +484,10 @@ fn scan_file_for_vulns_with(
         command_injection_sinks.extend(cross_file.command.iter().copied());
         ssrf_sinks.extend(cross_file.ssrf.iter().copied());
     }
+    let mut code_injection_sinks = code_injection_sink_lines(&content, &ext);
+    if let Some(cross_file) = cross_file {
+        code_injection_sinks.extend(cross_file.code.iter().copied());
+    }
 
     for (line_num, line) in content.lines().enumerate() {
         let line_number = line_num + 1;
@@ -520,7 +524,9 @@ fn scan_file_for_vulns_with(
                 || (pattern.name == "Command Injection"
                     && command_injection_sinks.contains(&line_number))
                 || (pattern.name == "Server-Side Request Forgery (SSRF)"
-                    && ssrf_sinks.contains(&line_number));
+                    && ssrf_sinks.contains(&line_number))
+                || (pattern.name == "Code Injection"
+                    && code_injection_sinks.contains(&line_number));
             if !pattern_matches {
                 continue;
             }
@@ -2624,6 +2630,35 @@ req, err := http.NewRequest("POST", "https://api.example.com/search", strings.Ne
             "go",
         );
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn nodegoat_constructor_arrow_where_sink_reached_across_files() {
+        let route = r#"const AllocationsDAO = require('../data/allocations-dao');
+function allocations(req) {
+  const allocationsDAO = new AllocationsDAO(db);
+  const threshold = req.query.threshold;
+  allocationsDAO.getByUserIdAndThreshold(req.session.userId, threshold);
+}"#;
+        let dao = r#"function AllocationsDAO(db) {
+  this.getByUserIdAndThreshold = (userId, threshold) => {
+    const query = { $where: `this.userId == '${userId}' && this.threshold > ${threshold}` };
+    return db.collection('allocations').find(query);
+  };
+}
+module.exports = AllocationsDAO;"#;
+        let found = scan_project(&[
+            ("app/routes/allocations.js", route),
+            ("app/data/allocations-dao.js", dao),
+        ]);
+        assert!(
+            found.contains(&(
+                "app/data/allocations-dao.js".to_string(),
+                SQLI_FLOW.to_string(),
+                3
+            )),
+            "{found:?}"
+        );
     }
 
     const SQLI_FLOW: &str = "SQL Injection — String Concatenation";
@@ -8059,6 +8094,52 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
                 }
             }
         }
+        let assigned_arrow = if language == FlowLanguage::JavaScript {
+            Regex::new(
+                r"^\s*this\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?\(([^()]*)\)\s*=>\s*\{",
+            )
+            .ok()
+            .and_then(|re| {
+                re.captures(&header_text)
+                    .map(|c| (c[1].to_string(), c[2].to_string()))
+            })
+        } else {
+            None
+        };
+        if let Some((name, raw_params)) = assigned_arrow {
+            if let Some(params) = flow_parameters(&raw_params, language) {
+                let mut depth = 0i64;
+                let mut opened = false;
+                let mut end = None;
+                for (offset, next) in lines.iter().enumerate().skip(index) {
+                    for ch in blank_plain_strings(next, language).chars() {
+                        match ch {
+                            '{' => depth += 1,
+                            '}' => depth -= 1,
+                            _ => {}
+                        }
+                    }
+                    if depth > 0 {
+                        opened = true;
+                    }
+                    if opened && depth <= 0 {
+                        end = Some(offset);
+                        break;
+                    }
+                }
+                if let Some(end) = end {
+                    functions.push(FlowFunction {
+                        name,
+                        params,
+                        header: index,
+                        signature_end: index + 1,
+                        body: index + 1..end,
+                        method: true,
+                    });
+                    continue;
+                }
+            }
+        }
         let matched = headers.iter().find_map(|(re, method)| {
             re.captures(joined.as_deref().unwrap_or(&header_text))
                 .map(|captures| {
@@ -8275,6 +8356,7 @@ struct CrossFileSinkLines {
     sql: std::collections::HashSet<usize>,
     command: std::collections::HashSet<usize>,
     ssrf: std::collections::HashSet<usize>,
+    code: std::collections::HashSet<usize>,
 }
 
 /// How a caller file binds an imported file.
@@ -9210,7 +9292,7 @@ fn cross_file_flow_sinks(
     }
 
     let instance_new = Regex::new(
-        r#"^\s*this\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*new\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
+        r#"^\s*(?:(?:const|let|var)\s+)?(?:this\.)?([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*new\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
     );
     let instance_plain =
         Regex::new(r#"^\s*self\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\("#);
@@ -9223,7 +9305,11 @@ fn cross_file_flow_sinks(
         (command_flow_sinks, contains_command_sanitizer, 1),
         (ssrf_flow_sinks, contains_numeric_conversion, 2),
     ];
-    for (build_sinks, sanitized, family) in families {
+    for (build_sinks, sanitized, family) in families.into_iter().chain(std::iter::once((
+        code_injection_flow_sinks as fn(FlowLanguage) -> Vec<FlowSink>,
+        (|_| false) as fn(&str) -> bool,
+        3,
+    ))) {
         let summaries: Vec<FlowSummaries> = modules
             .iter()
             .enumerate()
@@ -9399,47 +9485,55 @@ fn cross_file_flow_sinks(
                 let Ok(instance_new) = instance_new.as_ref() else {
                     return imports;
                 };
-                for line in &lines[caller] {
-                    let Some(captures) = instance_new.captures(line) else {
-                        continue;
-                    };
-                    let (Some(variable), Some(class)) = (captures.get(1), captures.get(2)) else {
-                        continue;
-                    };
-                    let target = bindings[caller].iter().find_map(|binding| {
-                        let (name, target) = match binding {
-                            ImportBinding::Module {
-                                binding: name,
-                                target,
-                                ..
-                            } => (name.as_str(), *target),
-                            ImportBinding::Function { local, target, .. } => {
-                                (local.as_str(), *target)
-                            }
-                            ImportBinding::Star { .. } => return None,
+                for caller_function in &functions[caller] {
+                    for line in &lines[caller][caller_function.body.clone()] {
+                        let Some(captures) = instance_new.captures(line) else {
+                            continue;
                         };
-                        (name == class.as_str()
-                            && modules[target].language == FlowLanguage::JavaScript)
-                            .then_some(target)
-                    });
-                    let Some(target) = target else {
-                        continue;
-                    };
-                    for (position, function) in functions[target].iter().enumerate() {
-                        if !function.method {
+                        let (Some(variable), Some(class)) = (captures.get(1), captures.get(2))
+                        else {
                             continue;
-                        }
-                        let reached = deep_map[target][position].clone();
-                        if reached.iter().all(|lines| lines.is_empty()) {
-                            continue;
-                        }
-                        imports.push(ImportedCallee {
-                            receiver: Some(format!("this.{}", variable.as_str())),
-                            name: function.name.clone(),
-                            target,
-                            params: function.params.len(),
-                            summaries: reached,
+                        };
+                        let target = bindings[caller].iter().find_map(|binding| {
+                            let (name, target) = match binding {
+                                ImportBinding::Module {
+                                    binding: name,
+                                    target,
+                                    ..
+                                } => (name.as_str(), *target),
+                                ImportBinding::Function { local, target, .. } => {
+                                    (local.as_str(), *target)
+                                }
+                                ImportBinding::Star { .. } => return None,
+                            };
+                            (name == class.as_str()
+                                && modules[target].language == FlowLanguage::JavaScript)
+                                .then_some(target)
                         });
+                        let Some(target) = target else {
+                            continue;
+                        };
+                        for (position, function) in functions[target].iter().enumerate() {
+                            if !function.method {
+                                continue;
+                            }
+                            let reached = deep_map[target][position].clone();
+                            if reached.iter().all(|lines| lines.is_empty()) {
+                                continue;
+                            }
+                            let receiver = if line.trim_start().starts_with("this.") {
+                                format!("this.{}", variable.as_str())
+                            } else {
+                                variable.as_str().to_string()
+                            };
+                            imports.push(ImportedCallee {
+                                receiver: Some(receiver),
+                                name: function.name.clone(),
+                                target,
+                                params: function.params.len(),
+                                summaries: reached,
+                            });
+                        }
                     }
                 }
             }
@@ -9644,7 +9738,8 @@ fn cross_file_flow_sinks(
                 match family {
                     0 => entry.sql.insert(line),
                     1 => entry.command.insert(line),
-                    _ => entry.ssrf.insert(line),
+                    2 => entry.ssrf.insert(line),
+                    _ => entry.code.insert(line),
                 };
             }
         }
@@ -11022,6 +11117,44 @@ fn sql_injection_sink_lines(content: &str, extension: &str) -> std::collections:
         &sql_flow_sinks(language),
         contains_numeric_conversion,
     )
+}
+
+#[allow(clippy::items_after_test_module)]
+fn code_injection_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let Some(language) = flow_language(extension) else {
+        return std::collections::HashSet::new();
+    };
+    let sinks = code_injection_flow_sinks(language);
+    if sinks.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    request_flow_sink_lines(content, language, &sinks, |_| false)
+}
+
+#[allow(clippy::items_after_test_module)]
+fn code_injection_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
+    if language != FlowLanguage::JavaScript {
+        return Vec::new();
+    }
+    [
+        (
+            r#"(?:^|[^.\w$])(eval)\s*\("#,
+            first_argument as FlowArguments,
+        ),
+        (
+            r#"\bnew\s+(Function)\s*\("#,
+            first_argument as FlowArguments,
+        ),
+    ]
+    .iter()
+    .filter_map(|(pattern, arguments)| {
+        Regex::new(pattern).ok().map(|call| FlowSink {
+            call,
+            arguments: *arguments,
+            line_requires: None,
+        })
+    })
+    .collect()
 }
 
 #[allow(clippy::items_after_test_module)]
