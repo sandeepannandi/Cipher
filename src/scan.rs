@@ -44,25 +44,24 @@ pub const MAX_WALK_DEPTH: usize = 30;
 /// Max files to scan when running review or secrets commands
 pub const MAX_SCAN_FILES: usize = 10_000;
 
-/// Check if a path should be excluded from scanning/indexing
+/// Check a path relative to its scan root. Ancestors of the root must not
+/// affect exclusions, even when they have names like `target` or `vendor`.
+pub fn should_exclude_in(path: &Path, root: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(should_exclude)
+}
+
+/// Check a root-relative path for excluded directories or file names.
 pub fn should_exclude(path: &Path) -> bool {
-    let path_str = path.to_string_lossy().to_lowercase();
+    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
     for exclude in ALWAYS_EXCLUDE {
-        if exclude.starts_with("*.") {
-            let ext = &exclude[1..];
-            if path_str.ends_with(ext) {
+        if let Some(suffix) = exclude.strip_prefix('*') {
+            if file_name.to_lowercase().ends_with(&suffix.to_lowercase()) {
                 return true;
             }
-        } else if *exclude == ".git" {
-            // Match the `.git` directory as a whole path component so
-            // `.github/workflows`, `.gitlab-ci.yml` etc. are still scanned.
-            if path
-                .components()
-                .any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))
-            {
-                return true;
-            }
-        } else if path_str.contains(&exclude.to_lowercase()) {
+        } else if path
+            .components()
+            .any(|component| component.as_os_str().eq_ignore_ascii_case(exclude))
+        {
             return true;
         }
     }
@@ -154,6 +153,46 @@ mod tests {
     #[test]
     fn test_should_exclude_pycache() {
         assert!(should_exclude(Path::new("/project/__pycache__/main.pyc")));
+    }
+
+    #[test]
+    fn test_exclusions_are_root_relative_and_whole_components() {
+        let root = Path::new("/home/target/vendor/build/dist/node_modules/project");
+        for name in [
+            "target1",
+            "targeting",
+            "builder",
+            "distribution",
+            "node_modules2",
+            "vendorized",
+            ".environment",
+        ] {
+            assert!(
+                !should_exclude_in(&root.join(name).join("src/main.rs"), root),
+                "{name}"
+            );
+        }
+        assert!(!should_exclude_in(&root.join("src/main.rs"), root));
+        for name in [
+            "target",
+            "build",
+            "dist",
+            "node_modules",
+            "vendor",
+            ".venv",
+            ".git",
+        ] {
+            assert!(
+                should_exclude_in(&root.join(name).join("main.rs"), root),
+                "{name}"
+            );
+        }
+        assert!(should_exclude_in(&root.join("src/Cargo.lock"), root));
+        assert!(!should_exclude_in(&root.join("src/Cargo.lockfile"), root));
+        assert!(!should_exclude_in(
+            Path::new("/different/target/main.rs"),
+            root
+        ));
     }
 
     #[test]

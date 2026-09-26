@@ -289,7 +289,10 @@ pub(crate) fn collect_secrets_findings(scan_path: &Path) -> Result<FindingReport
         }
         if let Ok(entry) = result {
             let path = entry.path();
-            if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
+            if path.is_file()
+                && !scan::should_exclude_in(path, &canonical_path)
+                && !scan::is_binary(path)
+            {
                 report.extend(scan_file(path, &patterns));
                 file_count += 1;
             }

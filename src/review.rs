@@ -604,7 +604,10 @@ pub(crate) async fn collect_review_findings(
 
         if let Ok(entry) = result {
             let path = entry.path();
-            if path.is_file() && !scan::should_exclude(path) && !scan::is_binary(path) {
+            if path.is_file()
+                && !scan::should_exclude_in(path, &canonical_path)
+                && !scan::is_binary(path)
+            {
                 let ext = file_extension(path);
                 if !ext.is_empty() && is_supported_extension(&ext) {
                     files.push(path.to_path_buf());
@@ -1677,6 +1680,41 @@ mod scanner_regression_tests {
         let findings = scan_file_for_vulns(&path, &build_vuln_patterns());
         fs::remove_file(path).expect("remove fixture");
         findings
+    }
+
+    #[tokio::test]
+    async fn review_scans_repo_beneath_excluded_named_ancestors() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("cipher-target-{nonce}"))
+            .join("target")
+            .join("vendor")
+            .join("project");
+        fs::create_dir_all(root.join("src")).expect("mkdir");
+        fs::write(
+            root.join("src/app.js"),
+            format!(
+                "const jwt_secret = {:?};",
+                ["replace", "this", "secret"].join("-")
+            ),
+        )
+        .expect("fixture");
+        // Use a known pattern rule, not just a file-count assertion.
+        let report = collect_review_findings(&root, false, None)
+            .await
+            .expect("review");
+        fs::remove_dir_all(root.parent().unwrap().parent().unwrap().parent().unwrap())
+            .expect("cleanup fixture");
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.title == "JWT Secret Hardcoded"),
+            "review silently skipped the repository"
+        );
     }
 
     fn titles(findings: &[Finding]) -> Vec<&str> {
@@ -10238,7 +10276,7 @@ fn go_nested_modules(root: &Path) -> Vec<(std::path::PathBuf, String)> {
             visited += 1;
             let path = entry.path();
             if path.is_dir() {
-                if !crate::scan::should_exclude(&path) {
+                if !crate::scan::should_exclude_in(&path, root) {
                     pending.push(path);
                 }
             } else if path.file_name().is_some_and(|name| name == "go.mod") {

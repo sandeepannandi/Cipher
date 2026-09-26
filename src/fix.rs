@@ -1129,7 +1129,7 @@ fn resolve_finding_path(stored: &str, project_path: &Path) -> PathBuf {
         }
         if let Ok(entry) = result {
             let path = entry.path();
-            if path.is_file() && !crate::scan::should_exclude(path) {
+            if path.is_file() && !crate::scan::should_exclude_in(path, project_path) {
                 if let Ok(rel) = path.strip_prefix(project_path) {
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
                     if normalized_stored.ends_with(&format!("/{rel_str}")) {
