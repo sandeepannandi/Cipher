@@ -289,6 +289,9 @@ pub struct Finding {
     /// (usage-reachability for deps findings), e.g. "used in 3 files: a.js, b.js"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<String>,
+    /// Verified ordered source-to-sink path, or null when none was established.
+    #[serde(default)]
+    pub source_to_sink: Option<Vec<crate::trace::TraceStep>>,
 }
 
 /// Default business impact (moderate) for findings deserialized from older reports
@@ -326,6 +329,7 @@ impl Finding {
             created_at: Utc::now().to_rfc3339(),
             source: source.into(),
             usage: None,
+            source_to_sink: None,
         }
     }
 
@@ -584,6 +588,17 @@ impl FindingReport {
             if let Some(ref usage) = finding.usage {
                 println!("    {} {}", "Usage:".bold().cyan(), usage.trim());
             }
+            if let Some(steps) = &finding.source_to_sink {
+                println!("    {}", "Source-to-sink path:".bold());
+                for step in steps {
+                    println!(
+                        "      {}:{} [{}] {}",
+                        step.file, step.line, step.action, step.detail
+                    );
+                }
+            } else {
+                println!("    Source-to-sink path: Not established by analysis.");
+            }
         }
     }
 }
@@ -734,6 +749,8 @@ pub struct FindingLocation {
 pub struct FindingEvidence {
     pub snippet: Option<String>,
     pub summary: Option<String>,
+    #[serde(default)]
+    pub source_to_sink: Option<Vec<crate::trace::TraceStep>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -768,6 +785,7 @@ impl FindingEnvelope {
             },
             evidence: FindingEvidence {
                 snippet: f.code_snippet.clone(),
+                source_to_sink: f.source_to_sink.clone(),
                 summary: f.usage.clone(),
             },
             remediation: f.remediation.clone().map(|summary| FindingRemediation {
@@ -1281,6 +1299,7 @@ mod tests {
             "created_at": finding.created_at.to_string(),
             "source": "review",
             "usage": "endpoint: GET /search",
+            "source_to_sink": null,
         });
 
         assert_eq!(serde_json::to_value(&finding).unwrap(), expected);

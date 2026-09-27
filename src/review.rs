@@ -744,9 +744,51 @@ pub(crate) async fn collect_review_findings(
         }
     }
 
+    attach_verified_paths(&mut report.findings, &canonical_path);
     downgrade_test_context(&mut report.findings, &canonical_path);
     report.sort_by_risk();
     Ok(report)
+}
+
+/// Match a tracer path to the exact reported terminal file and line. A
+/// pattern match without a verified path remains explicitly untraced.
+fn attach_verified_paths(findings: &mut [Finding], root: &Path) {
+    let paths = crate::trace::trace_review_paths(root);
+    for finding in findings {
+        let (Some(file), Some(line)) = (&finding.file_path, finding.line_number) else {
+            continue;
+        };
+        let matched = paths
+            .iter()
+            .filter(|path| {
+                let Some(first) = path.steps.first() else {
+                    return false;
+                };
+                let Some(last) = path.steps.last() else {
+                    return false;
+                };
+                let sink = last.detail.to_ascii_lowercase();
+                let compatible = match finding.title.as_str() {
+                    "Code Injection" => sink.contains("eval") || sink.contains("assert"),
+                    "Command Injection" => {
+                        sink.contains("exec") || sink.contains("system") || sink.contains("popen")
+                    }
+                    "SQL Injection — String Concatenation" => {
+                        sink.contains("query") || sink.contains("execute")
+                    }
+                    _ => false,
+                };
+                compatible
+                    && first.action == "source"
+                    && last.action == "sink"
+                    && last.line == line
+                    && Path::new(&last.file) == Path::new(file)
+            })
+            .min_by_key(|path| path.steps.len());
+        if let Some(path) = matched {
+            finding.source_to_sink = Some(path.steps.clone());
+        }
+    }
 }
 
 /// Policy fingerprints must be portable: they key on the finding's file path,
@@ -1548,9 +1590,20 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
                 level: sarif_level(f.severity).to_string(),
                 message: SarifMessage {
                     text: format!(
-                        "{}\n\n**Remediation:** {}",
+                        "{}\n\n**Remediation:** {}\n\n**Source-to-sink path:** {}",
                         f.description,
-                        f.remediation.as_deref().unwrap_or("Not specified")
+                        f.remediation.as_deref().unwrap_or("Not specified"),
+                        f.source_to_sink
+                            .as_ref()
+                            .map(|steps| steps
+                                .iter()
+                                .map(|step| format!(
+                                    "{}:{} [{}] {}",
+                                    step.file, step.line, step.action, step.detail
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(" -> "))
+                            .unwrap_or_else(|| "Not established by analysis.".to_string())
                     ),
                 },
                 locations: vec![SarifLocation {
@@ -1790,6 +1843,71 @@ mod scanner_regression_tests {
     }
 
     const IDOR: &str = "Insecure Direct Object Reference (IDOR)";
+
+    #[tokio::test]
+    async fn review_output_has_verified_source_to_sink_path_or_explicit_absence() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-path-output-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("app.js"),
+            r#"const run = (req) => {
+    const name = req.body.name;
+    const command = name;
+    exec(command);
+};"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("config.js"),
+            "const jwt_secret = 'insecure-static-secret';",
+        )
+        .unwrap();
+        let report = collect_review_findings(&root, false, None).await.unwrap();
+        let flow = report
+            .findings
+            .iter()
+            .find(|f| {
+                f.title == "Command Injection"
+                    && f.file_path
+                        .as_deref()
+                        .is_some_and(|p| p.ends_with("app.js"))
+            })
+            .expect("command injection finding");
+        let steps = flow.source_to_sink.as_ref().expect("verified trace");
+        assert_eq!(steps.first().unwrap().action, "source");
+        assert_eq!(steps.first().unwrap().line, 2);
+        assert!(steps.iter().any(|s| s.action == "flow" && s.line == 3));
+        assert_eq!(steps.last().unwrap().line, 4);
+        let regex = report
+            .findings
+            .iter()
+            .find(|f| f.title == "JWT Secret Hardcoded")
+            .expect("regex finding");
+        assert!(regex.source_to_sink.is_none());
+        let json: serde_json::Value = serde_json::from_str(&generate_review_json(&report)).unwrap();
+        let entries = json["findings"].as_array().unwrap();
+        assert!(entries
+            .iter()
+            .any(|f| f["title"] == "Command Injection" && f["source_to_sink"].is_array()));
+        assert!(entries
+            .iter()
+            .any(|f| f["title"] == "JWT Secret Hardcoded" && f["source_to_sink"].is_null()));
+        let sarif: serde_json::Value =
+            serde_json::from_str(&generate_sarif(&report, &root)).unwrap();
+        assert!(sarif["runs"][0]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["message"]["text"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Source-to-sink path:")));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn bare_orm_lookup_and_guarded_spring_access_are_not_idor() {
