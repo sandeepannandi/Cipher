@@ -1863,7 +1863,10 @@ mod scanner_regression_tests {
         .unwrap();
         fs::write(
             root.join("config.js"),
-            "const jwt_secret = 'insecure-static-secret';",
+            format!(
+                "const jwt_secret = {:?};",
+                ["insecure", "static", "secret"].join("-")
+            ),
         )
         .unwrap();
         let report = collect_review_findings(&root, false, None).await.unwrap();
