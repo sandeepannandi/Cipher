@@ -85,6 +85,17 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Code Injection",
+        "Untrusted request data is evaluated as JavaScript code.",
+        Severity::Critical,
+        Confidence::High,
+        Some(OwaspCategory::A03Injection),
+        r#"(?i)(?:eval|Function)\s*\([^)]*(?:req|request)\.(?:params|query|body|headers|cookies)"#,
+        &["js", "ts"],
+        "Avoid eval/new Function on request data; use safe data parsing and validation."
+    );
+
+    add_vuln!(
         "Command Injection",
         "User input is passed to a shell command, which could allow command injection attacks.",
         Severity::Critical, Confidence::High, Some(OwaspCategory::A03Injection),
@@ -473,6 +484,10 @@ fn scan_file_for_vulns_with(
         command_injection_sinks.extend(cross_file.command.iter().copied());
         ssrf_sinks.extend(cross_file.ssrf.iter().copied());
     }
+    let mut code_injection_sinks = code_injection_sink_lines(&content, &ext);
+    if let Some(cross_file) = cross_file {
+        code_injection_sinks.extend(cross_file.code.iter().copied());
+    }
 
     for (line_num, line) in content.lines().enumerate() {
         let line_number = line_num + 1;
@@ -509,7 +524,9 @@ fn scan_file_for_vulns_with(
                 || (pattern.name == "Command Injection"
                     && command_injection_sinks.contains(&line_number))
                 || (pattern.name == "Server-Side Request Forgery (SSRF)"
-                    && ssrf_sinks.contains(&line_number));
+                    && ssrf_sinks.contains(&line_number))
+                || (pattern.name == "Code Injection"
+                    && code_injection_sinks.contains(&line_number));
             if !pattern_matches {
                 continue;
             }
@@ -1950,6 +1967,21 @@ return algorithm(payload).hexdigest()"#,
         assert!(findings.is_empty());
     }
 
+    #[test]
+    fn js_eval_request_and_function_are_reported_static_is_clean() {
+        let findings = scan(
+            "eval(req.body.code);\neval(1+2);\nnew Function(req.query.code);",
+            "js",
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.title == "Code Injection")
+                .count(),
+            2
+        );
+    }
+
     const SQLI: &str = "SQL Injection — String Concatenation";
 
     #[test]
@@ -2600,6 +2632,107 @@ req, err := http.NewRequest("POST", "https://api.example.com/search", strings.Ne
         assert!(findings.is_empty());
     }
 
+    #[test]
+    fn nodegoat_constructor_arrow_where_sink_reached_across_files() {
+        let route = r#"const AllocationsDAO = require('../data/allocations-dao').AllocationsDAO;
+class AllocationsHandler {
+  constructor(db) {
+    const allocationsDAO = new AllocationsDAO(db);
+    this.displayAllocations = (req, res, next) => {
+      const {
+        threshold
+      } = req.query;
+      allocationsDAO.getByUserIdAndThreshold(req.session.userId, threshold, callback);
+    };
+  }
+}"#;
+        let dao = r#"const AllocationsDAO = function(db) {
+  this.getByUserIdAndThreshold = (userId, threshold, callback) => {
+    const parsedUserId = parseInt(userId);
+    const searchCriteria = () => {
+      if (threshold) {
+        return {
+          $where: `this.userId == ${parsedUserId} && this.stocks > '${threshold}'`
+        };
+      }
+    };
+    return db.collection('allocations').find(searchCriteria());
+  };
+}
+exports.AllocationsDAO = AllocationsDAO;"#;
+        let found = scan_project(&[
+            ("app/routes/allocations.js", route),
+            ("app/data/allocations-dao.js", dao),
+        ]);
+        assert!(
+            found.contains(&(
+                "app/data/allocations-dao.js".to_string(),
+                SQLI_FLOW.to_string(),
+                7
+            )),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn js_multiline_request_destructure_only_seeds_request_values() {
+        let unsafe_findings = scan(
+            "const {\n  term\n} = req.query;\ndb.query(`SELECT * FROM users WHERE name = '${term}'`);",
+            "js",
+        );
+        assert_eq!(titles(&unsafe_findings), vec![SQLI_FLOW]);
+        let safe_findings = scan(
+            "const {\n  term\n} = trustedOptions;\ndb.query(`SELECT * FROM users WHERE name = '${term}'`);",
+            "js",
+        );
+        assert!(safe_findings.is_empty(), "{safe_findings:?}");
+    }
+
+    #[test]
+    fn js_property_require_instance_call_is_reported_in_service() {
+        let route = r#"const Repo = require('../services/repo').Repo;
+function Handler() {
+    const repo = new Repo();
+    this.search = (req, res) => {
+        const { name } = req.query;
+        return res.json(repo.findByName(name));
+    };
+}"#;
+        let repo = r#"function Repo() {
+    this.findByName = (name) => {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    };
+}
+exports.Repo = Repo;"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/services/repo.js".to_string(), SQLI_FLOW.to_string(), 4)]
+        );
+    }
+
+    #[test]
+    fn js_commented_where_is_not_a_sink() {
+        let findings = scan(
+            "const threshold = req.query.threshold;\n/*\nreturn {$where: `${threshold}`};\n*/",
+            "js",
+        );
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn js_where_is_only_an_sql_sink() {
+        let findings = scan(
+            "const threshold = req.query.threshold;\nreturn {$where: `${threshold}`};",
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI_FLOW]);
+    }
+
     const SQLI_FLOW: &str = "SQL Injection — String Concatenation";
 
     #[test]
@@ -2952,7 +3085,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
             for finding in scan_file_for_vulns_with(path, &patterns, cross_file.get(path)) {
                 // Only the flow families; unrelated pattern rules (IDOR on
                 // `id` lookups, etc.) are covered by their own tests.
-                if ![SQLI_FLOW, CMDI, SSRF].contains(&finding.title.as_str()) {
+                if ![SQLI_FLOW, CMDI, SSRF, "Code Injection"].contains(&finding.title.as_str()) {
                     continue;
                 }
                 collect(path, &finding);
@@ -6724,7 +6857,7 @@ fn python_path_traversal_sink_lines(
         return std::collections::HashSet::new();
     };
 
-    let mut tainted = std::collections::HashSet::new();
+    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sink_lines = std::collections::HashSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let code = line.split('#').next().unwrap_or("").trim();
@@ -6803,7 +6936,7 @@ fn java_path_traversal_sink_lines(
         return std::collections::HashSet::new();
     };
 
-    let mut tainted = std::collections::HashSet::new();
+    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sink_lines = std::collections::HashSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let code = line.trim();
@@ -6890,7 +7023,7 @@ fn go_path_traversal_sink_lines(
         return std::collections::HashSet::new();
     };
 
-    let mut tainted = std::collections::HashSet::new();
+    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sink_lines = std::collections::HashSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let code = line.trim();
@@ -6983,7 +7116,7 @@ fn js_path_traversal_sink_lines(
         return std::collections::HashSet::new();
     };
 
-    let mut tainted = std::collections::HashSet::new();
+    let mut tainted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sink_lines = std::collections::HashSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let trimmed = line.trim();
@@ -7283,10 +7416,11 @@ fn request_flow_sink_lines(
     language: FlowLanguage,
     sinks: &[FlowSink],
     sanitized: fn(&str) -> bool,
+    mongo_where: bool,
 ) -> std::collections::HashSet<usize> {
     let lines: Vec<&str> = content.lines().collect();
     let functions = flow_functions(&lines, language);
-    let summaries = flow_summaries(&lines, language, sinks, sanitized, &functions);
+    let summaries = flow_summaries(&lines, language, sinks, sanitized, mongo_where, &functions);
     let calls = FlowCalls {
         functions: &functions,
         summaries: &summaries,
@@ -7298,6 +7432,7 @@ fn request_flow_sink_lines(
         language,
         sinks,
         sanitized,
+        mongo_where,
         &[],
         true,
         Some(&calls),
@@ -7313,6 +7448,7 @@ fn request_flow_sink_lines(
             language,
             sinks,
             sanitized,
+            mongo_where,
             &seeds,
             true,
             Some(&calls),
@@ -7379,6 +7515,7 @@ fn flow_summaries(
     language: FlowLanguage,
     sinks: &[FlowSink],
     sanitized: fn(&str) -> bool,
+    mongo_where: bool,
     functions: &[FlowFunction],
 ) -> FlowSummaries {
     let mut summaries: FlowSummaries = functions
@@ -7404,6 +7541,7 @@ fn flow_summaries(
                             language,
                             sinks,
                             sanitized,
+                            mongo_where,
                             std::slice::from_ref(param),
                             false,
                             Some(&calls),
@@ -7533,6 +7671,7 @@ fn flow_pass(
     language: FlowLanguage,
     sinks: &[FlowSink],
     sanitized: fn(&str) -> bool,
+    mongo_where: bool,
     seeds: &[String],
     track_sources: bool,
     calls: Option<&FlowCalls>,
@@ -7555,6 +7694,8 @@ fn flow_pass(
     .ok();
 
     let mut tainted: std::collections::HashSet<String> = seeds.iter().cloned().collect();
+    let mut destructuring_names: Option<String> = None;
+    let mut in_block_comment = false;
     for line_index in range {
         let Some(line) = lines.get(line_index) else {
             break;
@@ -7565,6 +7706,18 @@ fn flow_pass(
             line
         };
         let code = raw.trim();
+        if language == FlowLanguage::JavaScript {
+            if in_block_comment {
+                if code.contains("*/") {
+                    in_block_comment = false;
+                }
+                continue;
+            }
+            if code.starts_with("/*") {
+                in_block_comment = !code.contains("*/");
+                continue;
+            }
+        }
         if code.is_empty()
             || code.starts_with("//")
             || code.starts_with("/*")
@@ -7574,6 +7727,40 @@ fn flow_pass(
         }
 
         if track_sources && language == FlowLanguage::JavaScript {
+            if let Some(names) = destructuring_names.as_mut() {
+                names.push(' ');
+                names.push_str(code);
+                if names.contains('}') {
+                    if let Some(captures) = destructure.as_ref().and_then(|re| re.captures(names)) {
+                        if let Some(members) = captures.get(1) {
+                            for part in members.as_str().split(',') {
+                                let local = part
+                                    .split('=')
+                                    .next()
+                                    .unwrap_or("")
+                                    .rsplit(':')
+                                    .next()
+                                    .unwrap_or("")
+                                    .trim();
+                                if !local.is_empty() {
+                                    tainted.insert(local.to_string());
+                                }
+                            }
+                        }
+                    }
+                    destructuring_names = None;
+                }
+                continue;
+            }
+            if code.contains('{')
+                && !code.contains('}')
+                && (code.trim_start().starts_with("const {")
+                    || code.trim_start().starts_with("let {")
+                    || code.trim_start().starts_with("var {"))
+            {
+                destructuring_names = Some(code.to_string());
+                continue;
+            }
             if let Some(names) = destructure
                 .as_ref()
                 .and_then(|re| re.captures(code))
@@ -7626,29 +7813,35 @@ fn flow_pass(
             continue;
         }
 
-        let reaches_sink = sinks.iter().any(|sink| {
-            if sink
-                .line_requires
-                .as_ref()
-                .is_some_and(|required| !required.is_match(code))
-            {
-                return false;
-            }
-            sink.call.captures_iter(&visible).any(|captures| {
-                let Some(whole) = captures.get(0) else {
+        let reaches_mongo_where = mongo_where
+            && language == FlowLanguage::JavaScript
+            && code.contains("$where")
+            && (tainted.iter().any(|name| identifier_in(code, name))
+                || inline_read.as_ref().is_some_and(|re| re.is_match(code)));
+        let reaches_sink = reaches_mongo_where
+            || sinks.iter().any(|sink| {
+                if sink
+                    .line_requires
+                    .as_ref()
+                    .is_some_and(|required| !required.is_match(code))
+                {
                     return false;
-                };
-                let name = captures.get(1).map(|m| m.as_str()).unwrap_or("");
-                let args = call_arguments(&visible, whole.end() - 1);
-                (sink.arguments)(name).into_iter().any(|position| {
-                    args.get(position).is_some_and(|arg| {
-                        !sanitized(arg)
-                            && (tainted.iter().any(|name| identifier_in(arg, name))
-                                || inline_read.as_ref().is_some_and(|re| re.is_match(arg)))
+                }
+                sink.call.captures_iter(&visible).any(|captures| {
+                    let Some(whole) = captures.get(0) else {
+                        return false;
+                    };
+                    let name = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+                    let args = call_arguments(&visible, whole.end() - 1);
+                    (sink.arguments)(name).into_iter().any(|position| {
+                        args.get(position).is_some_and(|arg| {
+                            !sanitized(arg)
+                                && (tainted.iter().any(|name| identifier_in(arg, name))
+                                    || inline_read.as_ref().is_some_and(|re| re.is_match(arg)))
+                        })
                     })
                 })
-            })
-        });
+            });
         if reaches_sink {
             sink_lines.insert(line_index + 1);
         }
@@ -7988,6 +8181,13 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
         r#"^\s*(?:(?:export\s+)?(?:async\s+)?function\s*\*?\s*|(?:async\s+)?def\s+|func\s+|(?:pub\s+)?(?:async\s+)?fn\s+)([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
     )
     .ok();
+    let assigned_arrow_pattern = (language == FlowLanguage::JavaScript)
+        .then(|| {
+            Regex::new(
+                r"^\s*this\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?\(([^()]*)\)\s*=>\s*\{",
+            )
+        })
+        .and_then(Result::ok);
 
     for (index, line) in lines.iter().enumerate() {
         let code = if language == FlowLanguage::Python {
@@ -8030,6 +8230,44 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
                         joined = Some(text);
                         joined_end = Some(next_index + 1);
                     }
+                }
+            }
+        }
+        let assigned_arrow = assigned_arrow_pattern.as_ref().and_then(|re| {
+            re.captures(&header_text)
+                .map(|c| (c[1].to_string(), c[2].to_string()))
+        });
+        if let Some((name, raw_params)) = assigned_arrow {
+            if let Some(params) = flow_parameters(&raw_params, language) {
+                let mut depth = 0i64;
+                let mut opened = false;
+                let mut end = None;
+                for (offset, next) in lines.iter().enumerate().skip(index) {
+                    for ch in blank_plain_strings(next, language).chars() {
+                        match ch {
+                            '{' => depth += 1,
+                            '}' => depth -= 1,
+                            _ => {}
+                        }
+                    }
+                    if depth > 0 {
+                        opened = true;
+                    }
+                    if opened && depth <= 0 {
+                        end = Some(offset);
+                        break;
+                    }
+                }
+                if let Some(end) = end {
+                    functions.push(FlowFunction {
+                        name,
+                        params,
+                        header: index,
+                        signature_end: index + 1,
+                        body: index + 1..end,
+                        method: true,
+                    });
+                    continue;
                 }
             }
         }
@@ -8249,6 +8487,7 @@ struct CrossFileSinkLines {
     sql: std::collections::HashSet<usize>,
     command: std::collections::HashSet<usize>,
     ssrf: std::collections::HashSet<usize>,
+    code: std::collections::HashSet<usize>,
 }
 
 /// How a caller file binds an imported file.
@@ -9184,7 +9423,7 @@ fn cross_file_flow_sinks(
     }
 
     let instance_new = Regex::new(
-        r#"^\s*this\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*new\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
+        r#"^\s*(?:(?:const|let|var)\s+)?(?:this\.)?([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*new\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
     );
     let instance_plain =
         Regex::new(r#"^\s*self\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\("#);
@@ -9197,7 +9436,11 @@ fn cross_file_flow_sinks(
         (command_flow_sinks, contains_command_sanitizer, 1),
         (ssrf_flow_sinks, contains_numeric_conversion, 2),
     ];
-    for (build_sinks, sanitized, family) in families {
+    for (build_sinks, sanitized, family) in families.into_iter().chain(std::iter::once((
+        code_injection_flow_sinks as fn(FlowLanguage) -> Vec<FlowSink>,
+        (|_| false) as fn(&str) -> bool,
+        3,
+    ))) {
         let summaries: Vec<FlowSummaries> = modules
             .iter()
             .enumerate()
@@ -9208,6 +9451,7 @@ fn cross_file_flow_sinks(
                     module.language,
                     &sinks,
                     sanitized,
+                    family == 0,
                     &functions[index],
                 )
             })
@@ -9373,47 +9617,61 @@ fn cross_file_flow_sinks(
                 let Ok(instance_new) = instance_new.as_ref() else {
                     return imports;
                 };
-                for line in &lines[caller] {
-                    let Some(captures) = instance_new.captures(line) else {
-                        continue;
-                    };
-                    let (Some(variable), Some(class)) = (captures.get(1), captures.get(2)) else {
-                        continue;
-                    };
-                    let target = bindings[caller].iter().find_map(|binding| {
-                        let (name, target) = match binding {
-                            ImportBinding::Module {
-                                binding: name,
-                                target,
-                                ..
-                            } => (name.as_str(), *target),
-                            ImportBinding::Function { local, target, .. } => {
-                                (local.as_str(), *target)
-                            }
-                            ImportBinding::Star { .. } => return None,
+                for caller_function in &functions[caller] {
+                    // Instance construction commonly lives in a constructor
+                    // while the imported method call lives in a field arrow
+                    // assigned inside that constructor. Inspect the containing
+                    // function body, not only the arrow-function body.
+                    let body_start = caller_function.body.start;
+                    let body_end = caller_function.body.end;
+                    for line in &lines[caller][body_start..body_end] {
+                        let Some(captures) = instance_new.captures(line) else {
+                            continue;
                         };
-                        (name == class.as_str()
-                            && modules[target].language == FlowLanguage::JavaScript)
-                            .then_some(target)
-                    });
-                    let Some(target) = target else {
-                        continue;
-                    };
-                    for (position, function) in functions[target].iter().enumerate() {
-                        if !function.method {
+                        let (Some(variable), Some(class)) = (captures.get(1), captures.get(2))
+                        else {
                             continue;
-                        }
-                        let reached = deep_map[target][position].clone();
-                        if reached.iter().all(|lines| lines.is_empty()) {
-                            continue;
-                        }
-                        imports.push(ImportedCallee {
-                            receiver: Some(format!("this.{}", variable.as_str())),
-                            name: function.name.clone(),
-                            target,
-                            params: function.params.len(),
-                            summaries: reached,
+                        };
+                        let target = bindings[caller].iter().find_map(|binding| {
+                            let (name, target) = match binding {
+                                ImportBinding::Module {
+                                    binding: name,
+                                    target,
+                                    ..
+                                } => (name.as_str(), *target),
+                                ImportBinding::Function { local, target, .. } => {
+                                    (local.as_str(), *target)
+                                }
+                                ImportBinding::Star { .. } => return None,
+                            };
+                            (name == class.as_str()
+                                && modules[target].language == FlowLanguage::JavaScript)
+                                .then_some(target)
                         });
+                        let Some(target) = target else {
+                            continue;
+                        };
+                        for (position, function) in functions[target].iter().enumerate() {
+                            if !function.method {
+                                continue;
+                            }
+                            let reached = deep_map[target][position].clone();
+                            if reached.iter().all(|lines| lines.is_empty()) {
+                                continue;
+                            }
+                            let receiver = if line.trim_start().starts_with("this.") {
+                                format!("this.{}", variable.as_str())
+                            } else {
+                                variable.as_str().to_string()
+                            };
+                            imports.push(ImportedCallee {
+                                receiver: Some(receiver),
+                                name: function.name.clone(),
+                                target,
+                                params: function.params.len(),
+                                summaries: reached,
+                            });
+                        }
                     }
                 }
             }
@@ -9549,6 +9807,7 @@ fn cross_file_flow_sinks(
                             module.language,
                             &sinks,
                             sanitized,
+                            family == 0,
                             std::slice::from_ref(param),
                             false,
                             Some(&calls),
@@ -9588,6 +9847,7 @@ fn cross_file_flow_sinks(
                 module.language,
                 &sinks,
                 sanitized,
+                family == 0,
                 &[],
                 true,
                 Some(&calls),
@@ -9607,6 +9867,7 @@ fn cross_file_flow_sinks(
                     module.language,
                     &sinks,
                     sanitized,
+                    family == 0,
                     &seeds,
                     true,
                     Some(&calls),
@@ -9618,7 +9879,8 @@ fn cross_file_flow_sinks(
                 match family {
                     0 => entry.sql.insert(line),
                     1 => entry.command.insert(line),
-                    _ => entry.ssrf.insert(line),
+                    2 => entry.ssrf.insert(line),
+                    _ => entry.code.insert(line),
                 };
             }
         }
@@ -10662,6 +10924,7 @@ fn flow_imports(
             let (
                 Ok(module_require),
                 Ok(named_require),
+                Ok(property_require),
                 Ok(namespace_import),
                 Ok(named_import),
                 Ok(default_import),
@@ -10672,6 +10935,9 @@ fn flow_imports(
                 ),
                 Regex::new(
                     r#"^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$"#,
+                ),
+                Regex::new(
+                    r#"^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\.([A-Za-z_$][A-Za-z0-9_$]*)\s*;?\s*$"#,
                 ),
                 Regex::new(
                     r#"^\s*import\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$"#,
@@ -10701,6 +10967,19 @@ fn flow_imports(
                                     });
                                 }
                             }
+                        }
+                    }
+                }
+                if let Some(captures) = property_require.captures(line) {
+                    if let (Some(local), Some(spec), Some(exported)) =
+                        (captures.get(1), captures.get(2), captures.get(3))
+                    {
+                        if let Some(target) = resolve(spec.as_str()) {
+                            bindings.push(ImportBinding::Function {
+                                local: local.as_str().to_string(),
+                                exported: exported.as_str().to_string(),
+                                target,
+                            });
                         }
                     }
                 }
@@ -10995,7 +11274,46 @@ fn sql_injection_sink_lines(content: &str, extension: &str) -> std::collections:
         language,
         &sql_flow_sinks(language),
         contains_numeric_conversion,
+        true,
     )
+}
+
+#[allow(clippy::items_after_test_module)]
+fn code_injection_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let Some(language) = flow_language(extension) else {
+        return std::collections::HashSet::new();
+    };
+    let sinks = code_injection_flow_sinks(language);
+    if sinks.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    request_flow_sink_lines(content, language, &sinks, |_| false, false)
+}
+
+#[allow(clippy::items_after_test_module)]
+fn code_injection_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
+    if language != FlowLanguage::JavaScript {
+        return Vec::new();
+    }
+    [
+        (
+            r#"(?:^|[^.\w$])(eval)\s*\("#,
+            first_argument as FlowArguments,
+        ),
+        (
+            r#"\bnew\s+(Function)\s*\("#,
+            first_argument as FlowArguments,
+        ),
+    ]
+    .iter()
+    .filter_map(|(pattern, arguments)| {
+        Regex::new(pattern).ok().map(|call| FlowSink {
+            call,
+            arguments: *arguments,
+            line_requires: None,
+        })
+    })
+    .collect()
 }
 
 #[allow(clippy::items_after_test_module)]
@@ -11091,6 +11409,7 @@ fn command_injection_sink_lines(
         language,
         &command_flow_sinks(language),
         contains_command_sanitizer,
+        false,
     )
 }
 
@@ -11192,6 +11511,7 @@ fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<
         language,
         &ssrf_flow_sinks(language),
         contains_numeric_conversion,
+        false,
     )
 }
 
