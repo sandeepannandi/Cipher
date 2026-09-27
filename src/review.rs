@@ -774,7 +774,9 @@ fn attach_verified_paths(findings: &mut [Finding], root: &Path) {
                         sink.contains("exec") || sink.contains("system") || sink.contains("popen")
                     }
                     "SQL Injection — String Concatenation" => {
-                        sink.contains("query") || sink.contains("execute")
+                        sink.contains("query")
+                            || sink.contains("execute")
+                            || sink.contains("$where")
                     }
                     _ => false,
                 };
@@ -3023,6 +3025,104 @@ req, err := http.NewRequest("POST", "https://api.example.com/search", strings.Ne
             "go",
         );
         assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn review_attaches_nodegoat_paths_only_for_proven_sinks() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-nodegoat-path-{nonce}"));
+        fs::create_dir_all(root.join("app/routes")).unwrap();
+        fs::create_dir_all(root.join("app/data")).unwrap();
+        fs::write(
+            root.join("app/routes/contributions.js"),
+            r#"function ContributionsHandler() {
+  this.update = (req) => {
+    const before = eval(req.body.before);
+    const after = eval(req.body.after);
+    const amount = eval(req.body.amount);
+    const safe = eval('2 + 2');
+  };
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("app/routes/allocations.js"),
+            r#"const AllocationsDAO = require('../data/allocations-dao').AllocationsDAO;
+function AllocationsHandler(db) {
+  const allocationsDAO = new AllocationsDAO(db);
+  this.display = (req) => {
+    const {
+      threshold
+    } = req.query;
+    allocationsDAO.getByUserIdAndThreshold(req.session.userId, threshold, callback);
+  };
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("app/data/allocations-dao.js"),
+            r#"const AllocationsDAO = function(db) {
+  this.getByUserIdAndThreshold = (userId, threshold, callback) => {
+    const parsedUserId = parseInt(userId);
+    const searchCriteria = () => {
+      return {
+        $where: `this.userId == ${parsedUserId} && this.stocks > '${threshold}'`
+      };
+    };
+    return db.collection('allocations').find(searchCriteria());
+  };
+};
+exports.AllocationsDAO = AllocationsDAO;"#,
+        )
+        .unwrap();
+        let report = collect_review_findings(&root, false, None).await.unwrap();
+        for line in [3, 4, 5] {
+            let finding = report
+                .findings
+                .iter()
+                .find(|f| {
+                    f.title == "Code Injection"
+                        && f.file_path
+                            .as_deref()
+                            .is_some_and(|p| p.ends_with("contributions.js"))
+                        && f.line_number == Some(line)
+                })
+                .expect("direct eval finding");
+            let steps = finding.source_to_sink.as_ref().expect("direct path");
+            assert_eq!(steps.first().unwrap().line, line);
+            assert_eq!(steps.last().unwrap().line, line);
+        }
+        let where_finding = report
+            .findings
+            .iter()
+            .find(|f| {
+                f.title == SQLI_FLOW
+                    && f.file_path
+                        .as_deref()
+                        .is_some_and(|p| p.ends_with("allocations-dao.js"))
+                    && f.line_number == Some(6)
+            })
+            .expect("where finding");
+        let steps = where_finding
+            .source_to_sink
+            .as_ref()
+            .expect("cross-file path");
+        assert!(steps.first().unwrap().file.ends_with("allocations.js"));
+        assert_eq!(steps.first().unwrap().line, 7);
+        assert_eq!(steps.last().unwrap().line, 6);
+        assert!(steps
+            .iter()
+            .any(|s| s.action == "call" && s.file.ends_with("allocations.js")));
+        assert!(report.findings.iter().all(|f| f
+            .file_path
+            .as_deref()
+            .is_none_or(|p| !p.ends_with("contributions.js"))
+            || f.line_number != Some(6)
+            || f.source_to_sink.is_none()));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
