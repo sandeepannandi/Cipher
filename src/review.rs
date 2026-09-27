@@ -299,6 +299,15 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Missing Privileged Route Authorization",
+        "A route for an administrator-only operation accepts logged-in users without its available admin gate.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00",
+        &["js", "ts"],
+        "Apply the available administrator middleware to this privileged route before the handler."
+    );
+
+    add_vuln!(
         "Insecure Deserialization",
         "Deserializing untrusted data can lead to remote code execution.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A08IntegrityFailures),
@@ -823,6 +832,190 @@ fn downgrade_test_context(findings: &mut [Finding], root: &Path) {
     }
 }
 
+/// Link Express route declarations to locally imported handlers before making
+/// missing-authorization claims. Only a recognized privileged operation or a
+/// request-selected private account exposed without ownership checking qualifies.
+fn scoped_route_authz_findings(
+    files: &[std::path::PathBuf],
+    root: &Path,
+    patterns: &[VulnPattern],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let Ok(route) = Regex::new(
+        r#"\b(?:app|router)\s*\.\s*(?:get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]\s*,\s*([^;]+)"#,
+    ) else {
+        return findings;
+    };
+    let Ok(import) = Regex::new(
+        r#"(?m)\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"](\.[^'"]+)['"]\s*\)"#,
+    ) else {
+        return findings;
+    };
+    let Ok(instance) = Regex::new(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*new\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(",
+    ) else {
+        return findings;
+    };
+    let Ok(method) =
+        Regex::new(r"\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\b")
+    else {
+        return findings;
+    };
+    let Ok(admin_binding) = Regex::new(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*[^;\n]*\.isAdminUserMiddleware\b",
+    ) else {
+        return findings;
+    };
+    let Ok(login_binding) = Regex::new(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*[^;\n]*\.isLoggedInMiddleware\b",
+    ) else {
+        return findings;
+    };
+    let Ok(privileged) = Regex::new(
+        r"\b(?:getAllNonAdminUsers|updateBenefits|setAdmin|grantRole|deleteAllUsers)\s*\(",
+    ) else {
+        return findings;
+    };
+    let Ok(request_param) = Regex::new(
+        r"(?s)\b(?:const|let|var)\s*\{\s*userId\s*\}\s*=\s*req\.params\b|\breq\.params\.userId\b",
+    ) else {
+        return findings;
+    };
+    let Ok(account_access) = Regex::new(
+        r"\b(?:getByUserIdAndThreshold|getByUserId|findByUserId|findById)\s*\(\s*userId\b",
+    ) else {
+        return findings;
+    };
+    let Ok(ownership) = Regex::new(
+        r"(?i)\b(?:checkOwnership|hasPermission|isOwner|canRead|authorize|userId\s*===?\s*req\.session\.userId|req\.session\.userId\s*===?\s*userId)\b",
+    ) else {
+        return findings;
+    };
+    for path in files {
+        if !matches!(file_extension(path).as_str(), "js" | "ts") || is_test_context_path(path, root)
+        {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let (Some(admin), Some(login)) = (
+            admin_binding
+                .captures(&content)
+                .and_then(|c| c.get(1).map(|m| m.as_str().to_string())),
+            login_binding
+                .captures(&content)
+                .and_then(|c| c.get(1).map(|m| m.as_str().to_string())),
+        ) else {
+            continue;
+        };
+        let imports: std::collections::HashMap<String, String> = import
+            .captures_iter(&content)
+            .filter_map(|c| {
+                Some((
+                    c.get(1)?.as_str().to_string(),
+                    c.get(2)?.as_str().to_string(),
+                ))
+            })
+            .collect();
+        let instances: std::collections::HashMap<String, String> = instance
+            .captures_iter(&content)
+            .filter_map(|c| {
+                Some((
+                    c.get(1)?.as_str().to_string(),
+                    c.get(2)?.as_str().to_string(),
+                ))
+            })
+            .collect();
+        for (index, line) in content.lines().enumerate() {
+            let trim = line.trim_start();
+            if trim.starts_with("//") || trim.starts_with("/*") || trim.starts_with('*') {
+                continue;
+            }
+            let Some(caps) = route.captures(line) else {
+                continue;
+            };
+            let Some(route_path) = caps.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            let Some(args) = caps.get(2).map(|m| m.as_str()) else {
+                continue;
+            };
+            if !identifier_in(args, &login) || identifier_in(args, &admin) {
+                continue;
+            }
+            let Some((receiver, operation)) = method
+                .captures_iter(args)
+                .last()
+                .and_then(|c| Some((c.get(1)?.as_str(), c.get(2)?.as_str())))
+            else {
+                continue;
+            };
+            let Some(import_path) = instances.get(receiver).and_then(|class| imports.get(class))
+            else {
+                continue;
+            };
+            let Some(parent) = path.parent() else {
+                continue;
+            };
+            let target = parent.join(import_path).with_extension("js");
+            let target = std::fs::canonicalize(&target).unwrap_or(target);
+            if !target.starts_with(root) || !files.contains(&target) {
+                continue;
+            }
+            let Ok(handler) = std::fs::read_to_string(&target) else {
+                continue;
+            };
+            if route_path.contains("benefit")
+                && matches!(operation, "updateBenefits" | "displayBenefits")
+                && privileged.is_match(&handler)
+            {
+                if let Some(pattern) = patterns
+                    .iter()
+                    .find(|p| p.name == "Missing Privileged Route Authorization")
+                {
+                    findings.push(pattern_finding(pattern, path, index + 1, line));
+                }
+            }
+            if route_path.contains(":userId")
+                && operation == "displayAllocations"
+                && request_param.is_match(&handler)
+                && account_access.is_match(&handler)
+                && handler.contains("res.render(")
+                && !ownership.is_match(&handler)
+            {
+                if let Some(pattern) = patterns
+                    .iter()
+                    .find(|p| p.name == "Insecure Direct Object Reference (IDOR)")
+                {
+                    // The request-controlled id is read in this handler, not at
+                    // the route declaration. Report the actual source line.
+                    if let Some(source_line) = handler.lines().enumerate().find_map(|(i, text)| {
+                        (text.trim().starts_with("userId")
+                            && handler
+                                .lines()
+                                .skip(i + 1)
+                                .take(3)
+                                .any(|next| next.contains("req.params")))
+                        .then_some(i + 1)
+                    }) {
+                        let text = handler.lines().nth(source_line - 1).unwrap_or("");
+                        findings.push(pattern_finding(pattern, &target, source_line, text));
+                    } else if let Some(source_line) = handler
+                        .lines()
+                        .enumerate()
+                        .find_map(|(i, text)| text.contains("req.params.userId").then_some(i + 1))
+                    {
+                        let text = handler.lines().nth(source_line - 1).unwrap_or("");
+                        findings.push(pattern_finding(pattern, &target, source_line, text));
+                    }
+                }
+            }
+        }
+    }
+    findings
+}
+
 /// Collect review findings without displaying them (for report generation)
 pub(crate) async fn collect_review_findings(
     project_path: &Path,
@@ -872,6 +1065,13 @@ pub(crate) async fn collect_review_findings(
         let findings = scan_file_for_vulns_with(path, &patterns, cross_file.get(path));
         report.extend(findings);
     }
+    // Route and handler context are needed for missing authorization. A bare
+    // parameterized URL or a bare DAO lookup cannot establish an IDOR.
+    report.extend(scoped_route_authz_findings(
+        &files,
+        &canonical_path,
+        &patterns,
+    ));
     // Package entries resolved through node_modules are never part of the
     // scanned set (the directory is excluded): emit only their cross-file
     // flow findings, so project request input reaching a package sink is
@@ -1992,6 +2192,131 @@ mod scanner_regression_tests {
     }
 
     const IDOR: &str = "Insecure Direct Object Reference (IDOR)";
+
+    const MISSING_ADMIN: &str = "Missing Privileged Route Authorization";
+
+    #[tokio::test]
+    async fn linked_privileged_routes_and_private_object_without_guards_are_reported() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-authz-{nonce}"));
+        fs::create_dir_all(root.join("app/routes")).expect("mkdir");
+        fs::write(
+            root.join("app/routes/index.js"),
+            r#"const SessionHandler = require("./session");
+const BenefitsHandler = require("./benefits");
+const AllocationsHandler = require("./allocations");
+const sessionHandler = new SessionHandler(db);
+const benefitsHandler = new BenefitsHandler(db);
+const allocationsHandler = new AllocationsHandler(db);
+const isLoggedIn = sessionHandler.isLoggedInMiddleware;
+const isAdmin = sessionHandler.isAdminUserMiddleware;
+app.get("/benefits", isLoggedIn, benefitsHandler.displayBenefits);
+app.post("/benefits", isLoggedIn, benefitsHandler.updateBenefits);
+app.get("/allocations/:userId", isLoggedIn, allocationsHandler.displayAllocations);
+app.get("/profile", isLoggedIn, profileHandler.displayProfile);
+"#,
+        )
+        .expect("route fixture");
+        fs::write(
+            root.join("app/routes/benefits.js"),
+            r#"this.displayBenefits = (req, res) => {
+ benefitsDAO.getAllNonAdminUsers((err, users) => res.render("benefits", {users}));
+};
+this.updateBenefits = (req, res) => {
+ const { userId } = req.body;
+ benefitsDAO.updateBenefits(userId, req.body.date, () => res.render("benefits"));
+};"#,
+        )
+        .expect("privileged fixture");
+        fs::write(
+            root.join("app/routes/allocations.js"),
+            r#"this.displayAllocations = (req, res) => {
+ const {
+   userId
+ } = req.params;
+ allocationsDAO.getByUserIdAndThreshold(userId, req.query.threshold, (err, allocations) => {
+   return res.render("allocations", { allocations });
+ });
+};"#,
+        )
+        .expect("idor fixture");
+        let report = collect_review_findings(&root, false, None)
+            .await
+            .expect("review");
+        let mut found: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.title == MISSING_ADMIN || f.title == IDOR)
+            .map(|f| {
+                (
+                    f.title.as_str(),
+                    f.file_path
+                        .as_deref()
+                        .unwrap_or("")
+                        .strip_prefix(root.to_str().unwrap_or(""))
+                        .unwrap_or(""),
+                    f.line_number.unwrap_or(0),
+                )
+            })
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                (IDOR, "/app/routes/allocations.js", 3),
+                (MISSING_ADMIN, "/app/routes/index.js", 9),
+                (MISSING_ADMIN, "/app/routes/index.js", 10)
+            ]
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn admin_gate_and_owner_check_prevent_cross_file_findings() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-authz-guard-{nonce}"));
+        fs::create_dir_all(root.join("routes")).expect("mkdir");
+        fs::write(
+            root.join("routes/index.js"),
+            r#"const SessionHandler = require("./session");
+const BenefitsHandler = require("./benefits");
+const AllocationsHandler = require("./allocations");
+const sessionHandler = new SessionHandler(db);
+const benefitsHandler = new BenefitsHandler(db);
+const allocationsHandler = new AllocationsHandler(db);
+const isLoggedIn = sessionHandler.isLoggedInMiddleware;
+const isAdmin = sessionHandler.isAdminUserMiddleware;
+app.get("/benefits", isLoggedIn, isAdmin, benefitsHandler.displayBenefits);
+app.post("/benefits", isLoggedIn, isAdmin, benefitsHandler.updateBenefits);
+app.get("/allocations/:userId", isLoggedIn, allocationsHandler.displayAllocations);
+"#,
+        )
+        .expect("route fixture");
+        fs::write(root.join("routes/benefits.js"), "this.updateBenefits = () => benefitsDAO.updateBenefits();\nthis.displayBenefits = () => benefitsDAO.getAllNonAdminUsers();").expect("privileged fixture");
+        fs::write(
+            root.join("routes/allocations.js"),
+            r#"this.displayAllocations = (req, res) => {
+ const { userId } = req.params;
+ if (userId !== req.session.userId) return res.sendStatus(403);
+ allocationsDAO.getByUserIdAndThreshold(userId, threshold, () => res.render("allocations"));
+};"#,
+        )
+        .expect("idor fixture");
+        let report = collect_review_findings(&root, false, None)
+            .await
+            .expect("review");
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.title == MISSING_ADMIN || f.title == IDOR));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
 
     #[tokio::test]
     async fn review_output_has_verified_source_to_sink_path_or_explicit_absence() {
