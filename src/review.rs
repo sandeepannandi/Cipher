@@ -589,6 +589,84 @@ fn scan_file_flow_only(path: &Path, cross_file: &CrossFileSinkLines) -> Vec<Find
     findings
 }
 
+/// Whether a source path is explicitly test, fixture, example, or sample code.
+/// Classify relative to the project root so a parent named `tests` or an
+/// example-repo checkout name cannot relabel production files. Match whole
+/// components and common test filename conventions, not substrings such as
+/// `contest` or `specification`.
+fn is_test_context_path(path: &Path, root: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let directories: Vec<String> = relative
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect();
+    if directories.iter().any(|part| {
+        matches!(
+            part.as_str(),
+            "test"
+                | "tests"
+                | "__tests__"
+                | "spec"
+                | "specs"
+                | "fixture"
+                | "fixtures"
+                | "testdata"
+                | "test-data"
+                | "example"
+                | "examples"
+                | "sample"
+                | "samples"
+        )
+    }) {
+        return true;
+    }
+    let Some(name) = relative
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+    else {
+        return false;
+    };
+    let stem = name.split('.').next().unwrap_or("");
+    let java_test = (name.ends_with("test.java") || name.ends_with("tests.java")) && stem != "test";
+    java_test
+        || name.starts_with("test_")
+        || name.starts_with("spec_")
+        || name.starts_with("fixture_")
+        || name.starts_with("example_")
+        || name.starts_with("sample_")
+        || name.contains("_test.")
+        || name.contains("_spec.")
+        || name.contains(".test.")
+        || name.contains(".spec.")
+        || name.contains(".fixture.")
+        || name.contains(".example.")
+        || name.contains(".sample.")
+}
+
+/// Keep findings visible but lower the production risk of test-only code.
+/// Detection confidence remains intact: a credential can truly be hardcoded
+/// in a fixture while being low severity for a deployed application.
+fn downgrade_test_context(findings: &mut [Finding], root: &Path) {
+    for finding in findings {
+        let Some(path) = finding.file_path.as_deref() else {
+            continue;
+        };
+        if !is_test_context_path(Path::new(path), root) {
+            continue;
+        }
+        if finding.severity.score() > Severity::Low.score() {
+            finding.severity = Severity::Low;
+        }
+        if !finding.description.starts_with("Test/fixture context: ") {
+            finding.description = format!("Test/fixture context: {}", finding.description);
+        }
+    }
+}
+
 /// Collect review findings without displaying them (for report generation)
 pub(crate) async fn collect_review_findings(
     project_path: &Path,
@@ -656,6 +734,7 @@ pub(crate) async fn collect_review_findings(
         }
     }
 
+    downgrade_test_context(&mut report.findings, &canonical_path);
     report.sort_by_risk();
     Ok(report)
 }
@@ -807,6 +886,7 @@ pub async fn run_review(
                         report.add(finding);
                     }
                 }
+                downgrade_test_context(&mut report.findings, &canonical_path);
                 report.sort_by_risk();
             }
             Err(e) => {
@@ -1697,6 +1777,82 @@ mod scanner_regression_tests {
         let findings = scan_file_for_vulns(&path, &build_vuln_patterns());
         fs::remove_file(path).expect("remove fixture");
         findings
+    }
+
+    #[test]
+    fn test_context_paths_are_component_and_filename_based() {
+        let root = Path::new("/work/tests/realworld-example-app");
+        for path in [
+            "src/tests/services/auth.service.test.ts",
+            "tests/factories.py",
+            "src/test/java/CommentsApiTest.java",
+            "spec/models/user_spec.rb",
+            "fixtures/user.json",
+            "examples/demo.js",
+            "src/services/auth.test.ts",
+            "src/test_auth.py",
+            "src/Example.java",
+        ] {
+            let expected = path != "src/Example.java";
+            assert_eq!(
+                is_test_context_path(&root.join(path), root),
+                expected,
+                "{path}"
+            );
+        }
+        for path in [
+            "src/contest/handler.ts",
+            "src/specification.rs",
+            "src/testimonials.js",
+            "src/testing.ts",
+            "src/production.java",
+            "conduit/settings.py",
+        ] {
+            assert!(!is_test_context_path(&root.join(path), root), "{path}");
+        }
+        assert!(!is_test_context_path(
+            Path::new("/other/tests/auth.test.ts"),
+            root
+        ));
+    }
+
+    #[tokio::test]
+    async fn review_downgrades_test_credentials_but_not_production() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-context-{nonce}"));
+        fs::create_dir_all(root.join("src/tests/services")).expect("mkdir");
+        fs::create_dir_all(root.join("src/app")).expect("mkdir");
+        let fixture = root.join("src/tests/services/auth.service.test.ts");
+        let production = root.join("src/app/auth.service.ts");
+        let code = "const user = { password: '1234' };";
+        fs::write(&fixture, code).expect("test fixture");
+        fs::write(&production, code).expect("production fixture");
+        let report = collect_review_findings(&root, false, None)
+            .await
+            .expect("review");
+        let credential = |path: &Path| {
+            report
+                .findings
+                .iter()
+                .find(|f| {
+                    f.file_path.as_deref() == Some(path.to_string_lossy().as_ref())
+                        && f.title == "Hardcoded Credentials"
+                })
+                .expect("credential finding")
+        };
+        let test = credential(&fixture);
+        let prod = credential(&production);
+        assert_eq!(test.severity, Severity::Low);
+        assert!(test.description.starts_with("Test/fixture context: "));
+        assert_eq!(prod.severity, Severity::Critical);
+        assert!(!prod.description.starts_with("Test/fixture context: "));
+        assert_eq!(test.confidence, prod.confidence);
+        let json = generate_review_json(&report);
+        assert!(json.contains("Test/fixture context:"));
+        fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[tokio::test]
