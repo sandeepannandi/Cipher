@@ -408,6 +408,76 @@ fn is_contextual_jwt_secret(content: &str, assignment_line: &str) -> bool {
     })
 }
 
+/// Narrow, active signing-secret forms. Generic literal passwords in test files are
+/// intentionally not promoted: this rule requires an authentication key name
+/// plus a fallback expression, or a runtime properties key. `properties` is
+/// admitted by the review walker below but not by the general code patterns.
+fn signing_secret_sink_lines(
+    path: &Path,
+    content: &str,
+    ext: &str,
+) -> std::collections::HashSet<usize> {
+    let mut lines = std::collections::HashSet::new();
+    // The new rule is production-facing. Test/fixture credentials are not
+    // signing keys for the deployed app, even when they use the same syntax.
+    if path.components().any(|part| {
+        matches!(
+            part.as_os_str()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .as_str(),
+            "test" | "tests" | "__tests__" | "fixtures" | "fixture" | "spec" | "specs"
+        )
+    }) || path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy().to_ascii_lowercase();
+        name.starts_with("test_")
+            || name.contains("_test.")
+            || name.contains(".test.")
+            || name.contains(".spec.")
+    }) {
+        return lines;
+    }
+    let js_fallback = Regex::new(
+        r#"(?i)(?:\bsecret\s*:\s*|\bjwt\s*\.\s*sign\s*\(.*|\b(?:jwt_secret|session_secret|cookie_secret|signing_key)\s*[=:].*)?(?:process\s*\.\s*env\s*\.\s*(?:jwt_secret|session_secret|cookie_secret|signing_key)|process\s*\.\s*env\s*\[\s*['\"](?:jwt_secret|session_secret|cookie_secret|signing_key)['\"]\s*\])\s*\|\|\s*['\"][^'\"]{4,}['\"]"#
+    ).expect("JS signing secret fallback regex");
+    let py_fallback = Regex::new(
+        r#"(?i)\b(?:SECRET_KEY|JWT_SECRET_KEY|JWT_SECRET|SESSION_SECRET|SIGNING_KEY)\s*=\s*os\s*\.\s*(?:environ\s*\.\s*get|getenv)\s*\(\s*['\"][^'\"]+['\"]\s*,\s*['\"][^'\"]{4,}['\"]\s*\)"#
+    ).expect("Python signing secret fallback regex");
+    let properties_key = Regex::new(
+        r#"(?i)^\s*(?:jwt[._-]secret|jwt[._-]key|session[._-]secret|cookie[._-]secret|signing[._-]key)\s*[=:]\s*([^\s#]+)"#
+    ).expect("properties signing secret regex");
+    for (index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
+        {
+            continue;
+        }
+        let found = match ext {
+            "js" | "jsx" | "ts" | "tsx" => {
+                js_fallback.is_match(line)
+                    && (line.contains("secret")
+                        || line.contains("SECRET")
+                        || line.contains("sign")
+                        || line.contains("SIGN"))
+            }
+            "py" => py_fallback.is_match(line),
+            "properties" => properties_key.captures(line).is_some_and(|caps| {
+                let value = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                value.len() >= 8 && !value.starts_with("${") && !value.starts_with("#{")
+            }),
+            _ => false,
+        };
+        if found {
+            lines.insert(index + 1);
+        }
+    }
+    lines
+}
+
 /// Scan a single file for vulnerability patterns
 #[cfg(test)]
 fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -488,6 +558,7 @@ fn scan_file_for_vulns_with(
         command_injection_sinks.extend(cross_file.command.iter().copied());
         ssrf_sinks.extend(cross_file.ssrf.iter().copied());
     }
+    let signing_secret_sites = signing_secret_sink_lines(path, &content, &ext);
     let ssti_sinks = ssti_sink_lines(&content, &ext);
     let idor_sinks = idor_sink_lines(&content, &ext);
     let mut code_injection_sinks = code_injection_sink_lines(&content, &ext);
@@ -507,6 +578,24 @@ fn scan_file_for_vulns_with(
             || trimmed.starts_with('*')
         {
             continue;
+        }
+
+        if signing_secret_sites.contains(&line_number) {
+            let mut finding = Finding::new(
+                FindingType::Vulnerability,
+                "JWT Secret Hardcoded",
+                "A JWT or session signing secret has a fixed source-code value or a known fallback. Tokens or cookies can be forged when this value is used.",
+                Severity::Critical,
+                Confidence::High,
+                "security-review",
+            )
+            .at(path.to_string_lossy().to_string(), line_number)
+            .with_code(line.to_string())
+            .with_remediation("Require a deployment-specific secret from the environment or a secret manager; fail startup if absent, and rotate any exposed key.")
+            .with_owasp(OwaspCategory::A07AuthFailures)
+            .with_cwe("CWE-798");
+            finding.remediation_effort = RemediationEffort::Hours;
+            findings.push(finding);
         }
 
         let contextual_jwt_secret = is_contextual_jwt_secret(&content, line);
@@ -543,6 +632,12 @@ fn scan_file_for_vulns_with(
 
             // A credential that is specifically JWT signing material should be
             // reported once under the more precise rule, not again generically.
+            if signing_secret_sites.contains(&line_number)
+                && (pattern.name == "Hardcoded Credentials"
+                    || pattern.name == "JWT Secret Hardcoded")
+            {
+                continue;
+            }
             if pattern.name == "Hardcoded Credentials" && contextual_jwt_secret {
                 continue;
             }
@@ -1188,6 +1283,7 @@ fn is_supported_extension(ext: &str) -> bool {
             | "bash"
             | "yaml"
             | "yml"
+            | "properties"
             | "json"
             | "toml"
             | "sql"
@@ -2173,6 +2269,69 @@ connect(secret);"#,
             "js",
         );
         assert_eq!(titles(&findings), vec!["Hardcoded Credentials"]);
+    }
+
+    #[test]
+    fn signing_secret_fallbacks_and_properties_are_reported_once() {
+        let js = scan("jwt.sign({ id }, process.env.JWT_SECRET || 'superSecret');\nsecret: process.env.JWT_SECRET || 'superSecret',\nsecret: process.env.JWT_SECRET || 'superSecret',", "ts");
+        assert_eq!(
+            js.iter()
+                .filter(|f| f.title == "JWT Secret Hardcoded")
+                .count(),
+            3
+        );
+        assert_eq!(js.len(), 3);
+        let py = scan(
+            "SECRET_KEY = os.environ.get('CONDUIT_SECRET', 'secret-key')",
+            "py",
+        );
+        assert_eq!(titles(&py), vec!["JWT Secret Hardcoded"]);
+        let properties = scan(
+            "jwt.secret=ThisFixedSigningSecretHasEnoughBytes123\n",
+            "properties",
+        );
+        assert_eq!(titles(&properties), vec!["JWT Secret Hardcoded"]);
+    }
+
+    #[test]
+    fn signing_secret_rule_rejects_environment_only_comments_and_non_signing_literals() {
+        for (source, ext) in [
+            ("const secret = process.env.JWT_SECRET;", "ts"),
+            (
+                "// secret: process.env.JWT_SECRET || 'example-secret'",
+                "ts",
+            ),
+            ("SECRET_KEY = os.environ['CONDUIT_SECRET']", "py"),
+            ("# jwt.secret=FakeSigningSecretValue", "properties"),
+            ("jwt.secret=${JWT_SECRET}", "properties"),
+            ("database.password=superSecret", "properties"),
+        ] {
+            assert!(
+                scan(source, ext).is_empty(),
+                "unexpected finding for {source}"
+            );
+        }
+        let fixture = Path::new("/repo/src/test/resources/application.properties");
+        assert!(signing_secret_sink_lines(
+            fixture,
+            "jwt.secret=AnyFixedSigningKey123",
+            "properties"
+        )
+        .is_empty());
+        let ts_fixture = Path::new("/repo/src/tests/auth.service.test.ts");
+        assert!(signing_secret_sink_lines(
+            ts_fixture,
+            "secret: process.env.JWT_SECRET || 'known-secret',",
+            "ts"
+        )
+        .is_empty());
+        let py_fixture = Path::new("/repo/tests/test_settings.py");
+        assert!(signing_secret_sink_lines(
+            py_fixture,
+            "SECRET_KEY = os.getenv('SECRET_KEY', 'known-secret')",
+            "py"
+        )
+        .is_empty());
     }
 
     #[test]
