@@ -8181,6 +8181,13 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
         r#"^\s*(?:(?:export\s+)?(?:async\s+)?function\s*\*?\s*|(?:async\s+)?def\s+|func\s+|(?:pub\s+)?(?:async\s+)?fn\s+)([A-Za-z_$][A-Za-z0-9_$]*)\s*\("#,
     )
     .ok();
+    let assigned_arrow_pattern = (language == FlowLanguage::JavaScript)
+        .then(|| {
+            Regex::new(
+                r"^\s*this\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?\(([^()]*)\)\s*=>\s*\{",
+            )
+        })
+        .and_then(Result::ok);
 
     for (index, line) in lines.iter().enumerate() {
         let code = if language == FlowLanguage::Python {
@@ -8226,18 +8233,10 @@ fn flow_functions(lines: &[&str], language: FlowLanguage) -> Vec<FlowFunction> {
                 }
             }
         }
-        let assigned_arrow = if language == FlowLanguage::JavaScript {
-            Regex::new(
-                r"^\s*this\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?\(([^()]*)\)\s*=>\s*\{",
-            )
-            .ok()
-            .and_then(|re| {
-                re.captures(&header_text)
-                    .map(|c| (c[1].to_string(), c[2].to_string()))
-            })
-        } else {
-            None
-        };
+        let assigned_arrow = assigned_arrow_pattern.as_ref().and_then(|re| {
+            re.captures(&header_text)
+                .map(|c| (c[1].to_string(), c[2].to_string()))
+        });
         if let Some((name, raw_params)) = assigned_arrow {
             if let Some(params) = flow_parameters(&raw_params, language) {
                 let mut depth = 0i64;
@@ -11397,7 +11396,6 @@ fn contains_command_sanitizer(text: &str) -> bool {
 /// Argument-vector process calls without a shell are not sinks.
 /// `shlex.quote` and numeric conversions stop the flow. Same-file and
 /// straight-line only; no interprocedural claim.
-
 #[allow(clippy::items_after_test_module)]
 fn command_injection_sink_lines(
     content: &str,
