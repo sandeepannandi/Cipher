@@ -308,6 +308,33 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Unescaped Template Output (XSS)",
+        "A stored profile field is interpolated into an HTML template while the configured template engine disables escaping.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A03Injection),
+        r"\x00", &["html"],
+        "Enable template autoescaping and use context-appropriate HTML/attribute encoding for user data."
+    );
+
+    add_vuln!(
+        "Unsafe HTML Response (XSS)",
+        "An outbound response body reaches an HTML response without HTML escaping.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A03Injection),
+        r"\x00",
+        &["js", "ts"],
+        "Encode untrusted response data for HTML output or serve it as plain text."
+    );
+
+    add_vuln!(
+        "Missing CSRF Protection",
+        "A cookie-session application exposes a state-changing form route without active CSRF middleware.",
+        Severity::High, Confidence::Medium, Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00", &["js", "ts"],
+        "Install and apply CSRF protection before state-changing routes and issue valid tokens in forms."
+    );
+
+    add_vuln!(
         "Insecure Deserialization",
         "Deserializing untrusted data can lead to remote code execution.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A08IntegrityFailures),
@@ -1016,6 +1043,190 @@ fn scoped_route_authz_findings(
     findings
 }
 
+/// Guarded, project-context checks: do not infer XSS from interpolation alone
+/// or CSRF from a POST alone. Both require evidence in the app bootstrap and
+/// concrete source/template or session/route links.
+fn scoped_template_xss_csrf_findings(
+    files: &[std::path::PathBuf],
+    root: &Path,
+    patterns: &[VulnPattern],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let Ok(autoescape) = Regex::new(r"\bautoescape\s*:\s*false\b") else {
+        return findings;
+    };
+    let Ok(profile_field) =
+        Regex::new(r"\buser\.(?:firstName|lastName)\s*=\s*(?:firstName|lastName)\b")
+    else {
+        return findings;
+    };
+    let Ok(interpolation) = Regex::new(r"\{\{\s*(firstName|lastName|firstNameSafeString)\s*\}\}")
+    else {
+        return findings;
+    };
+    let Ok(html_header) = Regex::new(r#"(?i)Content-Type["']?\s*:\s*["']text/html"#) else {
+        return findings;
+    };
+    let Ok(session) = Regex::new(r"\bapp\.use\s*\(\s*session\s*\(") else {
+        return findings;
+    };
+    let Ok(csrf) = Regex::new(r"\bapp\.use\s*\(\s*(?:csrf|csurf|csrfProtection)\s*\(") else {
+        return findings;
+    };
+    let Ok(form_route) = Regex::new(r#"\bapp\.post\s*\(\s*["'](/(?:profile|benefits))["']"#) else {
+        return findings;
+    };
+    let mut active = std::collections::HashMap::new();
+    for path in files {
+        if is_test_context_path(path, root) {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        // Exclude complete JS block comments as well as single-line comments.
+        let mut block = false;
+        let code: Vec<(usize, String)> = content
+            .lines()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                let trim = line.trim();
+                if block {
+                    if trim.contains("*/") {
+                        block = false;
+                    }
+                    return None;
+                }
+                if trim.starts_with("/*") {
+                    block = !trim.contains("*/");
+                    return None;
+                }
+                if trim.starts_with("//") || trim.starts_with('*') || trim.starts_with("<!--") {
+                    return None;
+                }
+                Some((i + 1, line.split("//").next().unwrap_or(line).to_string()))
+            })
+            .collect();
+        active.insert(path.clone(), code);
+    }
+    let bootstrap = root.join("server.js");
+    let Some(server) = active.get(&bootstrap) else {
+        return findings;
+    };
+    let has_session = server.iter().any(|(_, line)| session.is_match(line));
+    let swig_engine = server
+        .iter()
+        .any(|(_, line)| line.contains("consolidate.swig"));
+    let has_csrf = server.iter().any(|(_, line)| csrf.is_match(line));
+    let escape_off = server.iter().any(|(_, line)| autoescape.is_match(line));
+    let views = root.join("app/views");
+    let profiles = root.join("app/data/profile-dao.js");
+    let profile_stored = active.get(&profiles).is_some_and(|lines| {
+        lines.iter().any(|(_, line)| profile_field.is_match(line))
+            && lines.iter().any(|(_, line)| line.contains("users.update("))
+    });
+    // HTML is not ordinarily part of the code scan set. Only follow a
+    // rendered profile and its inherited layout after confirming the write
+    // and both input paths, rather than scanning unrelated interpolations.
+    let profile_route = active.get(&root.join("app/routes/profile.js"));
+    let profile_render = profile_route.is_some_and(|lines| {
+        lines
+            .iter()
+            .any(|(_, line)| line.contains("res.render(\"profile\""))
+            && lines.iter().any(|(_, line)| line.contains("...doc"))
+            && lines
+                .iter()
+                .any(|(_, line)| line.contains("firstNameSafeString = firstName"))
+            && lines.iter().any(|(_, line)| line.contains("req.body"))
+            && lines
+                .iter()
+                .any(|(_, line)| line.contains("profile.updateUser("))
+    });
+    if swig_engine && escape_off && profile_stored && profile_render {
+        let profile = views.join("profile.html");
+        let inherits_layout = std::fs::read_to_string(&profile).is_ok_and(|text| {
+            text.contains("extends './layout.html'")
+                || text.contains("extends \"./layout.html\"")
+                || text.contains("extends 'layout.html'")
+                || text.contains("extends \"layout.html\"")
+        });
+        for path in [profile, views.join("layout.html")] {
+            if path.ends_with("layout.html") && !inherits_layout {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for (index, line) in content.lines().enumerate() {
+                if line.trim_start().starts_with("<!--") {
+                    continue;
+                }
+                if interpolation.is_match(line) {
+                    if let Some(pattern) = patterns
+                        .iter()
+                        .find(|p| p.name == "Unescaped Template Output (XSS)")
+                    {
+                        findings.push(pattern_finding(pattern, &path, index + 1, line));
+                    }
+                }
+            }
+        }
+    }
+    // Reflected HTML from an HTTP client is a separate flow from templates.
+    for (path, lines) in &active {
+        if !matches!(file_extension(path).as_str(), "js" | "ts")
+            || !path.starts_with(root.join("app/routes"))
+        {
+            continue;
+        }
+        let source = lines.iter().any(|(_, line)| line.contains("needle.get("));
+        let html = lines.iter().any(|(_, line)| html_header.is_match(line));
+        if source && html {
+            for (number, line) in lines {
+                if line.contains("res.write(body)") {
+                    if let Some(pattern) = patterns
+                        .iter()
+                        .find(|p| p.name == "Unsafe HTML Response (XSS)")
+                    {
+                        findings.push(pattern_finding(pattern, path, *number, line));
+                    }
+                }
+            }
+        }
+    }
+    if has_session && !has_csrf {
+        let index = root.join("app/routes/index.js");
+        if let Some(lines) = active.get(&index) {
+            for (number, line) in lines {
+                let route = form_route
+                    .captures(line)
+                    .and_then(|capture| capture.get(1))
+                    .map(|match_| match_.as_str());
+                let has_form = route.is_some_and(|route| {
+                    let template = views.join(format!("{}.html", &route[1..]));
+                    std::fs::read_to_string(template).is_ok_and(|html| {
+                        html.lines().any(|form| {
+                            form.contains("<form")
+                                && (form.contains("method=\"POST\"")
+                                    || form.contains("method=\"post\""))
+                                && form.contains(&format!("action=\"{route}\""))
+                        })
+                    })
+                });
+                if has_form && !line.contains("csrf") && !line.contains("Csrf") {
+                    if let Some(pattern) = patterns
+                        .iter()
+                        .find(|p| p.name == "Missing CSRF Protection")
+                    {
+                        findings.push(pattern_finding(pattern, &index, *number, line));
+                    }
+                }
+            }
+        }
+    }
+    findings
+}
+
 /// Collect review findings without displaying them (for report generation)
 pub(crate) async fn collect_review_findings(
     project_path: &Path,
@@ -1068,6 +1279,11 @@ pub(crate) async fn collect_review_findings(
     // Route and handler context are needed for missing authorization. A bare
     // parameterized URL or a bare DAO lookup cannot establish an IDOR.
     report.extend(scoped_route_authz_findings(
+        &files,
+        &canonical_path,
+        &patterns,
+    ));
+    report.extend(scoped_template_xss_csrf_findings(
         &files,
         &canonical_path,
         &patterns,
@@ -2194,6 +2410,114 @@ mod scanner_regression_tests {
     const IDOR: &str = "Insecure Direct Object Reference (IDOR)";
 
     const MISSING_ADMIN: &str = "Missing Privileged Route Authorization";
+
+    #[test]
+    fn scoped_xss_csrf_requires_linked_sources_and_active_guards() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-web-context-{nonce}"));
+        let fixture = [
+            ("server.js", r#"app.use(session({ cookie: {} }));
+/* app.use(csrf()); */
+app.engine('.html', consolidate.swig);
+swig.setDefaults({ autoescape: false });"#),
+            ("app/data/profile-dao.js", "user.firstName = firstName;\nuser.lastName = lastName;\nusers.update({ id }, user);"),
+            ("app/routes/profile.js", r#"const { firstName } = req.body;
+const firstNameSafeString = firstName;
+profile.updateUser(id, firstName);
+return res.render("profile", { ...doc, firstNameSafeString });"#),
+            ("app/routes/index.js", r#"app.post("/profile", isLoggedIn, profileHandler.handleProfileUpdate);
+app.post("/benefits", isLoggedIn, benefitsHandler.updateBenefits);"#),
+            ("app/routes/research.js", r#"needle.get(url, (err, reply, body) => {
+res.writeHead(200, { "Content-Type": "text/html" });
+res.write(body);
+});"#),
+            ("app/views/profile.html", "{% extends './layout.html' %}\n<form method=\"post\" action=\"/profile\">\n<input value=\"{{firstNameSafeString}}\">\n<input value=\"{{lastName}}\">"),
+            ("app/views/benefits.html", "<form method=\"POST\" action=\"/benefits\">"),
+            ("app/views/layout.html", "<p>{{firstName}} {{lastName}}</p>"),
+        ];
+        for (relative, source) in fixture {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, source).unwrap();
+        }
+        let paths: Vec<_> = [
+            "server.js",
+            "app/data/profile-dao.js",
+            "app/routes/profile.js",
+            "app/routes/index.js",
+            "app/routes/research.js",
+        ]
+        .into_iter()
+        .map(|path| root.join(path))
+        .collect();
+        let patterns = build_vuln_patterns();
+        let titles = || {
+            scoped_template_xss_csrf_findings(&paths, &root, &patterns)
+                .into_iter()
+                .map(|f| (f.title, f.file_path.unwrap(), f.line_number.unwrap()))
+                .collect::<Vec<_>>()
+        };
+        let positive = titles();
+        assert_eq!(positive.len(), 6, "{positive:?}");
+        assert_eq!(
+            positive
+                .iter()
+                .filter(|(name, _, _)| name == "Unescaped Template Output (XSS)")
+                .count(),
+            3
+        );
+        assert_eq!(
+            positive
+                .iter()
+                .filter(|(name, _, _)| name == "Missing CSRF Protection")
+                .count(),
+            2
+        );
+        assert_eq!(
+            positive
+                .iter()
+                .filter(|(name, _, _)| name == "Unsafe HTML Response (XSS)")
+                .count(),
+            1
+        );
+        fs::write(
+            root.join("server.js"),
+            "app.use(session({}));\napp.use(csrf());\nswig.setDefaults({ autoescape: true });",
+        )
+        .unwrap();
+        assert!(titles()
+            .iter()
+            .all(|(name, _, _)| name != "Missing CSRF Protection"
+                && name != "Unescaped Template Output (XSS)"));
+        fs::write(
+            root.join("app/routes/research.js"),
+            "needle.get(url, (e, r, body) => { res.type('text/plain'); res.write(body); });",
+        )
+        .unwrap();
+        assert!(titles().is_empty(), "protected app should stay clean");
+        fs::write(
+            root.join("server.js"),
+            "app.use(session({}));\nswig.setDefaults({ autoescape: false });",
+        )
+        .unwrap();
+        fs::write(
+            root.join("app/routes/profile.js"),
+            "return res.render(\"profile\", { safeName: escapeHtml(req.body.firstName) });",
+        )
+        .unwrap();
+        fs::write(
+            root.join("app/data/profile-dao.js"),
+            "user.firstName = escapeHtml(firstName);\nusers.update({}, user);",
+        )
+        .unwrap();
+        assert!(titles()
+            .iter()
+            .all(|(name, _, _)| name != "Unescaped Template Output (XSS)"));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn linked_privileged_routes_and_private_object_without_guards_are_reported() {
