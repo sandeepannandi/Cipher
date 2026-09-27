@@ -2634,13 +2634,17 @@ req, err := http.NewRequest("POST", "https://api.example.com/search", strings.Ne
 
     #[test]
     fn nodegoat_constructor_arrow_where_sink_reached_across_files() {
-        let route = r#"const AllocationsDAO = require('../data/allocations-dao');
-function allocations(req) {
-  const allocationsDAO = new AllocationsDAO(db);
-  const {
-    threshold
-  } = req.query;
-  allocationsDAO.getByUserIdAndThreshold(req.session.userId, threshold, callback);
+        let route = r#"const AllocationsDAO = require('../data/allocations-dao').AllocationsDAO;
+class AllocationsHandler {
+  constructor(db) {
+    const allocationsDAO = new AllocationsDAO(db);
+    this.displayAllocations = (req, res, next) => {
+      const {
+        threshold
+      } = req.query;
+      allocationsDAO.getByUserIdAndThreshold(req.session.userId, threshold, callback);
+    };
+  }
 }"#;
         let dao = r#"const AllocationsDAO = function(db) {
   this.getByUserIdAndThreshold = (userId, threshold, callback) => {
@@ -2664,9 +2668,50 @@ exports.AllocationsDAO = AllocationsDAO;"#;
             found.contains(&(
                 "app/data/allocations-dao.js".to_string(),
                 SQLI_FLOW.to_string(),
-                3
+                7
             )),
             "{found:?}"
+        );
+    }
+
+    #[test]
+    fn js_multiline_request_destructure_only_seeds_request_values() {
+        let unsafe_findings = scan(
+            "const {\n  term\n} = req.query;\ndb.query(`SELECT * FROM users WHERE name = '${term}'`);",
+            "js",
+        );
+        assert_eq!(titles(&unsafe_findings), vec![SQLI_FLOW]);
+        let safe_findings = scan(
+            "const {\n  term\n} = trustedOptions;\ndb.query(`SELECT * FROM users WHERE name = '${term}'`);",
+            "js",
+        );
+        assert!(safe_findings.is_empty(), "{safe_findings:?}");
+    }
+
+    #[test]
+    fn js_property_require_instance_call_is_reported_in_service() {
+        let route = r#"const Repo = require('../services/repo').Repo;
+function Handler() {
+    const repo = new Repo();
+    this.search = (req, res) => {
+        const { name } = req.query;
+        return res.json(repo.findByName(name));
+    };
+}"#;
+        let repo = r#"function Repo() {
+    this.findByName = (name) => {
+        const sql = `SELECT id FROM users WHERE name = '${name}'`;
+        return db.prepare(sql).all();
+    };
+}
+exports.Repo = Repo;"#;
+        let found = scan_project(&[
+            ("src/routes/users.js", route),
+            ("src/services/repo.js", repo),
+        ]);
+        assert_eq!(
+            found,
+            vec![("src/services/repo.js".to_string(), SQLI_FLOW.to_string(), 4)]
         );
     }
 
@@ -7670,8 +7715,7 @@ fn flow_pass(
                 }
                 continue;
             }
-            if code.contains("=")
-                && code.contains('{')
+            if code.contains('{')
                 && !code.contains('}')
                 && (code.trim_start().starts_with("const {")
                     || code.trim_start().starts_with("let {")
@@ -7732,29 +7776,34 @@ fn flow_pass(
             continue;
         }
 
-        let reaches_sink = sinks.iter().any(|sink| {
-            if sink
-                .line_requires
-                .as_ref()
-                .is_some_and(|required| !required.is_match(code))
-            {
-                return false;
-            }
-            sink.call.captures_iter(&visible).any(|captures| {
-                let Some(whole) = captures.get(0) else {
+        let reaches_mongo_where = language == FlowLanguage::JavaScript
+            && code.contains("$where")
+            && (tainted.iter().any(|name| identifier_in(code, name))
+                || inline_read.as_ref().is_some_and(|re| re.is_match(code)));
+        let reaches_sink = reaches_mongo_where
+            || sinks.iter().any(|sink| {
+                if sink
+                    .line_requires
+                    .as_ref()
+                    .is_some_and(|required| !required.is_match(code))
+                {
                     return false;
-                };
-                let name = captures.get(1).map(|m| m.as_str()).unwrap_or("");
-                let args = call_arguments(&visible, whole.end() - 1);
-                (sink.arguments)(name).into_iter().any(|position| {
-                    args.get(position).is_some_and(|arg| {
-                        !sanitized(arg)
-                            && (tainted.iter().any(|name| identifier_in(arg, name))
-                                || inline_read.as_ref().is_some_and(|re| re.is_match(arg)))
+                }
+                sink.call.captures_iter(&visible).any(|captures| {
+                    let Some(whole) = captures.get(0) else {
+                        return false;
+                    };
+                    let name = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+                    let args = call_arguments(&visible, whole.end() - 1);
+                    (sink.arguments)(name).into_iter().any(|position| {
+                        args.get(position).is_some_and(|arg| {
+                            !sanitized(arg)
+                                && (tainted.iter().any(|name| identifier_in(arg, name))
+                                    || inline_read.as_ref().is_some_and(|re| re.is_match(arg)))
+                        })
                     })
                 })
-            })
-        });
+            });
         if reaches_sink {
             sink_lines.insert(line_index + 1);
         }
@@ -9531,7 +9580,13 @@ fn cross_file_flow_sinks(
                     return imports;
                 };
                 for caller_function in &functions[caller] {
-                    for line in &lines[caller][caller_function.body.clone()] {
+                    // Instance construction commonly lives in a constructor
+                    // while the imported method call lives in a field arrow
+                    // assigned inside that constructor. Inspect the containing
+                    // function body, not only the arrow-function body.
+                    let body_start = caller_function.body.start;
+                    let body_end = caller_function.body.end;
+                    for line in &lines[caller][body_start..body_end] {
                         let Some(captures) = instance_new.captures(line) else {
                             continue;
                         };
@@ -10828,6 +10883,7 @@ fn flow_imports(
             let (
                 Ok(module_require),
                 Ok(named_require),
+                Ok(property_require),
                 Ok(namespace_import),
                 Ok(named_import),
                 Ok(default_import),
@@ -10838,6 +10894,9 @@ fn flow_imports(
                 ),
                 Regex::new(
                     r#"^\s*(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?\s*$"#,
+                ),
+                Regex::new(
+                    r#"^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\.([A-Za-z_$][A-Za-z0-9_$]*)\s*;?\s*$"#,
                 ),
                 Regex::new(
                     r#"^\s*import\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$"#,
@@ -10867,6 +10926,19 @@ fn flow_imports(
                                     });
                                 }
                             }
+                        }
+                    }
+                }
+                if let Some(captures) = property_require.captures(line) {
+                    if let (Some(local), Some(spec), Some(exported)) =
+                        (captures.get(1), captures.get(2), captures.get(3))
+                    {
+                        if let Some(target) = resolve(spec.as_str()) {
+                            bindings.push(ImportBinding::Function {
+                                local: local.as_str().to_string(),
+                                exported: exported.as_str().to_string(),
+                                target,
+                            });
                         }
                     }
                 }
