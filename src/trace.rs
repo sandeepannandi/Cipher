@@ -4,7 +4,7 @@ use crate::zeroday::{extract_function_name, is_function_signature};
 use anyhow::Result;
 use colored::*;
 use ignore::WalkBuilder;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -104,7 +104,7 @@ const MAX_SCAN_FUNCTIONS: usize = 20_000;
 // ── Data structures ─────────────────────────────────────────────────
 
 /// A single hop in a taint path.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TraceStep {
     /// File the hop occurred in
     pub file: String,
@@ -1025,6 +1025,16 @@ pub async fn run_trace(
     }
 
     Ok(())
+}
+
+/// Collect existing tracer paths for a review report. A caller must match a
+/// path's final file and line to the reported sink before attaching it; a
+/// nearby path is not evidence for an unrelated finding.
+pub fn trace_review_paths(project_path: &Path) -> Vec<TaintPath> {
+    let canonical =
+        std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
+    let functions = collect_functions(&canonical);
+    Tracer::new(&functions, "", DEFAULT_DEPTH).trace_all()
 }
 
 /// Find real data-flow paths that connect two files (used by `attack --flow`).
