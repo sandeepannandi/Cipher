@@ -46,6 +46,7 @@ const TAINT_SINKS: &[&str] = &[
     "system",
     "popen",
     "eval",
+    "$where",
     "assert",
     "query",
     "execute",
@@ -143,6 +144,8 @@ struct FunctionDef {
     file: String,
     start_line: usize,
     params: Vec<String>,
+    /// Enclosing lexical function, for closure captures.
+    parent: Option<String>,
     /// (line_number, trimmed source) pairs for the function body
     body: Vec<(usize, String)>,
 }
@@ -203,41 +206,52 @@ fn collect_functions(project_path: &Path) -> Vec<FunctionDef> {
 /// Split a file into function definitions.
 fn parse_functions(lines: &[String], file: &str, ext: &str) -> Vec<FunctionDef> {
     let mut functions = Vec::new();
-    let mut current: Option<FunctionDef> = None;
+    let mut stack: Vec<(FunctionDef, i32)> = Vec::new();
     let mut brace_depth = 0i32;
+    let js = matches!(ext, "js" | "jsx" | "ts" | "tsx");
 
+    let mut in_block_comment = false;
     for (i, line) in lines.iter().enumerate() {
         let line_num = i + 1;
         let trimmed = line.trim();
-
-        // Start a new function when we see a signature line. If one is still
-        // open (e.g. a Python def that never closed via braces), flush it first
-        // so consecutive definitions are each parsed — this matters for files
-        // with many auth/helper functions. For brace-based languages we only
-        // flush when the brace depth is 0 (the outer function already closed),
-        // so nested declarations/arrow functions inside a body don't truncate it.
-        if is_function_signature(trimmed, ext) && (brace_depth <= 0 || ext == "py") {
-            if let Some(f) = current.take() {
-                functions.push(f);
+        if in_block_comment {
+            if trimmed.contains("*/") {
+                in_block_comment = false;
+            }
+            continue;
+        }
+        if trimmed.starts_with("/*") {
+            in_block_comment = !trimmed.contains("*/");
+            continue;
+        }
+        let signature = is_function_signature(trimmed, ext) || (js && js_arrow_signature(trimmed));
+        if signature {
+            // Python's indentation is handled below. In brace languages a
+            // nested arrow is its own lexical function, not a continuation of
+            // its parent's body.
+            if ext == "py" {
+                if let Some((f, _)) = stack.pop() {
+                    functions.push(f);
+                }
             }
             let mut name = extract_function_name(trimmed);
             if name == "<anonymous>" {
                 name = extract_arrow_name(trimmed).unwrap_or(name);
             }
-            let params = extract_params(trimmed);
-            current = Some(FunctionDef {
-                name,
-                file: file.to_string(),
-                start_line: line_num,
-                params,
-                body: Vec::new(),
-            });
+            stack.push((
+                FunctionDef {
+                    name,
+                    file: file.to_string(),
+                    start_line: line_num,
+                    params: extract_params(trimmed),
+                    parent: stack.last().map(|(f, _)| f.name.clone()),
+                    body: Vec::new(),
+                },
+                brace_depth,
+            ));
         }
 
-        if let Some(f) = current.as_mut() {
-            // Skip the signature line itself, comments, and pure closing braces
-            // (e.g. `}` / `};` / `})`) from the body — the closing delimiter that
-            // ends this function is not a statement to analyze.
+        if let Some((f, _)) = stack.last_mut() {
             if line_num != f.start_line
                 && !trimmed.is_empty()
                 && !is_comment(trimmed)
@@ -246,51 +260,50 @@ fn parse_functions(lines: &[String], file: &str, ext: &str) -> Vec<FunctionDef> 
                 f.body.push((line_num, trimmed.to_string()));
             }
         }
-
-        // Track brace depth to find the end of the current function
         for ch in trimmed.chars() {
             match ch {
                 '{' => brace_depth += 1,
-                '}' => {
-                    brace_depth -= 1;
-                    if brace_depth <= 0 && current.is_some() {
-                        let f = current.take().unwrap();
-                        functions.push(f);
-                    }
-                }
+                '}' => brace_depth -= 1,
                 _ => {}
             }
         }
-
-        // Python uses indentation, not braces. Close a def when a line at
-        // column 0 that is not a new def appears after the body started.
-        if ext == "py" {
-            if let Some(f) = current.as_ref() {
-                let body_started = f.body.iter().any(|(ln, _)| *ln > f.start_line);
-                if body_started
-                    && line_num > f.start_line
-                    && indent_of(line) == 0
-                    && !trimmed.is_empty()
-                    && !trimmed.starts_with("def ")
-                    && !is_comment(trimmed)
-                {
-                    let f = current.take().unwrap();
-                    functions.push(f);
-                }
+        if ext != "py" {
+            while stack.last().is_some_and(|(_, start)| brace_depth <= *start) {
+                functions.push(stack.pop().unwrap().0);
+            }
+        } else if let Some((f, _)) = stack.last() {
+            let body_started = f.body.iter().any(|(ln, _)| *ln > f.start_line);
+            if body_started
+                && line_num > f.start_line
+                && indent_of(line) == 0
+                && !trimmed.is_empty()
+                && !trimmed.starts_with("def ")
+                && !is_comment(trimmed)
+            {
+                functions.push(stack.pop().unwrap().0);
             }
         }
-
-        if brace_depth < 0 {
-            brace_depth = 0;
-        }
+        brace_depth = brace_depth.max(0);
     }
-
-    // Flush any unclosed function (Python defs, single-line bodies)
-    if let Some(f) = current.take() {
+    while let Some((f, _)) = stack.pop() {
         functions.push(f);
     }
-
     functions
+}
+
+/// Assignment-style JS arrows, including instance methods in constructors.
+fn js_arrow_signature(line: &str) -> bool {
+    let Some((lhs, rhs)) = line.split_once('=') else {
+        return false;
+    };
+    let lhs = lhs.split_whitespace().last().unwrap_or("");
+    !lhs.is_empty()
+        && lhs
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+        && rhs.trim_start().starts_with('(')
+        && rhs.contains(") =>")
+        && rhs.contains('{')
 }
 
 /// True if the line is only closing delimiters (e.g. `}` / `};` / `})` / `},`).
@@ -460,12 +473,52 @@ impl<'a> Tracer<'a> {
     /// Trace all taint paths across the whole codebase.
     fn trace_all(&self) -> Vec<TaintPath> {
         let mut paths = Vec::new();
-        let mut visited: HashSet<(String, String)> = HashSet::new();
         for func in self.functions {
+            let mut visited: HashSet<(String, String)> = HashSet::new();
             let found = self.trace_function(func, Vec::new(), 0, &mut visited);
             paths.extend(found);
         }
         paths
+    }
+
+    fn instance_resolves(
+        &self,
+        caller: &FunctionDef,
+        receiver: &str,
+        ctor: &str,
+        target: &str,
+    ) -> bool {
+        let bound = self
+            .functions
+            .iter()
+            .filter(|f| {
+                f.file == caller.file
+                    && (f.name == caller.name || Some(f.name.as_str()) == caller.parent.as_deref())
+            })
+            .flat_map(|f| f.body.iter())
+            .any(|(_, line)| {
+                let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+                compact.contains(&format!("{receiver}=new{ctor}("))
+            });
+        if !bound {
+            return false;
+        }
+        let Ok(imports) = std::fs::read_to_string(&caller.file) else {
+            return false;
+        };
+        let Some(parent) = Path::new(&caller.file).parent() else {
+            return false;
+        };
+        imports
+            .lines()
+            .filter(|line| line.contains(&format!("{ctor} = require(")))
+            .filter_map(|line| line.split("require(").nth(1))
+            .filter_map(|rest| rest.trim_start().strip_prefix(['\'', '"']))
+            .filter_map(|rest| rest.split(['\'', '"']).next())
+            .any(|module| {
+                let path = parent.join(module).with_extension("js");
+                std::fs::canonicalize(path).ok().as_deref() == Some(Path::new(target))
+            })
     }
 
     /// Analyze one function body given optionally-pre-tainted params.
@@ -480,10 +533,105 @@ impl<'a> Tracer<'a> {
         let mut result = Vec::new();
         let mut tainted: Vec<TaintedVar> = pre_tainted;
         let mut steps: Vec<TraceStep> = Vec::new();
+        // Resolve multiline request destructuring only when the closing line
+        // explicitly binds the captured identifiers to a request property.
+        let mut destructured: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut pending: Option<String> = None;
+        for (line_num, line) in &func.body {
+            if pending.is_none() && line.trim().starts_with("const {") {
+                pending = Some(line.trim().to_string());
+            } else if let Some(text) = pending.as_mut() {
+                text.push(' ');
+                text.push_str(line.trim());
+                if line.contains('}') {
+                    let names = text
+                        .split_once('{')
+                        .and_then(|(_, rest)| rest.split_once('}'));
+                    if let Some((members, rhs)) = names {
+                        if rhs.trim_start().starts_with("= req.")
+                            || rhs.trim_start().starts_with("= request.")
+                        {
+                            let vars: Vec<String> = members
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|name| {
+                                    !name.is_empty()
+                                        && name
+                                            .chars()
+                                            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                                })
+                                .map(str::to_string)
+                                .collect();
+                            destructured.insert(*line_num, vars);
+                        }
+                    }
+                    pending = None;
+                }
+            }
+        }
 
         for (line_num, line) in &func.body {
             let line = line.clone();
             let lower = line.to_lowercase();
+
+            // Direct request expression in a code-execution call: source and
+            // sink are the same line, so there is no assignment to seed.
+            if func.file.ends_with(".js") || func.file.ends_with(".ts") {
+                if let Some((callee, _args)) =
+                    extract_calls(&line).into_iter().find(|(callee, args)| {
+                        matches!(callee.as_str(), "eval" | "Function")
+                            && args.first().is_some_and(|arg| direct_request_expr(arg))
+                    })
+                {
+                    let detail = format!("tainted data reaches '{callee}'");
+                    result.push(TaintPath {
+                        id: String::new(),
+                        title: format!("user input reaches {callee}"),
+                        description: format!("Request input flows directly into {callee}"),
+                        risk_score: 9.0,
+                        source: format!("{}:{}", func.file, line_num),
+                        sink: format!("{}:{} — {callee}", func.file, line_num),
+                        steps: vec![
+                            TraceStep {
+                                file: func.file.clone(),
+                                line: *line_num,
+                                function: func.name.clone(),
+                                action: "source".into(),
+                                detail: "request input passed to execution call".into(),
+                            },
+                            TraceStep {
+                                file: func.file.clone(),
+                                line: *line_num,
+                                function: func.name.clone(),
+                                action: "sink".into(),
+                                detail,
+                            },
+                        ],
+                    });
+                    continue;
+                }
+            }
+
+            if let Some(vars) = destructured.get(line_num) {
+                for var in vars {
+                    if !tainted.iter().any(|t| t.name == *var) {
+                        tainted.push(TaintedVar {
+                            name: var.clone(),
+                            origin_line: *line_num,
+                            origin_file: func.file.clone(),
+                            origin_func: func.name.clone(),
+                        });
+                        steps.push(TraceStep {
+                            file: func.file.clone(),
+                            line: *line_num,
+                            function: func.name.clone(),
+                            action: "source".into(),
+                            detail: format!("request input enters '{var}'"),
+                        });
+                    }
+                }
+                continue;
+            }
 
             // 1. New sources
             if let Some(var) = source_var(&line) {
@@ -506,7 +654,7 @@ impl<'a> Tracer<'a> {
             }
 
             // 2. Propagation through assignments (never through sanitizers)
-            let sanitized_line = SANITIZERS.iter().any(|s| lower.contains(s));
+            let sanitized_line = SANITIZERS.iter().any(|s| lower.contains(&s.to_lowercase()));
             if !sanitized_line {
                 if let Some((lhs, _rhs)) = split_assignment(&line) {
                     // Clone the source so we don't hold a borrow into `tainted`
@@ -536,13 +684,71 @@ impl<'a> Tracer<'a> {
             }
 
             // 3. Direct sink check (skip sanitizer lines)
-            if !SANITIZERS.iter().any(|s| lower.contains(s)) {
+            if !SANITIZERS.iter().any(|s| lower.contains(&s.to_lowercase())) {
                 if let Some(sink) = sink_hit(&line, &tainted, &self.query_focus) {
-                    let source_summary = steps
+                    // A function can see several independent request values.
+                    // Keep only steps belonging to the value used at this sink;
+                    // reporting an unrelated source as part of the path is
+                    // worse than leaving that finding untraced.
+                    let sink_expression = if sink == "$where" {
+                        // Property names such as `this.userId` in a Mongo
+                        // expression are not the interpolated request value.
+                        // Only a `${name}` expression or a concatenated
+                        // identifier is evidence for the selected origin.
+                        line.split_once("$where")
+                            .map(|(_, value)| value)
+                            .unwrap_or(&line)
+                    } else {
+                        &line
+                    };
+                    let origin = if sink == "$where" {
+                        tainted.iter().find(|t| {
+                            sink_expression.contains(&format!("${{{}}}", t.name))
+                                || sink_expression.contains(&format!("+ {}", t.name))
+                        })
+                    } else {
+                        tainted.iter().find(|t| line_uses(sink_expression, &t.name))
+                    };
+                    let Some(origin) = origin else { continue };
+                    let same_origin = |t: &&TaintedVar| {
+                        t.origin_file == origin.origin_file && t.origin_line == origin.origin_line
+                    };
+                    let mut path_steps: Vec<TraceStep> = steps
+                        .iter()
+                        .filter(|step| {
+                            if step.action == "source" {
+                                return step.file == origin.origin_file
+                                    && step.line == origin.origin_line;
+                            }
+                            if step.action == "flow" {
+                                return tainted
+                                    .iter()
+                                    .filter(same_origin)
+                                    .any(|t| step.detail.starts_with(&format!("'{}' ←", t.name)));
+                            }
+                            true
+                        })
+                        .cloned()
+                        .collect();
+                    if path_steps
+                        .first()
+                        .is_none_or(|step| step.action != "source")
+                    {
+                        path_steps.insert(
+                            0,
+                            TraceStep {
+                                file: origin.origin_file.clone(),
+                                line: origin.origin_line,
+                                function: origin.origin_func.clone(),
+                                action: "source".into(),
+                                detail: format!("request input enters '{}'", origin.name),
+                            },
+                        );
+                    }
+                    let source_summary = path_steps
                         .first()
                         .map(|s| format!("{}:{} — {}", s.file, s.line, s.detail))
                         .unwrap_or_else(|| format!("{}:{}", func.file, func.start_line));
-                    let mut path_steps = steps.clone();
                     path_steps.push(TraceStep {
                         file: func.file.clone(),
                         line: *line_num,
@@ -568,7 +774,16 @@ impl<'a> Tracer<'a> {
 
             // 4. Cross-file call tracing
             if depth < self.max_depth {
-                for call in extract_calls(&line) {
+                // Nested calls inside arguments must be considered separately:
+                // `find(searchCriteria())` invokes the closure even though
+                // the outer call's argument is not directly tainted.
+                for call in extract_calls(&line).into_iter().chain(
+                    extract_calls(&line).into_iter().flat_map(|(_, args)| {
+                        args.into_iter()
+                            .flat_map(|arg| extract_calls(&arg))
+                            .collect::<Vec<_>>()
+                    }),
+                ) {
                     let (callee, args) = call;
                     let callee_lower = callee.to_lowercase();
                     // Only follow if a tainted variable is among the args
@@ -582,12 +797,37 @@ impl<'a> Tracer<'a> {
                                 .then_some(idx)
                         })
                         .collect();
-                    if tainted_args.is_empty() {
+                    if tainted_args.is_empty()
+                        && !self.functions.iter().any(|f| {
+                            f.file == func.file
+                                && f.name == callee
+                                && f.parent.as_deref() == Some(&func.name)
+                                && f.body.iter().any(|(_, code)| {
+                                    tainted.iter().any(|t| line_uses(code, &t.name))
+                                })
+                        })
+                    {
                         continue;
                     }
                     // Resolve the callee (prefer same file, then others)
-                    let candidates: Vec<&FunctionDef> =
+                    let mut candidates: Vec<&FunctionDef> =
                         self.by_name.get(&callee_lower).cloned().unwrap_or_default();
+                    // Instance arrow definitions are indexed as `this.method`;
+                    // match a dotted call only by its terminal method name.
+                    if callee.contains('.') {
+                        if let Some((receiver, method)) = callee.rsplit_once('.') {
+                            // Only follow a method when its receiver is a local
+                            // instance of a constructor imported from the
+                            // candidate's actual module. A matching method
+                            // name somewhere in the repo is not provenance.
+                            candidates.extend(self.functions.iter().filter(|f| {
+                                f.name == format!("this.{method}")
+                                    && f.parent.as_deref().is_some_and(|ctor| {
+                                        self.instance_resolves(func, receiver, ctor, &f.file)
+                                    })
+                            }));
+                        }
+                    }
                     let same_file: Vec<&FunctionDef> = candidates
                         .iter()
                         .copied()
@@ -615,6 +855,23 @@ impl<'a> Tracer<'a> {
                                         origin_file: t.origin_file,
                                         origin_func: t.origin_func,
                                     });
+                                }
+                            }
+                        }
+                        // Lexical closures also capture variables from their
+                        // enclosing function, but only if that closure is
+                        // actually invoked at this call site.
+                        if candidate.file == func.file
+                            && candidate.parent.as_deref() == Some(func.name.as_str())
+                        {
+                            for t in &tainted {
+                                if candidate
+                                    .body
+                                    .iter()
+                                    .any(|(_, code)| line_uses(code, &t.name))
+                                    && !pre.iter().any(|p| p.name == t.name)
+                                {
+                                    pre.push(t.clone());
                                 }
                             }
                         }
@@ -646,11 +903,29 @@ impl<'a> Tracer<'a> {
                                     .join(", ")
                             ),
                         });
-
                         let child_paths = self.trace_function(candidate, pre, depth + 1, visited);
                         for mut p in child_paths {
-                            let mut combined = call_steps.clone();
+                            let origin = p.steps.iter().find(|step| step.action == "source");
+                            let mut combined: Vec<TraceStep> = call_steps
+                                .iter()
+                                .filter(|step| {
+                                    step.action != "source"
+                                        || origin.is_some_and(|src| {
+                                            src.file == step.file && src.line == step.line
+                                        })
+                                })
+                                .cloned()
+                                .collect();
                             combined.extend(p.steps.clone());
+                            // The callee owns the origin: retain a single
+                            // source step before the call path.
+                            if let Some(index) =
+                                combined.iter().position(|step| step.action == "source")
+                            {
+                                let source = combined.remove(index);
+                                combined.retain(|step| step.action != "source");
+                                combined.insert(0, source);
+                            }
                             p.steps = combined;
                             result.push(p);
                         }
@@ -678,7 +953,10 @@ fn source_var(line: &str) -> Option<String> {
             let lhs = trimmed[..eq].trim();
             let rhs = trimmed[eq + 1..].trim();
             let rhs_lower = rhs.to_lowercase();
-            if TAINT_SOURCES.iter().any(|s| rhs_lower.contains(s)) {
+            if TAINT_SOURCES
+                .iter()
+                .any(|s| rhs_lower.contains(&s.to_lowercase()))
+            {
                 let var = lhs
                     .split_whitespace()
                     .last()
@@ -703,6 +981,14 @@ fn source_var(line: &str) -> Option<String> {
     None
 }
 
+fn direct_request_expr(arg: &str) -> bool {
+    ["req.", "request."].iter().any(|prefix| {
+        ["body", "query", "params", "headers", "cookies"]
+            .iter()
+            .any(|key| arg.contains(&format!("{prefix}{key}")))
+    })
+}
+
 /// Split `x = y` into (lhs, rhs), ignoring comparisons.
 fn split_assignment(line: &str) -> Option<(String, String)> {
     let t = line.trim();
@@ -716,7 +1002,12 @@ fn split_assignment(line: &str) -> Option<(String, String)> {
                 .unwrap_or("")
                 .trim_matches(';')
                 .to_string();
-            if !lhs_var.is_empty() && !lhs_var.contains('(') {
+            if !lhs_var.is_empty()
+                && lhs_var
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !lhs_var.contains('(')
+            {
                 return Some((lhs_var, rhs.to_string()));
             }
         }
@@ -801,6 +1092,12 @@ fn extract_calls(line: &str) -> Vec<(String, Vec<String>)> {
                     calls.push((name, args));
                     i = end + 1;
                     continue;
+                }
+                // A multiline callback can leave the call's final `)` on a
+                // later line. Completed arguments before its opening remain
+                // unambiguous; do not infer or use the unfinished argument.
+                if !args.is_empty() && current.contains("=>") {
+                    calls.push((name, args));
                 }
             }
         }
@@ -1429,5 +1726,24 @@ mod tests {
         let fns = parse_functions(&lines, "auth.js", "js");
         assert_eq!(fns.len(), 1);
         assert_eq!(fns[0].name, "checkAdmin");
+    }
+    #[test]
+    fn no_path_through_unrelated_instance_method() {
+        let root =
+            std::env::temp_dir().join(format!("cipher-unrelated-instance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("app.js"), "function Handler() {\n const instance = new SafeDAO();\n this.handle = (req) => {\n const value = req.body.value;\n instance.run(value);\n };\n}\n").unwrap();
+        std::fs::write(
+            root.join("evil.js"),
+            "function EvilDAO() {\n this.run = (value) => {\n eval(value);\n };\n}\n",
+        )
+        .unwrap();
+        let paths = trace_review_paths(&root);
+        assert!(!paths.iter().any(|p| p
+            .steps
+            .last()
+            .is_some_and(|step| step.file.ends_with("evil.js"))));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
