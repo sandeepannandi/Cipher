@@ -2715,6 +2715,24 @@ exports.Repo = Repo;"#;
         );
     }
 
+    #[test]
+    fn js_commented_where_is_not_a_sink() {
+        let findings = scan(
+            "const threshold = req.query.threshold;\n/*\nreturn {$where: `${threshold}`};\n*/",
+            "js",
+        );
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn js_where_is_only_an_sql_sink() {
+        let findings = scan(
+            "const threshold = req.query.threshold;\nreturn {$where: `${threshold}`};",
+            "js",
+        );
+        assert_eq!(titles(&findings), vec![SQLI_FLOW]);
+    }
+
     const SQLI_FLOW: &str = "SQL Injection — String Concatenation";
 
     #[test]
@@ -7398,10 +7416,11 @@ fn request_flow_sink_lines(
     language: FlowLanguage,
     sinks: &[FlowSink],
     sanitized: fn(&str) -> bool,
+    mongo_where: bool,
 ) -> std::collections::HashSet<usize> {
     let lines: Vec<&str> = content.lines().collect();
     let functions = flow_functions(&lines, language);
-    let summaries = flow_summaries(&lines, language, sinks, sanitized, &functions);
+    let summaries = flow_summaries(&lines, language, sinks, sanitized, mongo_where, &functions);
     let calls = FlowCalls {
         functions: &functions,
         summaries: &summaries,
@@ -7413,6 +7432,7 @@ fn request_flow_sink_lines(
         language,
         sinks,
         sanitized,
+        mongo_where,
         &[],
         true,
         Some(&calls),
@@ -7428,6 +7448,7 @@ fn request_flow_sink_lines(
             language,
             sinks,
             sanitized,
+            mongo_where,
             &seeds,
             true,
             Some(&calls),
@@ -7494,6 +7515,7 @@ fn flow_summaries(
     language: FlowLanguage,
     sinks: &[FlowSink],
     sanitized: fn(&str) -> bool,
+    mongo_where: bool,
     functions: &[FlowFunction],
 ) -> FlowSummaries {
     let mut summaries: FlowSummaries = functions
@@ -7519,6 +7541,7 @@ fn flow_summaries(
                             language,
                             sinks,
                             sanitized,
+                            mongo_where,
                             std::slice::from_ref(param),
                             false,
                             Some(&calls),
@@ -7648,6 +7671,7 @@ fn flow_pass(
     language: FlowLanguage,
     sinks: &[FlowSink],
     sanitized: fn(&str) -> bool,
+    mongo_where: bool,
     seeds: &[String],
     track_sources: bool,
     calls: Option<&FlowCalls>,
@@ -7671,6 +7695,7 @@ fn flow_pass(
 
     let mut tainted: std::collections::HashSet<String> = seeds.iter().cloned().collect();
     let mut destructuring_names: Option<String> = None;
+    let mut in_block_comment = false;
     for line_index in range {
         let Some(line) = lines.get(line_index) else {
             break;
@@ -7681,6 +7706,18 @@ fn flow_pass(
             line
         };
         let code = raw.trim();
+        if language == FlowLanguage::JavaScript {
+            if in_block_comment {
+                if code.contains("*/") {
+                    in_block_comment = false;
+                }
+                continue;
+            }
+            if code.starts_with("/*") {
+                in_block_comment = !code.contains("*/");
+                continue;
+            }
+        }
         if code.is_empty()
             || code.starts_with("//")
             || code.starts_with("/*")
@@ -7776,7 +7813,8 @@ fn flow_pass(
             continue;
         }
 
-        let reaches_mongo_where = language == FlowLanguage::JavaScript
+        let reaches_mongo_where = mongo_where
+            && language == FlowLanguage::JavaScript
             && code.contains("$where")
             && (tainted.iter().any(|name| identifier_in(code, name))
                 || inline_read.as_ref().is_some_and(|re| re.is_match(code)));
@@ -9414,6 +9452,7 @@ fn cross_file_flow_sinks(
                     module.language,
                     &sinks,
                     sanitized,
+                    family == 0,
                     &functions[index],
                 )
             })
@@ -9769,6 +9808,7 @@ fn cross_file_flow_sinks(
                             module.language,
                             &sinks,
                             sanitized,
+                            family == 0,
                             std::slice::from_ref(param),
                             false,
                             Some(&calls),
@@ -9808,6 +9848,7 @@ fn cross_file_flow_sinks(
                 module.language,
                 &sinks,
                 sanitized,
+                family == 0,
                 &[],
                 true,
                 Some(&calls),
@@ -9827,6 +9868,7 @@ fn cross_file_flow_sinks(
                     module.language,
                     &sinks,
                     sanitized,
+                    family == 0,
                     &seeds,
                     true,
                     Some(&calls),
@@ -11233,6 +11275,7 @@ fn sql_injection_sink_lines(content: &str, extension: &str) -> std::collections:
         language,
         &sql_flow_sinks(language),
         contains_numeric_conversion,
+        true,
     )
 }
 
@@ -11245,7 +11288,7 @@ fn code_injection_sink_lines(content: &str, extension: &str) -> std::collections
     if sinks.is_empty() {
         return std::collections::HashSet::new();
     }
-    request_flow_sink_lines(content, language, &sinks, |_| false)
+    request_flow_sink_lines(content, language, &sinks, |_| false, false)
 }
 
 #[allow(clippy::items_after_test_module)]
@@ -11368,6 +11411,7 @@ fn command_injection_sink_lines(
         language,
         &command_flow_sinks(language),
         contains_command_sanitizer,
+        false,
     )
 }
 
@@ -11469,6 +11513,7 @@ fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<
         language,
         &ssrf_flow_sinks(language),
         contains_numeric_conversion,
+        false,
     )
 }
 
