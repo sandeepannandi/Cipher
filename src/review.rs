@@ -137,6 +137,16 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Validate outbound URLs against an allowlist of hosts and schemes, block private and metadata addresses, and never pass user input directly as the request URL."
     );
 
+    add_vuln!(
+        "Open Redirect",
+        "A redirect target taken from request input can send users to an attacker-controlled site.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A01BrokenAccessControl),
+        // Require request-to-target flow, not every Express redirect.
+        r"\x00",
+        &["js", "ts"],
+        "Allow only known local redirect destinations, or validate the destination against an allowlist."
+    );
+
     // -- Cryptography --
 
     add_vuln!(
@@ -553,6 +563,7 @@ fn scan_file_for_vulns_with(
     let mut sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
     let mut command_injection_sinks = command_injection_sink_lines(&content, &ext);
     let mut ssrf_sinks = ssrf_sink_lines(&content, &ext);
+    let redirect_sinks = open_redirect_sink_lines(&content, &ext);
     if let Some(cross_file) = cross_file {
         sql_injection_sinks.extend(cross_file.sql.iter().copied());
         command_injection_sinks.extend(cross_file.command.iter().copied());
@@ -620,6 +631,7 @@ fn scan_file_for_vulns_with(
                     && command_injection_sinks.contains(&line_number))
                 || (pattern.name == "Server-Side Request Forgery (SSRF)"
                     && ssrf_sinks.contains(&line_number))
+                || (pattern.name == "Open Redirect" && redirect_sinks.contains(&line_number))
                 || (pattern.name == "Code Injection"
                     && code_injection_sinks.contains(&line_number))
                 || (pattern.name == "Server-Side Template Injection (SSTI)"
@@ -3099,6 +3111,62 @@ out, err := exec.Command("ping", "-c", "1", host).Output()"#,
     }
 
     const SSRF: &str = "Server-Side Request Forgery (SSRF)";
+
+    const OPEN_REDIRECT: &str = "Open Redirect";
+
+    #[test]
+    fn nodegoat_documented_needle_url_flow_is_ssrf_on_exact_sink_line() {
+        let findings = scan(
+            "const needle = require('needle');\nfunction research(req, res) {\n  if (req.query.symbol) {\n    const url = req.query.url + req.query.symbol;\n    return needle.get(url, (err, response) => response);\n  }\n}",
+            "js",
+        );
+        let ssrf: Vec<_> = findings.iter().filter(|f| f.title == SSRF).collect();
+        assert_eq!(ssrf.len(), 1);
+        assert_eq!(ssrf[0].line_number, Some(5));
+    }
+
+    #[test]
+    fn express_request_controlled_redirect_is_reported_at_sink() {
+        let findings = scan(
+            "app.get('/learn', (req, res) => {\n  return res.redirect(req.query.url);\n});",
+            "js",
+        );
+        let redirect: Vec<_> = findings
+            .iter()
+            .filter(|f| f.title == OPEN_REDIRECT)
+            .collect();
+        assert_eq!(redirect.len(), 1);
+        assert_eq!(redirect[0].line_number, Some(2));
+    }
+
+    #[test]
+    fn redirect_alias_and_status_overload_are_traced_in_typescript() {
+        let findings = scan(
+            "const target = req.body.next;\nres.redirect(302, target);",
+            "ts",
+        );
+        assert_eq!(titles(&findings), vec![OPEN_REDIRECT]);
+        assert_eq!(findings[0].line_number, Some(2));
+    }
+
+    #[test]
+    fn fixed_redirects_and_unrelated_request_parameters_are_clean() {
+        for source in [
+            "res.redirect('/login');",
+            "const id = req.query.id; res.redirect('/dashboard');",
+            "const url = req.query.url; res.redirect('/login');",
+            "res.redirect(req.query.url, '/safe');",
+            "const url = req.query.url; needle.get('https://example.com', { headers: { url } });",
+        ] {
+            let findings = scan(source, "js");
+            assert!(
+                !findings
+                    .iter()
+                    .any(|f| f.title == OPEN_REDIRECT || f.title == SSRF),
+                "{source}"
+            );
+        }
+    }
 
     #[test]
     fn python_request_url_reaching_requests_get_is_reported() {
@@ -12275,12 +12343,68 @@ fn outbound_url_argument(name: &str) -> Vec<usize> {
     }
 }
 
+/// Express redirects are vulnerable only when their destination is request-controlled.
+/// Express accepts either `redirect(path)` or `redirect(status, path)`.
+#[allow(clippy::items_after_test_module)]
+fn open_redirect_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    if !matches!(extension, "js" | "ts") {
+        return std::collections::HashSet::new();
+    }
+    let Ok(first) = Regex::new(r"\b(?:res|response)\s*\.\s*(redirect)\s*\(") else {
+        return std::collections::HashSet::new();
+    };
+    let mut lines = request_flow_sink_lines(
+        content,
+        FlowLanguage::JavaScript,
+        &[FlowSink {
+            call: first,
+            arguments: first_argument,
+            line_requires: None,
+        }],
+        |_| false,
+        false,
+    );
+    lines.retain(|line_number| {
+        let code = content.lines().nth(line_number - 1).unwrap_or("");
+        first_redirect_has_one_argument(code)
+    });
+    lines.extend(request_flow_sink_lines(
+        content,
+        FlowLanguage::JavaScript,
+        &[FlowSink {
+            call: Regex::new(r"\b(?:res|response)\s*\.\s*(redirect)\s*\(")
+                .expect("redirect pattern"),
+            arguments: redirect_second_argument,
+            line_requires: Regex::new(r"\b(?:res|response)\s*\.\s*redirect\s*\(\s*\d{3}\s*,").ok(),
+        }],
+        |_| false,
+        false,
+    ));
+    lines
+}
+
+#[allow(clippy::items_after_test_module)]
+fn first_redirect_has_one_argument(line: &str) -> bool {
+    let Ok(call) = Regex::new(r"\b(?:res|response)\s*\.\s*redirect\s*\(") else {
+        return false;
+    };
+    let one_argument = call
+        .find_iter(line)
+        .any(|found| call_arguments(line, found.end() - 1).len() == 1);
+    one_argument
+}
+
+#[allow(clippy::items_after_test_module)]
+fn redirect_second_argument(_name: &str) -> Vec<usize> {
+    vec![1]
+}
+
 /// Find outbound HTTP requests whose URL is built from request input in the
 /// same file.
 ///
 /// Sources and propagation match the SQL injection model. Only the URL
 /// argument counts: Python `requests`/`httpx` calls and `urlopen`; JS
-/// `fetch`, `axios`, `got`, and `http(s).get/request`; Java `new URL`,
+/// `fetch`, `axios`, `needle`, `got`, and `http(s).get/request`; Java `new URL`,
 /// `URI.create`, and `RestTemplate` calls; Go `http.Get/Post/Head/PostForm`
 /// and `http.NewRequest*`; Rust `reqwest`/`ureq` `get`/`post`/... calls. A
 /// request value sent only as a query parameter,
@@ -12310,7 +12434,7 @@ fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
         ],
         FlowLanguage::JavaScript => &[
             r#"(?:^|[^.\w$])(fetch|got|axios)\s*\("#,
-            r#"\baxios\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
+            r#"\b(?:axios|needle|got)\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
             r#"\bhttps?\s*\.\s*(get|request)\s*\("#,
         ],
         FlowLanguage::Java => &[
