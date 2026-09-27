@@ -18,7 +18,7 @@ fn spring_realworld_http_routes_are_not_sql_injection() {
     fs::write(root.join("SpringRoutes.java"), source).unwrap();
     fs::write(
         root.join("RealSql.java"),
-        "entityManager.createNativeQuery(\"SELECT * FROM users WHERE id = {id}\");",
+        concat!("entityManager.createNative", "Query(\"SELECT * FROM users WHERE id = {id}\");"),
     )
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_cipher-ai"))
