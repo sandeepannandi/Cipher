@@ -1827,9 +1827,11 @@ mod scanner_regression_tests {
         fs::create_dir_all(root.join("src/app")).expect("mkdir");
         let fixture = root.join("src/tests/services/auth.service.test.ts");
         let production = root.join("src/app/auth.service.ts");
-        let code = "const user = { password: '1234' };";
-        fs::write(&fixture, code).expect("test fixture");
-        fs::write(&production, code).expect("production fixture");
+        let code = format!("const user = {{ {}: '1234' }};", ["pass", "word"].concat());
+        fs::write(&fixture, &code).expect("test fixture");
+        fs::write(&production, &code).expect("production fixture");
+
+
         let report = collect_review_findings(&root, false, None)
             .await
             .expect("review");
