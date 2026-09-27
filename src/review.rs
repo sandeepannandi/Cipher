@@ -119,8 +119,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Server-Side Template Injection (SSTI)",
         "User input is passed directly to a template engine, enabling SSTI attacks.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A03Injection),
-        // Matches: .render(user_var) or jinja2.Template(user_var) etc.
-        r#"(?i)(?:\.render\(|\.template\(|\.parse\(|jinja2\.Template|pug\.compile|ejs\.render|handlebars\.compile)\s*(?:[^)]*\$|\b(?:request|params|body|query|input|user_data)\b)"#,
+        // A template sink is reported only when its name/source receives
+        // request-controlled data; render context is not a template source.
+        r"(?i)\b(?:res|response)\s*\.\s*render\s*\(\s*(?:req|request)\s*\.\s*(?:params|query|body)\s*\.",
         &["py", "js", "ts", "rb", "php"],
         "Never pass user input directly to template engines. Use context-aware escaping and sandboxed templates."
     );
@@ -484,6 +485,7 @@ fn scan_file_for_vulns_with(
         command_injection_sinks.extend(cross_file.command.iter().copied());
         ssrf_sinks.extend(cross_file.ssrf.iter().copied());
     }
+    let ssti_sinks = ssti_sink_lines(&content, &ext);
     let mut code_injection_sinks = code_injection_sink_lines(&content, &ext);
     if let Some(cross_file) = cross_file {
         code_injection_sinks.extend(cross_file.code.iter().copied());
@@ -526,7 +528,9 @@ fn scan_file_for_vulns_with(
                 || (pattern.name == "Server-Side Request Forgery (SSRF)"
                     && ssrf_sinks.contains(&line_number))
                 || (pattern.name == "Code Injection"
-                    && code_injection_sinks.contains(&line_number));
+                    && code_injection_sinks.contains(&line_number))
+                || (pattern.name == "Server-Side Template Injection (SSTI)"
+                    && ssti_sinks.contains(&line_number));
             if !pattern_matches {
                 continue;
             }
@@ -1777,6 +1781,46 @@ mod scanner_regression_tests {
         let findings = scan_file_for_vulns(&path, &build_vuln_patterns());
         fs::remove_file(path).expect("remove fixture");
         findings
+    }
+
+    const SSTI: &str = "Server-Side Template Injection (SSTI)";
+
+    #[test]
+    fn fixed_template_names_and_constant_list_are_not_ssti() {
+        let source = r#"const pages = ["a1", "a2", "redos", "ssrf"];
+for (const page of pages) {
+    router.get(`${page}`, (req, res) => {
+        return res.render(`tutorial/${page}`, { environmentalScripts });
+    });
+}
+res.render("tutorial/a1", { page: req.query.page });
+"#;
+        assert!(!titles(&scan(source, "js")).contains(&SSTI));
+        assert!(!titles(&scan(
+            "render_template('article.html', name=request.args['name'])",
+            "py"
+        ))
+        .contains(&SSTI));
+    }
+
+    #[test]
+    fn request_controlled_template_sources_remain_ssti() {
+        for source in [
+            "res.render(req.params.page);",
+            "const name = req.query.template;\nres.render(name);",
+            "const name = req.params.page;\nconst selected = `tutorial/${name}`;\nres.render(selected);",
+            "ejs.render(req.body.template, { user: 'a' });",
+        ] {
+            assert!(titles(&scan(source, "js")).contains(&SSTI), "{source}");
+        }
+        for source in [
+            "render_template(request.args['page'])",
+            "name = request.args['page']\nrender_template(name)",
+            "render_template_string(request.form['template'])",
+            "@app.route('/page/<name>')\ndef page(name):\n    return render_template(name)",
+        ] {
+            assert!(titles(&scan(source, "py")).contains(&SSTI), "{source}");
+        }
     }
 
     #[test]
@@ -7816,6 +7860,42 @@ fn spring_annotated_seeds(
             (!seeds.is_empty()).then(|| (function.body.clone(), seeds))
         })
         .collect()
+}
+
+/// Template name/source is the first argument. Values supplied as render
+/// context are data, not template programs. Route parameters and request
+/// reads reach these sinks through the shared flow pass, while fixed names
+/// and finite local allowlists stay untainted.
+#[allow(clippy::items_after_test_module)]
+fn ssti_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let Some(language @ (FlowLanguage::JavaScript | FlowLanguage::Python)) =
+        flow_language(extension)
+    else {
+        return std::collections::HashSet::new();
+    };
+    let call = match language {
+        FlowLanguage::JavaScript => {
+            r"\b(?:res|response|pug|ejs|handlebars)\s*\.\s*(?:render|compile)\s*\("
+        }
+        FlowLanguage::Python => {
+            r"\b(?:render_template|render_template_string|Template|from_string|render_to_string)\s*\("
+        }
+        _ => unreachable!(),
+    };
+    let Ok(call) = Regex::new(call) else {
+        return std::collections::HashSet::new();
+    };
+    request_flow_sink_lines(
+        content,
+        language,
+        &[FlowSink {
+            call,
+            arguments: first_argument,
+            line_requires: None,
+        }],
+        |_| false,
+        false,
+    )
 }
 
 /// One flow pass over `range`. Returns the sink lines reached directly, the
