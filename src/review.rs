@@ -71,7 +71,6 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         // Require SQL syntax in the interpolated string, not just a method
         // named `delete`/`query`: HTTP clients use those names too.
         r#"(?i)\b(?:execute|query|raw|select|insert|update|delete|createNativeQuery|executeQuery|executeUpdate|\$queryRaw)\s*\(\s*['\"]\s*(?:select|insert|update|delete|with|merge|replace)\b[^'\"]*(?:\$\{|\{[A-Za-z_])"#,
-
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace string concatenation with parameterized queries. Use prepared statements or an ORM's query builder."
     );
