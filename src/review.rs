@@ -249,7 +249,10 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Insecure Direct Object Reference (IDOR)",
         "User-controlled IDs in API endpoints without authorization checks can lead to unauthorized access.",
         Severity::High, Confidence::Low, Some(OwaspCategory::A01BrokenAccessControl),
-        r#"(?i)(?:find_by_id|findById|get_by_id|getById|find_by_pk|get\(request.*id|params\[.id.\])"#,
+        // An ORM lookup alone is not evidence of an authorization flaw.
+        // The handler model below requires request-tainted object selection,
+        // exposure or mutation, and no ownership/authorization guard.
+        r"\x00",
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Always verify that the authenticated user has permission to access the requested resource."
     );
@@ -486,6 +489,7 @@ fn scan_file_for_vulns_with(
         ssrf_sinks.extend(cross_file.ssrf.iter().copied());
     }
     let ssti_sinks = ssti_sink_lines(&content, &ext);
+    let idor_sinks = idor_sink_lines(&content, &ext);
     let mut code_injection_sinks = code_injection_sink_lines(&content, &ext);
     if let Some(cross_file) = cross_file {
         code_injection_sinks.extend(cross_file.code.iter().copied());
@@ -530,7 +534,9 @@ fn scan_file_for_vulns_with(
                 || (pattern.name == "Code Injection"
                     && code_injection_sinks.contains(&line_number))
                 || (pattern.name == "Server-Side Template Injection (SSTI)"
-                    && ssti_sinks.contains(&line_number));
+                    && ssti_sinks.contains(&line_number))
+                || (pattern.name == "Insecure Direct Object Reference (IDOR)"
+                    && idor_sinks.contains(&line_number));
             if !pattern_matches {
                 continue;
             }
@@ -1781,6 +1787,71 @@ mod scanner_regression_tests {
         let findings = scan_file_for_vulns(&path, &build_vuln_patterns());
         fs::remove_file(path).expect("remove fixture");
         findings
+    }
+
+    const IDOR: &str = "Insecure Direct Object Reference (IDOR)";
+
+    #[test]
+    fn bare_orm_lookup_and_guarded_spring_access_are_not_idor() {
+        let helper = "def get_by_id(cls, record_id):\n    return cls.query.get(record_id)\n";
+        assert!(!titles(&scan(helper, "py")).contains(&IDOR));
+        let guarded = r#"@DeleteMapping("/{id}")
+public ResponseEntity delete(@PathVariable("id") String id, User user) {
+    var comment = commentRepository.findById(id);
+    if (!AuthorizationService.canWriteComment(user, comment)) {
+        throw new NoAuthorizationException();
+    }
+    commentRepository.remove(comment);
+    return ResponseEntity.noContent().build();
+}"#;
+        assert!(!titles(&scan(guarded, "java")).contains(&IDOR));
+    }
+
+    #[test]
+    fn idor_requires_http_route_and_object_exposure() {
+        let helper = r#"public Record load(HttpServletRequest request) {
+    String id = request.getParameter("id");
+    return recordRepository.findById(id);
+}"#;
+        assert!(!titles(&scan(helper, "java")).contains(&IDOR));
+        let guarded = r#"exports.read = (req, res) => {
+    const id = req.params.id;
+    const record = User.findById(id);
+    if (!hasPermission(req.user, record)) return res.sendStatus(403);
+    return res.json(record);
+};"#;
+        assert!(!titles(&scan(guarded, "js")).contains(&IDOR));
+        let no_exposure = r#"exports.read = (req, res) => {
+    const id = req.params.id;
+    User.findById(id);
+};"#;
+        assert!(!titles(&scan(no_exposure, "js")).contains(&IDOR));
+    }
+
+    #[test]
+    fn python_route_returning_request_selected_object_is_idor() {
+        let route = r#"@app.route('/users/<id>')
+def show(id):
+    record = User.get_by_id(id)
+    return record
+"#;
+        assert!(titles(&scan(route, "py")).contains(&IDOR));
+    }
+
+    #[test]
+    fn unguarded_request_selected_orm_access_is_idor() {
+        let java = r#"@GetMapping("/{id}")
+public ResponseEntity read(@PathVariable("id") String id) {
+    var record = recordRepository.findById(id);
+    return ResponseEntity.ok(record);
+}"#;
+        assert!(titles(&scan(java, "java")).contains(&IDOR));
+        let js = r#"exports.read = (req, res) => {
+    const id = req.params.id;
+    const record = User.findById(id);
+    return res.json(record);
+};"#;
+        assert!(titles(&scan(js, "js")).contains(&IDOR));
     }
 
     const SSTI: &str = "Server-Side Template Injection (SSTI)";
@@ -7858,6 +7929,104 @@ fn spring_annotated_seeds(
                 })
                 .collect();
             (!seeds.is_empty()).then(|| (function.body.clone(), seeds))
+        })
+        .collect()
+}
+
+/// Report only a request-selected object accessed by an unguarded HTTP
+/// handler. A repository helper, lookup in a test, or bare `findById` is not
+/// evidence that an object was returned to an unauthorized caller. This
+/// deliberately leaves unresolved cross-file ownership checks unreported.
+#[allow(clippy::items_after_test_module)]
+fn idor_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let Some(language @ (FlowLanguage::Java | FlowLanguage::JavaScript | FlowLanguage::Python)) =
+        flow_language(extension)
+    else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(call) = Regex::new(
+        r"\b(?:[A-Za-z_][A-Za-z0-9_]*(?:Repository|Model)|[A-Z][A-Za-z0-9_]*|db)\s*\.\s*(?i:findById|getById|find_by_id|get_by_id|find_by_pk)\s*\(",
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let tainted_lookups = request_flow_sink_lines(
+        content,
+        language,
+        &[FlowSink {
+            call,
+            arguments: first_argument,
+            line_requires: None,
+        }],
+        |_| false,
+        false,
+    );
+    if tainted_lookups.is_empty() {
+        return tainted_lookups;
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    let functions = flow_functions(&lines, language);
+    let Ok(route) = Regex::new(
+        r"(?i)@(?:GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping|(?:app|router)\.route)\b|\b(?:app|router)\s*\.\s*(?:get|post|put|patch|delete)\s*\(|\b(?:exports\.|module\.exports\.)[A-Za-z_][A-Za-z0-9_]*\s*=",
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(guard) = Regex::new(
+        r"(?i)\b(?:canWrite\w*|canRead\w*|hasPermission|isAuthorized|authorize\w*|checkPermission|checkOwnership|isOwner|ownerId|owner_id|userId\s*===|user_id\s*==|currentUser\s*\.\s*id\s*==|current_user\s*\.\s*id\s*==)\b",
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(exposure) = Regex::new(
+        r"(?i)\b(?:ResponseEntity\s*\.\s*ok|res\s*\.\s*(?:json|send|render)|jsonify|return\s+\w+|\w+Repository\s*\.\s*(?:remove|delete|save|update)|\w+\.delete\s*\()",
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    // Express-style exported arrow handlers are not in flow_functions, but
+    // request_flow_sink_lines still traces their local request reads.
+    let js_handlers: Vec<std::ops::Range<usize>> = if language == FlowLanguage::JavaScript {
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(_, text)| route.is_match(text) && text.contains("=>") && text.contains('{'))
+            .filter_map(|(start, _)| {
+                let mut depth = 0i64;
+                for (index, text) in lines.iter().enumerate().skip(start) {
+                    let code = blank_plain_strings(text, language);
+                    depth += code.matches('{').count() as i64 - code.matches('}').count() as i64;
+                    if depth == 0 {
+                        return Some(start..index + 1);
+                    }
+                }
+                None
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    tainted_lookups
+        .into_iter()
+        .filter(|&line| {
+            let index = line - 1;
+            let js_access = js_handlers.iter().any(|handler| {
+                handler.contains(&index) && {
+                    let body = lines[handler.clone()].join(" ");
+                    !guard.is_match(&body) && exposure.is_match(&body)
+                }
+            });
+            js_access
+                || functions.iter().any(|function| {
+                    if !function.body.contains(&index) {
+                        return false;
+                    }
+                    let preceding = function.header.saturating_sub(3);
+                    let header = lines[preceding..function.signature_end].join(" ");
+                    if !route.is_match(&header) {
+                        return false;
+                    }
+                    let body = lines[function.body.clone()].join(" ");
+                    // An explicit guard in this handler defeats a speculative
+                    // missing-check finding. The check can follow the lookup.
+                    !guard.is_match(&body) && exposure.is_match(&body)
+                })
         })
         .collect()
 }
