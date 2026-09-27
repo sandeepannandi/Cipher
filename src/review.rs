@@ -147,6 +147,37 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Allow only known local redirect destinations, or validate the destination against an allowlist."
     );
 
+    add_vuln!(
+        "Regular Expression Denial of Service (ReDoS)",
+        "A nested repeating regular expression is tested against request-controlled input and can cause excessive backtracking.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A04InsecureDesign),
+        r"\x00",
+        &["js", "ts"],
+        "Avoid nested or ambiguous quantifiers, limit input length, or use a linear-time regex engine."
+    );
+
+    add_vuln!(
+        "Plaintext Password Storage",
+        "A password is written to persistent storage without a one-way password hash.",
+        Severity::Critical,
+        Confidence::High,
+        Some(OwaspCategory::A02CryptographicFailures),
+        r"\x00",
+        &["js", "ts"],
+        "Hash passwords with a slow password-hashing algorithm and a unique salt before storage."
+    );
+
+    add_vuln!(
+        "Plaintext Password Comparison",
+        "A stored password is compared directly instead of using a password hash verifier.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A02CryptographicFailures),
+        r"\x00",
+        &["js", "ts"],
+        "Compare a password using the password-hashing library's verification function."
+    );
+
     // -- Cryptography --
 
     add_vuln!(
@@ -564,6 +595,8 @@ fn scan_file_for_vulns_with(
     let mut command_injection_sinks = command_injection_sink_lines(&content, &ext);
     let mut ssrf_sinks = ssrf_sink_lines(&content, &ext);
     let redirect_sinks = open_redirect_sink_lines(&content, &ext);
+    let redos_sites = redos_sink_lines(&content, &ext);
+    let (plaintext_stores, plaintext_compares) = plaintext_password_lines(&content, &ext);
     if let Some(cross_file) = cross_file {
         sql_injection_sinks.extend(cross_file.sql.iter().copied());
         command_injection_sinks.extend(cross_file.command.iter().copied());
@@ -632,6 +665,12 @@ fn scan_file_for_vulns_with(
                 || (pattern.name == "Server-Side Request Forgery (SSRF)"
                     && ssrf_sinks.contains(&line_number))
                 || (pattern.name == "Open Redirect" && redirect_sinks.contains(&line_number))
+                || (pattern.name == "Regular Expression Denial of Service (ReDoS)"
+                    && redos_sites.contains(&line_number))
+                || (pattern.name == "Plaintext Password Storage"
+                    && plaintext_stores.contains(&line_number))
+                || (pattern.name == "Plaintext Password Comparison"
+                    && plaintext_compares.contains(&line_number))
                 || (pattern.name == "Code Injection"
                     && code_injection_sinks.contains(&line_number))
                 || (pattern.name == "Server-Side Template Injection (SSTI)"
@@ -3113,6 +3152,58 @@ out, err := exec.Command("ping", "-c", "1", host).Output()"#,
     const SSRF: &str = "Server-Side Request Forgery (SSRF)";
 
     const OPEN_REDIRECT: &str = "Open Redirect";
+
+    const REDOS: &str = "Regular Expression Denial of Service (ReDoS)";
+    const PLAINTEXT_STORAGE: &str = "Plaintext Password Storage";
+    const PLAINTEXT_COMPARE: &str = "Plaintext Password Comparison";
+
+    #[test]
+    fn nodegoat_nested_regex_on_destructured_body_is_reported_at_declaration() {
+        let findings = scan(
+            "const { bankRouting } = req.body;\nconst regexPattern = /([0-9]+)+\\#/;\nconst match = regexPattern.test(bankRouting);",
+            "js",
+        );
+        let redos: Vec<_> = findings.iter().filter(|f| f.title == REDOS).collect();
+        assert_eq!(redos.len(), 1);
+        assert_eq!(redos[0].line_number, Some(2));
+    }
+
+    #[test]
+    fn nodegoat_plaintext_password_store_and_compare_are_exact() {
+        let findings = scan(
+            "const usersCol = db.collection('users');\nthis.addUser = (password) => {\n  const user = {\n    userName,\n    password // from request\n    /* password: bcrypt.hashSync(password, salt) */\n  };\n  usersCol.insert(user);\n};\nthis.validateLogin = () => {\n  const comparePassword = (fromDB, fromUser) => {\n    return fromDB === fromUser;\n    /* return bcrypt.compareSync(fromDB, fromUser); */\n  };\n  if (comparePassword(password, user.password)) return user;\n};",
+            "js",
+        );
+        let storage: Vec<_> = findings
+            .iter()
+            .filter(|f| f.title == PLAINTEXT_STORAGE)
+            .collect();
+        let compare: Vec<_> = findings
+            .iter()
+            .filter(|f| f.title == PLAINTEXT_COMPARE)
+            .collect();
+        assert_eq!(storage.len(), 1);
+        assert_eq!(storage[0].line_number, Some(5));
+        assert_eq!(compare.len(), 1);
+        assert_eq!(compare[0].line_number, Some(12));
+    }
+
+    #[test]
+    fn safe_regex_hashing_and_non_password_comparisons_are_clean() {
+        for source in [
+            "const { bankRouting } = req.body;\nconst regexPattern = /([0-9]+)\\#/;\nregexPattern.test(bankRouting);",
+            "const regexPattern = /([0-9]+)+\\#/;\nregexPattern.test('123#');",
+            "const regexPattern = /([0-9]+)+\\#/;\nconst bankRouting = '123#';\nregexPattern.test(bankRouting);",
+            "// const regexPattern = /([0-9]+)+\\#/;\n// regexPattern.test(req.body.bankRouting);",
+            "const user = { password: bcrypt.hashSync(password, salt) };\nusersCol.insert(user);",
+            "const user = { password };\nreturn user;",
+            "const comparePassword = (fromDB, fromUser) => bcrypt.compareSync(fromDB, fromUser);\nif (comparePassword(password, user.password)) return user;",
+            "const comparePassword = (fromDB, fromUser) => fromDB === fromUser;\nif (user.password) return user;",
+        ] {
+            let findings = scan(source, "js");
+            assert!(!findings.iter().any(|f| [REDOS, PLAINTEXT_STORAGE, PLAINTEXT_COMPARE].contains(&f.title.as_str())), "{source}");
+        }
+    }
 
     #[test]
     fn nodegoat_documented_needle_url_flow_is_ssrf_on_exact_sink_line() {
@@ -12397,6 +12488,162 @@ fn first_redirect_has_one_argument(line: &str) -> bool {
 #[allow(clippy::items_after_test_module)]
 fn redirect_second_argument(_name: &str) -> Vec<usize> {
     vec![1]
+}
+
+/// Report the vulnerable pattern declaration only when its `.test` call
+/// consumes request-controlled input. This is deliberately a narrow nested
+/// quantifier model rather than claiming all regexes with repetition are slow.
+#[allow(clippy::items_after_test_module)]
+fn redos_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    if !matches!(extension, "js" | "ts") {
+        return std::collections::HashSet::new();
+    }
+    let Ok(binding) = Regex::new(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*/((?:\\.|[^/])*)/[a-z]*",
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(nested) = Regex::new(r"\([^)]*[+*][^)]*\)[+*]") else {
+        return std::collections::HashSet::new();
+    };
+    let mut sites = std::collections::HashSet::new();
+    for (index, line) in content.lines().enumerate() {
+        if line.trim_start().starts_with("//") || line.trim_start().starts_with("/*") {
+            continue;
+        }
+        for capture in binding.captures_iter(line) {
+            let (Some(name), Some(pattern)) = (capture.get(1), capture.get(2)) else {
+                continue;
+            };
+            if !nested.is_match(pattern.as_str()) {
+                continue;
+            }
+            let call = format!(r"\b{}\s*\.\s*(test)\s*\(", regex::escape(name.as_str()));
+            let Ok(call) = Regex::new(&call) else {
+                continue;
+            };
+            let reached = request_flow_sink_lines(
+                content,
+                FlowLanguage::JavaScript,
+                &[FlowSink {
+                    call,
+                    arguments: first_argument,
+                    line_requires: None,
+                }],
+                |_| false,
+                false,
+            );
+            if reached.iter().any(|line_number| *line_number > index + 1) {
+                sites.insert(index + 1);
+            }
+        }
+    }
+    sites
+}
+
+/// Find direct password storage in an object passed to a database insert.
+/// Ignore commented-out hash examples: only active lines participate.
+#[allow(clippy::items_after_test_module)]
+fn plaintext_password_lines(
+    content: &str,
+    extension: &str,
+) -> (
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+) {
+    let mut stores = std::collections::HashSet::new();
+    let mut compares = std::collections::HashSet::new();
+    if !matches!(extension, "js" | "ts") {
+        return (stores, compares);
+    }
+    let Ok(object) = Regex::new(r"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*\{")
+    else {
+        return (stores, compares);
+    };
+    let Ok(field) = Regex::new(r"(?i)^\s*password\s*(?:,|(?://.*)?$|:\s*password\s*,?)") else {
+        return (stores, compares);
+    };
+    let Ok(compare) = Regex::new(
+        r"\b(?:return\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:===|==)\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*;",
+    ) else {
+        return (stores, compares);
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let mut in_comment = false;
+    let mut active = vec![false; lines.len()];
+    for (i, line) in lines.iter().enumerate() {
+        let trim = line.trim();
+        if in_comment {
+            if trim.contains("*/") {
+                in_comment = false;
+            }
+            continue;
+        }
+        if trim.starts_with("/*") {
+            in_comment = !trim.contains("*/");
+            continue;
+        }
+        active[i] = !trim.starts_with("//") && !trim.starts_with('*');
+    }
+    for (i, line) in lines.iter().enumerate() {
+        if !active[i] {
+            continue;
+        }
+        if let Some(capture) = object.captures(line) {
+            let name = capture.get(1).map_or("", |m| m.as_str());
+            let mut depth = 0i32;
+            let mut fields = Vec::new();
+            let mut end = i;
+            for (j, body) in lines.iter().enumerate().skip(i).take(35) {
+                if !active[j] {
+                    continue;
+                }
+                if field.is_match(body) {
+                    fields.push(j + 1);
+                }
+                depth += body.matches('{').count() as i32 - body.matches('}').count() as i32;
+                end = j;
+                if depth <= 0 {
+                    break;
+                }
+            }
+            if !fields.is_empty()
+                && lines
+                    .iter()
+                    .enumerate()
+                    .skip(end + 1)
+                    .take(55)
+                    .any(|(j, body)| {
+                        active[j]
+                            && (body.contains(".insert(")
+                                || body.contains(".insertOne(")
+                                || body.contains(".save("))
+                            && identifier_in(body, name)
+                    })
+            {
+                stores.extend(fields);
+            }
+        }
+        if let Some(capture) = compare.captures(line) {
+            let lhs = capture.get(1).map_or("", |m| m.as_str());
+            let rhs = capture.get(2).map_or("", |m| m.as_str());
+            let vicinity = lines[i.saturating_sub(5)..=i]
+                .join(" ")
+                .to_ascii_lowercase();
+            let downstream = lines
+                .iter()
+                .enumerate()
+                .skip(i + 1)
+                .take(25)
+                .any(|(j, body)| {
+                    active[j] && body.contains("comparePassword(") && body.contains(".password")
+                });
+            if vicinity.contains("comparepassword") && downstream && lhs != rhs {
+                compares.insert(i + 1);
+            }
+        }
+    }
+    (stores, compares)
 }
 
 /// Find outbound HTTP requests whose URL is built from request input in the
