@@ -1831,7 +1831,6 @@ mod scanner_regression_tests {
         fs::write(&fixture, &code).expect("test fixture");
         fs::write(&production, &code).expect("production fixture");
 
-
         let report = collect_review_findings(&root, false, None)
             .await
             .expect("review");
