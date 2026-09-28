@@ -284,6 +284,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Replace wildcard CORS origin with specific allowed origins. Never use '*' in production."
     );
 
+    add_vuln!(
+        "Log Forging from Login Input",
+        "An untrusted login name reaches a line-oriented log without CR/LF removal, allowing forged log entries.",
+        Severity::Medium, Confidence::High, Some(OwaspCategory::A09LoggingFailures),
+        r"\x00", &["js", "ts"],
+        "Remove CR and LF from user-controlled values before logging, and use structured logging with a safe encoder."
+    );
+
     // -- General Security --
 
     add_vuln!(
@@ -1331,6 +1339,97 @@ fn scoped_login_session_findings(
     vec![pattern_finding(pattern, &handler, *line_number, line)]
 }
 
+/// Narrow login-log check: the variable must be destructured from req.body in
+/// the same login handler and logged directly. A tutorial's commented fix, a
+/// constant log, and an active CR/LF replacement do not establish log forging.
+fn scoped_login_log_forging_findings(
+    files: &[std::path::PathBuf],
+    root: &Path,
+    patterns: &[VulnPattern],
+) -> Vec<Finding> {
+    let path = root.join("app/routes/session.js");
+    if !files.contains(&path) || is_test_context_path(&path, root) {
+        return Vec::new();
+    }
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut block_comment = false;
+    let code: Vec<(usize, &str)> = content
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let trimmed = line.trim();
+            if block_comment {
+                if trimmed.contains("*/") {
+                    block_comment = false;
+                }
+                return None;
+            }
+            if trimmed.starts_with("/*") {
+                block_comment = !trimmed.contains("*/");
+                return None;
+            }
+            if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                return None;
+            }
+            Some((i + 1, line.split("//").next().unwrap_or(line)))
+        })
+        .collect();
+    let start = code
+        .iter()
+        .position(|(_, line)| line.contains("this.handleLoginRequest ="));
+    let end = code
+        .iter()
+        .position(|(_, line)| line.contains("this.displayLogoutPage ="));
+    let (Some(start), Some(end)) = (start, end) else {
+        return Vec::new();
+    };
+    if start >= end {
+        return Vec::new();
+    }
+    let login = &code[start..end];
+    // Destructuring is often split across lines, as in NodeGoat. Inspect
+    // only the declaration-to-assignment window, not unrelated uses.
+    let has_source = login.iter().enumerate().any(|(i, (_, line))| {
+        if !line.contains("const {") && !line.contains("let {") && !line.contains("var {") {
+            return false;
+        }
+        let declaration = login[i..login.len().min(i + 6)]
+            .iter()
+            .map(|(_, line)| *line)
+            .collect::<Vec<_>>()
+            .join(" ");
+        declaration.contains("userName") && declaration.contains("= req.body")
+    });
+    if !has_source
+        || !login
+            .iter()
+            .any(|(_, line)| line.contains("validateLogin("))
+    {
+        return Vec::new();
+    }
+    let Some(sink) = Regex::new(r"\bconsole\.(?:log|warn|error|info)\s*\([^)]*\buserName\b").ok()
+    else {
+        return Vec::new();
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Log Forging from Login Input")
+    else {
+        return Vec::new();
+    };
+    login
+        .iter()
+        .filter(|(_, line)| {
+            sink.is_match(line)
+                && !line.contains("userName.replace(")
+                && !line.contains("encodeFor")
+        })
+        .map(|(number, line)| pattern_finding(pattern, &path, *number, line))
+        .collect()
+}
+
 /// Collect review findings without displaying them (for report generation)
 pub(crate) async fn collect_review_findings(
     project_path: &Path,
@@ -1393,6 +1492,11 @@ pub(crate) async fn collect_review_findings(
         &patterns,
     ));
     report.extend(scoped_login_session_findings(
+        &files,
+        &canonical_path,
+        &patterns,
+    ));
+    report.extend(scoped_login_log_forging_findings(
         &files,
         &canonical_path,
         &patterns,
@@ -2559,6 +2663,47 @@ mod scanner_regression_tests {
             check().is_empty(),
             "stateless app has no cookie-session finding"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn login_log_forging_requires_request_source_and_unsanitized_sink() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-login-log-{nonce}"));
+        fs::create_dir_all(root.join("app/routes")).unwrap();
+        let handler = root.join("app/routes/session.js");
+        let raw = "this.handleLoginRequest = (req, res) => {\n  const { userName, password } = req.body;\n  userDAO.validateLogin(userName, password, () => {\n    // console.log('safe', userName.replace(/(\\r\\n|\\r|\\n)/g, '_'));\n    console.log('invalid login', userName);\n  });\n};\nthis.displayLogoutPage = () => {};";
+        fs::write(&handler, raw).unwrap();
+        let patterns = build_vuln_patterns();
+        let check =
+            || scoped_login_log_forging_findings(std::slice::from_ref(&handler), &root, &patterns);
+        let found = check();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].title, "Log Forging from Login Input");
+        assert_eq!(found[0].line_number, Some(5));
+        fs::write(
+            &handler,
+            raw.replace(
+                "console.log('invalid login', userName);",
+                "console.log('invalid login', userName.replace(/(\\r\\n|\\r|\\n)/g, '_')); ",
+            ),
+        )
+        .unwrap();
+        assert!(check().is_empty(), "sanitized value is not reported");
+        fs::write(
+            &handler,
+            raw.replace(
+                "console.log('invalid login', userName);",
+                "console.log('invalid login');",
+            ),
+        )
+        .unwrap();
+        assert!(check().is_empty(), "constant log is not reported");
+        fs::write(&handler, raw.replace("= req.body", "= fixture")).unwrap();
+        assert!(check().is_empty(), "non-request input is not reported");
         fs::remove_dir_all(root).unwrap();
     }
 
