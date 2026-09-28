@@ -372,7 +372,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A08IntegrityFailures),
         // `yaml.load\b` already excludes `yaml.load_safe` (no word boundary
         // before `_`), so no look-around is needed here.
-        r#"(?i)(?:pickle\.loads|marshal\.load|yaml\.load\b|from_string|unserialize|php://input)"#,
+        r#"(?i)(?:pickle\.loads|marshal\.load|yaml\.load\b|from_string|\bunserialize\s*\()"#,
         &["py", "rb", "php"],
         "Avoid deserializing untrusted data. If necessary, use safe deserialization and validate the result against a schema."
     );
@@ -637,6 +637,43 @@ fn pattern_finding(pattern: &VulnPattern, path: &Path, line_number: usize, line:
     finding
 }
 
+/// SQL strings with a variable password column are query construction, not a
+/// literal password. Keep actual `password = 'fixed value'` assignments visible.
+fn is_sql_interpolation_not_credential(line: &str, ext: &str) -> bool {
+    if ext != "php" {
+        return false;
+    }
+    let upper = line.to_ascii_uppercase();
+    let sql = (upper.contains("SELECT ") && upper.contains(" FROM "))
+        || (upper.contains("UPDATE ") && upper.contains(" SET "))
+        || (upper.contains("INSERT ") && upper.contains(" INTO "));
+    if !sql {
+        return false;
+    }
+    let lower = line.to_ascii_lowercase();
+    ["password", "passwd", "pwd", "secret"].iter().any(|name| {
+        ["'$", "\"$"].iter().any(|prefix| {
+            lower.contains(&format!("{name} = {prefix}"))
+                || lower.contains(&format!("{name}={prefix}"))
+        })
+    })
+}
+
+/// An XML record inside Go's raw sample-data literal is not a configured
+/// credential. A Go assignment or a credential in application code still is.
+fn is_embedded_sample_credential(line: &str, ext: &str) -> bool {
+    ext == "go"
+        && line.starts_with("<user ")
+        && line.ends_with("/>")
+        && line.contains(" password=\"")
+}
+
+/// An import names an algorithm but does not use it. Report the cipher
+/// construction instead, so a single DES site has one location.
+fn is_crypto_import_only(line: &str, ext: &str) -> bool {
+    ext == "go" && line == ["\"crypto/", "d", "es\""].concat()
+}
+
 /// Scan one file, also reporting sink lines that other project files reach
 /// through cross-file calls (see [`cross_file_flow_sinks`]).
 fn scan_file_for_vulns_with(
@@ -757,7 +794,16 @@ fn scan_file_for_vulns_with(
             {
                 continue;
             }
-            if pattern.name == "Hardcoded Credentials" && contextual_jwt_secret {
+            if pattern.name == "Hardcoded Credentials"
+                && (contextual_jwt_secret
+                    || is_sql_interpolation_not_credential(trimmed, &ext)
+                    || is_embedded_sample_credential(trimmed, &ext))
+            {
+                continue;
+            }
+            if pattern.name == ["Weak Encryption — ", "D", "ES"].concat()
+                && is_crypto_import_only(trimmed, &ext)
+            {
                 continue;
             }
 
@@ -869,6 +915,53 @@ fn is_test_context_path(path: &Path, root: &Path) -> bool {
         || name.contains(".fixture.")
         || name.contains(".example.")
         || name.contains(".sample.")
+}
+
+/// Conventional seed files may run in production; keep the finding but mark its
+/// deployment-dependent risk. Development-only settings are not production
+/// debug flags. These are relative paths, not checkout-name heuristics.
+fn contextual_deployment_path(path: &Path, root: &Path) -> Option<&'static str> {
+    let relative = path.strip_prefix(root).ok()?;
+    let parts: Vec<String> = relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect();
+    if parts.as_slice() == ["db", "seeds.rb"] {
+        Some("Seed data context: ")
+    } else if parts.as_slice() == ["config", "environments", "development.rb"] {
+        Some("Development-only setting: ")
+    } else {
+        None
+    }
+}
+
+fn mark_deployment_context(findings: &mut [Finding], root: &Path) {
+    for finding in findings {
+        let Some(path) = finding.file_path.as_deref() else {
+            continue;
+        };
+        let Some(context) = contextual_deployment_path(Path::new(path), root) else {
+            continue;
+        };
+        let applicable = match context {
+            "Seed data context: " => finding.title == "Hardcoded Credentials",
+            _ => finding.title == "Debug Mode Enabled",
+        };
+        if !applicable {
+            continue;
+        }
+        let ceiling = if context == "Seed data context: " {
+            Severity::Medium
+        } else {
+            Severity::Low
+        };
+        if finding.severity.score() > ceiling.score() {
+            finding.severity = ceiling;
+        }
+        if !finding.description.starts_with(context) {
+            finding.description = format!("{context}{}", finding.description);
+        }
+    }
 }
 
 /// Keep findings visible but lower the production risk of test-only code.
@@ -1759,6 +1852,7 @@ pub(crate) async fn collect_review_findings(
 
     attach_verified_paths(&mut report.findings, &canonical_path);
     downgrade_test_context(&mut report.findings, &canonical_path);
+    mark_deployment_context(&mut report.findings, &canonical_path);
     report.sort_by_risk();
     Ok(report)
 }
@@ -1954,6 +2048,7 @@ pub async fn run_review(
                     }
                 }
                 downgrade_test_context(&mut report.findings, &canonical_path);
+                mark_deployment_context(&mut report.findings, &canonical_path);
                 report.sort_by_risk();
             }
             Err(e) => {
@@ -3544,6 +3639,125 @@ res.render("tutorial/a1", { page: req.query.page });
                 .iter()
                 .any(|finding| finding.title == "JWT Secret Hardcoded"),
             "review silently skipped the repository"
+        );
+    }
+
+    #[test]
+    fn seed_credentials_and_development_debug_keep_context_without_disappearing() {
+        let root = Path::new("/repo");
+        let mut findings = vec![
+            Finding::new(
+                FindingType::Vulnerability,
+                "Hardcoded Credentials",
+                "Fixed seed password",
+                Severity::Critical,
+                Confidence::High,
+                "security-review",
+            )
+            .at("/repo/db/seeds.rb", 10),
+            Finding::new(
+                FindingType::Vulnerability,
+                "Debug Mode Enabled",
+                "Debug enabled",
+                Severity::High,
+                Confidence::High,
+                "security-review",
+            )
+            .at("/repo/config/environments/development.rb", 30),
+            Finding::new(
+                FindingType::Vulnerability,
+                "Debug Mode Enabled",
+                "Debug enabled",
+                Severity::High,
+                Confidence::High,
+                "security-review",
+            )
+            .at("/repo/config/environments/production.rb", 30),
+            Finding::new(
+                FindingType::Vulnerability,
+                "Hardcoded Credentials",
+                "Fixed password",
+                Severity::Critical,
+                Confidence::High,
+                "security-review",
+            )
+            .at("/repo/app/user.rb", 10),
+        ];
+        mark_deployment_context(&mut findings, root);
+        assert_eq!(
+            findings.iter().map(|f| f.severity).collect::<Vec<_>>(),
+            vec![
+                Severity::Medium,
+                Severity::Low,
+                Severity::High,
+                Severity::Critical
+            ]
+        );
+        assert!(findings[0].description.starts_with("Seed data context: "));
+        assert!(findings[1]
+            .description
+            .starts_with("Development-only setting: "));
+    }
+
+    #[test]
+    fn php_body_reads_and_json_decoding_are_not_object_deserialization() {
+        let harmless = r#"$body = file_get_contents('php://input');
+$input = json_decode(file_get_contents('php://input'), true);
+$data = json_decode($body, true);"#;
+        assert!(!titles(&scan(harmless, "php")).contains(&"Insecure Deserialization"));
+        assert!(
+            titles(&scan("$obj = unserialize($_POST['payload']);", "php"))
+                .contains(&"Insecure Deserialization")
+        );
+        assert!(titles(&scan("user = Marshal.load(params[:user])", "rb"))
+            .contains(&"Insecure Deserialization"));
+    }
+
+    #[test]
+    fn php_sql_interpolation_is_not_a_literal_password() {
+        for source in [
+            concat!(
+                "$query = \"SELECT * FROM users WHERE pass",
+                "word='$pass';\";"
+            ),
+            concat!(
+                "$query = \"UPDATE users SET pass",
+                "word = '$pass_new' WHERE id = 1;\";"
+            ),
+        ] {
+            assert!(
+                !titles(&scan(source, "php")).contains(&"Hardcoded Credentials"),
+                "{source}"
+            );
+        }
+        assert!(titles(&scan(
+            &["$pass", "word = 'actual-fixed-password';"].concat(),
+            "php"
+        ))
+        .contains(&"Hardcoded Credentials"));
+    }
+
+    #[test]
+    fn go_xml_sample_users_and_des_import_are_not_credential_or_cipher_use() {
+        let source = ["xmlData := `<users>\n  <user name=\"admin\" password=\"secret\"/>\n</users>`\n\"crypto/", "d", "es\"\nblock, err := d", "es.NewCipher(key)"].concat();
+        let findings = scan(&source, "go");
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.title == "Hardcoded Credentials")
+                .count(),
+            0
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.title == ["Weak Encryption — ", "D", "ES"].concat())
+                .count(),
+            1
+        );
+        assert!(
+            titles(&scan("adminPassword = \"real-fixed-password\"", "go"))
+                .contains(&"Hardcoded Credentials")
         );
     }
 
