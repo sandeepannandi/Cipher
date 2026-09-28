@@ -1772,6 +1772,60 @@ fn scoped_php_ruby_file_xss_findings(
     findings
 }
 
+/// Rails 8.0's legacy redirect default allows off-site redirects unless the
+/// application opts into 7.0+ defaults or explicitly forbids other hosts.
+fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let controller = root.join("app/controllers/sessions_controller.rb");
+    let (Ok(text), Ok(app), Ok(lock)) = (
+        std::fs::read_to_string(&controller),
+        std::fs::read_to_string(root.join("config/application.rb")),
+        std::fs::read_to_string(root.join("Gemfile.lock")),
+    ) else {
+        return vec![];
+    };
+    fn code(text: &str) -> Vec<&str> {
+        text.lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with('#'))
+            .collect()
+    }
+    let app_code = code(&app);
+    let lines = code(&text);
+    if !lock.contains("actionpack (8.0.4)")
+        || !text.contains("class SessionsController < ApplicationController")
+        || !app_code
+            .iter()
+            .any(|line| line.contains("< Rails::Application"))
+        || app_code.iter().any(|line| {
+            line.contains("load_defaults 7.")
+                || line.contains("load_defaults 8.")
+                || line.contains("raise_on_open_redirects = true")
+        })
+        || lines.iter().any(|line| {
+            line.contains("allow_other_host: false")
+                || line.contains("url_from(")
+                || line.contains("_url_host_allowed?")
+        })
+        || !lines.iter().any(|line| {
+            line.contains("path = params[:url].present? ? params[:url] : home_dashboard_index_path")
+        })
+        || !lines.iter().any(|line| line == &"if user")
+    {
+        return vec![];
+    }
+    let Some((index, sink)) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.trim() == "redirect_to path")
+    else {
+        return vec![];
+    };
+    let Some(pattern) = patterns.iter().find(|p| p.name == "Open Redirect") else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &controller, index + 1, sink)]
+}
+
 /// Rails nested user resource selected from the URL and rendered with sensitive
 /// fields. Authentication alone is not ownership: require route and view links.
 fn scoped_rails_work_info_idor(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -2545,6 +2599,7 @@ pub(crate) async fn collect_review_findings(
     ));
     report.extend(scoped_rails_csrf_findings(&canonical_path, &patterns));
     report.extend(scoped_rails_work_info_idor(&canonical_path, &patterns));
+    report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
         &files,
         &canonical_path,
@@ -3679,6 +3734,58 @@ mod scanner_regression_tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn rails_login_redirect_requires_unsafe_framework_default_and_request_flow() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-rails-redirect-{nonce}"));
+        for dir in ["config", "app/controllers"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let ctl = root.join("app/controllers/sessions_controller.rb");
+        let app = root.join("config/application.rb");
+        let vulnerable = "class SessionsController < ApplicationController\n def create\n  path = params[:url].present? ? params[:url] : home_dashboard_index_path\n  if user\n   redirect_to path\n  end\n end\nend\n";
+        fs::write(&ctl, vulnerable).unwrap();
+        fs::write(&app, "class Application < Rails::Application\nend\n").unwrap();
+        fs::write(root.join("Gemfile.lock"), "actionpack (8.0.4)\n").unwrap();
+        let patterns = build_vuln_patterns();
+        let detect = || scoped_rails_login_redirect(&root, &patterns);
+        assert_eq!(detect()[0].line_number, Some(5));
+        fs::write(
+            &app,
+            "class Application < Rails::Application\n config.load_defaults 8.0\nend\n",
+        )
+        .unwrap();
+        assert!(
+            detect().is_empty(),
+            "modern Rails defaults forbid other hosts"
+        );
+        fs::write(&app, "class Application < Rails::Application\n config.action_controller.raise_on_open_redirects = true\nend\n").unwrap();
+        assert!(detect().is_empty(), "explicit host restriction");
+        fs::write(&app, "class Application < Rails::Application\nend\n").unwrap();
+        fs::write(
+            &ctl,
+            vulnerable.replace(
+                "redirect_to path",
+                "redirect_to path, allow_other_host: false",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "redirect-level host restriction");
+        fs::write(
+            &ctl,
+            vulnerable.replace(
+                "params[:url].present? ? params[:url]",
+                "internal_path.present? ? internal_path",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "no request-controlled path");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn rails_work_info_idor_requires_route_view_and_missing_ownership() {
