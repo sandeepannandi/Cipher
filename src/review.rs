@@ -178,6 +178,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Compare a password using the password-hashing library's verification function."
     );
 
+    add_vuln!(
+        "Raw Sensitive Profile Storage",
+        "Sensitive identity or banking fields are copied into a profile document and written to persistent storage without active encryption.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
+        r"\x00", &["js", "ts"],
+        "Encrypt sensitive profile fields before persistence with managed keys; protect reads and rotate exposed data as appropriate."
+    );
+
     // -- Cryptography --
 
     add_vuln!(
@@ -1549,6 +1557,107 @@ fn scoped_login_enumeration_findings(
     vec![pattern_finding(pattern, &path, number, &line)]
 }
 
+/// Evidence-coupled profile storage check. Require several raw assignments
+/// into the same document and an active database update of that document.
+/// An active encrypt/transform for any tracked field suppresses the group,
+/// deliberately preferring missed variants to mislabeled encrypted storage.
+fn scoped_sensitive_profile_storage_findings(
+    files: &[std::path::PathBuf],
+    root: &Path,
+    patterns: &[VulnPattern],
+) -> Vec<Finding> {
+    let path = root.join("app/data/profile-dao.js");
+    if !files.contains(&path) || is_test_context_path(&path, root) {
+        return Vec::new();
+    }
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut in_block_comment = false;
+    let active: Vec<(usize, String)> = content
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let trimmed = line.trim();
+            if in_block_comment {
+                if trimmed.contains("*/") {
+                    in_block_comment = false;
+                }
+                return None;
+            }
+            if trimmed.starts_with("/*") {
+                in_block_comment = !trimmed.contains("*/");
+                return None;
+            }
+            if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                return None;
+            }
+            Some((
+                index + 1,
+                line.split("//").next().unwrap_or(line).to_string(),
+            ))
+        })
+        .collect();
+    let start = active
+        .iter()
+        .position(|(_, line)| line.contains("this.updateUser ="));
+    let end = active
+        .iter()
+        .position(|(_, line)| line.contains("this.getByUserId ="));
+    let (Some(start), Some(end)) = (start, end) else {
+        return Vec::new();
+    };
+    if start >= end {
+        return Vec::new();
+    }
+    let method = &active[start..end];
+    if !method[0].1.contains("ssn")
+        || !method[0].1.contains("dob")
+        || !method[0].1.contains("bankAcc")
+    {
+        return Vec::new();
+    }
+    let Some(sink) = method
+        .iter()
+        .position(|(_, line)| line.contains("users.update("))
+    else {
+        return Vec::new();
+    };
+    if !method[sink..method.len().min(sink + 10)]
+        .iter()
+        .any(|(_, line)| line.contains("$set: user"))
+    {
+        return Vec::new();
+    }
+    let mut assignments = Vec::new();
+    for field in ["ssn", "dob", "bankAcc", "bankRouting"] {
+        let raw = format!("user.{field} = {field};");
+        let transformed = format!("user.{field} =");
+        if method[..sink]
+            .iter()
+            .any(|(_, line)| line.contains(&transformed) && !line.contains(&raw))
+        {
+            return Vec::new();
+        }
+        if let Some((number, line)) = method[..sink].iter().find(|(_, line)| line.contains(&raw)) {
+            assignments.push((*number, line.as_str()));
+        }
+    }
+    if assignments.len() < 2 {
+        return Vec::new();
+    }
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Raw Sensitive Profile Storage")
+    else {
+        return Vec::new();
+    };
+    // One group finding, anchored on the first raw assignment. The remaining
+    // raw fields and database sink are the corroborating context.
+    let (number, line) = assignments[0];
+    vec![pattern_finding(pattern, &path, number, line)]
+}
+
 /// Collect review findings without displaying them (for report generation)
 pub(crate) async fn collect_review_findings(
     project_path: &Path,
@@ -1621,6 +1730,11 @@ pub(crate) async fn collect_review_findings(
         &patterns,
     ));
     report.extend(scoped_login_enumeration_findings(
+        &files,
+        &canonical_path,
+        &patterns,
+    ));
+    report.extend(scoped_sensitive_profile_storage_findings(
         &files,
         &canonical_path,
         &patterns,
@@ -2874,6 +2988,48 @@ mod scanner_regression_tests {
             check().is_empty(),
             "only login identity branches are relevant"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sensitive_profile_storage_requires_raw_fields_and_persistent_sink() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-profile-storage-{nonce}"));
+        fs::create_dir_all(root.join("app/data")).unwrap();
+        let path = root.join("app/data/profile-dao.js");
+        let raw = "this.updateUser = (userId, firstName, lastName, ssn, dob, address, bankAcc, bankRouting, callback) => {\n  const user = {};\n  user.bankAcc = bankAcc;\n  user.ssn = ssn;\n  user.dob = dob;\n  // user.ssn = encrypt(ssn);\n  users.update({_id: userId}, {$set: user}, callback);\n};\nthis.getByUserId = () => {};";
+        fs::write(&path, raw).unwrap();
+        let patterns = build_vuln_patterns();
+        let check = || {
+            scoped_sensitive_profile_storage_findings(std::slice::from_ref(&path), &root, &patterns)
+        };
+        let found = check();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(4));
+        fs::write(
+            &path,
+            raw.replace(
+                "  // user.ssn = encrypt(ssn);",
+                "  user.ssn = encrypt(ssn);",
+            ),
+        )
+        .unwrap();
+        assert!(
+            check().is_empty(),
+            "active encryption must suppress the group"
+        );
+        fs::write(&path, raw.replace("$set: user", "$set: anotherDocument")).unwrap();
+        assert!(check().is_empty(), "no persistence of this document");
+        fs::write(
+            &path,
+            raw.replace("user.bankAcc = bankAcc;", "user.bankAcc = mask(bankAcc);")
+                .replace("user.dob = dob;", "user.dob = format(dob);"),
+        )
+        .unwrap();
+        assert!(check().is_empty(), "one raw field is insufficient");
         fs::remove_dir_all(root).unwrap();
     }
 
