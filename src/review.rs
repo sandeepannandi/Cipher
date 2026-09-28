@@ -343,6 +343,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Login Username Enumeration",
+        "The login handler renders distinct public errors for an unknown username and a wrong password, disclosing whether the account exists.",
+        Severity::Medium, Confidence::High, Some(OwaspCategory::A07AuthFailures),
+        r"\x00", &["js", "ts"],
+        "Return the same public error for unknown usernames and incorrect passwords."
+    );
+
+    add_vuln!(
         "Session Fixation on Login",
         "Successful login assigns an authenticated user to a pre-existing cookie session without regenerating its identifier.",
         Severity::High, Confidence::High, Some(OwaspCategory::A07AuthFailures),
@@ -1430,6 +1438,117 @@ fn scoped_login_log_forging_findings(
         .collect()
 }
 
+/// Require distinct, active login error values in the noSuchUser and
+/// invalidPassword branches. Only the public `loginError` values count: log
+/// messages and commented tutorial fixes do not establish enumeration.
+fn scoped_login_enumeration_findings(
+    files: &[std::path::PathBuf],
+    root: &Path,
+    patterns: &[VulnPattern],
+) -> Vec<Finding> {
+    let path = root.join("app/routes/session.js");
+    if !files.contains(&path) || is_test_context_path(&path, root) {
+        return Vec::new();
+    }
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut block_comment = false;
+    let code: Vec<(usize, String)> = content
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let trimmed = line.trim();
+            if block_comment {
+                if trimmed.contains("*/") {
+                    block_comment = false;
+                }
+                return None;
+            }
+            if trimmed.starts_with("/*") {
+                block_comment = !trimmed.contains("*/");
+                return None;
+            }
+            if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                return None;
+            }
+            Some((i + 1, line.split("//").next().unwrap_or(line).to_string()))
+        })
+        .collect();
+    let start = code
+        .iter()
+        .position(|(_, line)| line.contains("this.handleLoginRequest ="));
+    let end = code
+        .iter()
+        .position(|(_, line)| line.contains("this.displayLogoutPage ="));
+    let (Some(start), Some(end)) = (start, end) else {
+        return Vec::new();
+    };
+    if start >= end {
+        return Vec::new();
+    }
+    let login = &code[start..end];
+    if !login
+        .iter()
+        .any(|(_, line)| line.contains("validateLogin("))
+    {
+        return Vec::new();
+    }
+    let unknown = login
+        .iter()
+        .position(|(_, line)| line.contains("err.noSuchUser"));
+    let wrong = login
+        .iter()
+        .position(|(_, line)| line.contains("err.invalidPassword"));
+    let (Some(unknown), Some(wrong)) = (unknown, wrong) else {
+        return Vec::new();
+    };
+    if unknown >= wrong {
+        return Vec::new();
+    }
+    let Some(assign) = Regex::new(r#"\b(?:const|let|var)\s+(\w+)\s*=\s*["']([^"']+)["']"#).ok()
+    else {
+        return Vec::new();
+    };
+    let mut values = std::collections::HashMap::new();
+    for (_, line) in &login[..unknown] {
+        if let Some(capture) = assign.captures(line) {
+            values.insert(capture[1].to_string(), capture[2].to_string());
+        }
+    }
+    let Some(error_field) = Regex::new(r#"\bloginError\s*:\s*(\w+|["'][^"']+["'])"#).ok() else {
+        return Vec::new();
+    };
+    let public_error = |branch: &[(usize, String)]| {
+        branch.iter().find_map(|(number, line)| {
+            let capture = error_field.captures(line)?;
+            let expr = capture.get(1)?.as_str();
+            let value = if expr.starts_with(['\"', '\'']) {
+                expr[1..expr.len() - 1].to_string()
+            } else {
+                values.get(expr)?.clone()
+            };
+            Some((*number, line.clone(), value))
+        })
+    };
+    let (Some((number, line, unknown_value)), Some((_, _, wrong_value))) = (
+        public_error(&login[unknown..wrong]),
+        public_error(&login[wrong..]),
+    ) else {
+        return Vec::new();
+    };
+    if unknown_value == wrong_value {
+        return Vec::new();
+    }
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Login Username Enumeration")
+    else {
+        return Vec::new();
+    };
+    vec![pattern_finding(pattern, &path, number, &line)]
+}
+
 /// Collect review findings without displaying them (for report generation)
 pub(crate) async fn collect_review_findings(
     project_path: &Path,
@@ -1497,6 +1616,11 @@ pub(crate) async fn collect_review_findings(
         &patterns,
     ));
     report.extend(scoped_login_log_forging_findings(
+        &files,
+        &canonical_path,
+        &patterns,
+    ));
+    report.extend(scoped_login_enumeration_findings(
         &files,
         &canonical_path,
         &patterns,
@@ -2704,6 +2828,52 @@ mod scanner_regression_tests {
         assert!(check().is_empty(), "constant log is not reported");
         fs::write(&handler, raw.replace("= req.body", "= fixture")).unwrap();
         assert!(check().is_empty(), "non-request input is not reported");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn login_enumeration_requires_distinct_public_errors() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-login-enumeration-{nonce}"));
+        fs::create_dir_all(root.join("app/routes")).unwrap();
+        let handler = root.join("app/routes/session.js");
+        let vulnerable = "this.handleLoginRequest = (req, res) => {\n  userDAO.validateLogin(userName, password, (err, user) => {\n    const missingError = 'Invalid username';\n    const wrongError = 'Invalid password';\n    const genericError = 'Invalid username or password';\n    if (err.noSuchUser) {\n      // loginError: genericError,\n      return res.render('login', { loginError: missingError });\n    } else if (err.invalidPassword) {\n      return res.render('login', { loginError: wrongError });\n    }\n  });\n};\nthis.displayLogoutPage = () => {};";
+        fs::write(&handler, vulnerable).unwrap();
+        let patterns = build_vuln_patterns();
+        let check =
+            || scoped_login_enumeration_findings(std::slice::from_ref(&handler), &root, &patterns);
+        let found = check();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].title, "Login Username Enumeration");
+        assert_eq!(found[0].line_number, Some(8));
+        fs::write(
+            &handler,
+            vulnerable
+                .replace("loginError: missingError", "loginError: genericError")
+                .replace("loginError: wrongError", "loginError: genericError"),
+        )
+        .unwrap();
+        assert!(check().is_empty(), "same public error stops enumeration");
+        fs::write(
+            &handler,
+            vulnerable
+                .replace("loginError: wrongError", "loginError: genericError")
+                .replace("loginError: missingError", "loginError: genericError"),
+        )
+        .unwrap();
+        assert!(check().is_empty());
+        fs::write(
+            &handler,
+            vulnerable.replace("err.noSuchUser", "err.otherIssue"),
+        )
+        .unwrap();
+        assert!(
+            check().is_empty(),
+            "only login identity branches are relevant"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
