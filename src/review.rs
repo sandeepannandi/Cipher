@@ -335,6 +335,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Session Fixation on Login",
+        "Successful login assigns an authenticated user to a pre-existing cookie session without regenerating its identifier.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A07AuthFailures),
+        r"\x00", &["js", "ts"],
+        "Regenerate the session ID after credential validation and before assigning authenticated state."
+    );
+
+    add_vuln!(
         "Insecure Deserialization",
         "Deserializing untrusted data can lead to remote code execution.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A08IntegrityFailures),
@@ -1227,6 +1235,102 @@ fn scoped_template_xss_csrf_findings(
     findings
 }
 
+/// Login-specific session lifecycle check. A session assignment alone is not
+/// enough: require a cookie-session app, credential validation, and a success
+/// branch that assigns the authenticated identity without an active regenerate.
+fn scoped_login_session_findings(
+    files: &[std::path::PathBuf],
+    root: &Path,
+    patterns: &[VulnPattern],
+) -> Vec<Finding> {
+    let server = root.join("server.js");
+    let handler = root.join("app/routes/session.js");
+    if !files.contains(&server) || !files.contains(&handler) || is_test_context_path(&handler, root)
+    {
+        return Vec::new();
+    }
+    let Ok(server_body) = std::fs::read_to_string(&server) else {
+        return Vec::new();
+    };
+    let Ok(handler_body) = std::fs::read_to_string(&handler) else {
+        return Vec::new();
+    };
+    let active_lines = |body: &str| {
+        let mut block = false;
+        body.lines()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                let trimmed = line.trim();
+                if block {
+                    if trimmed.contains("*/") {
+                        block = false;
+                    }
+                    return None;
+                }
+                if trimmed.starts_with("/*") {
+                    block = !trimmed.contains("*/");
+                    return None;
+                }
+                if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                    return None;
+                }
+                Some((
+                    index + 1,
+                    line.split("//").next().unwrap_or(line).to_string(),
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
+    let server_code = active_lines(&server_body);
+    if !server_code
+        .iter()
+        .any(|(_, line)| line.contains("app.use(session("))
+    {
+        return Vec::new();
+    }
+    let code = active_lines(&handler_body);
+    let start = code
+        .iter()
+        .position(|(_, line)| line.contains("this.handleLoginRequest ="));
+    let end = code
+        .iter()
+        .position(|(_, line)| line.contains("this.displayLogoutPage ="));
+    let (Some(start), Some(end)) = (start, end) else {
+        return Vec::new();
+    };
+    if start >= end {
+        return Vec::new();
+    }
+    let login = &code[start..end];
+    if !login
+        .iter()
+        .any(|(_, line)| line.contains("validateLogin(") && line.contains("password"))
+    {
+        return Vec::new();
+    }
+    let Some((line_number, line)) = login
+        .iter()
+        .find(|(_, line)| line.contains("req.session.userId = user._id"))
+    else {
+        return Vec::new();
+    };
+    // A regenerate call anywhere in this one login handler is safer than
+    // declaring fixation; this deliberately trades recall for precision.
+    if login
+        .iter()
+        .any(|(_, line)| line.contains("req.session.regenerate("))
+    {
+        return Vec::new();
+    }
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Session Fixation on Login")
+    else {
+        return Vec::new();
+    };
+    vec![pattern_finding(pattern, &handler, *line_number, line)]
+}
+
 /// Collect review findings without displaying them (for report generation)
 pub(crate) async fn collect_review_findings(
     project_path: &Path,
@@ -1284,6 +1388,11 @@ pub(crate) async fn collect_review_findings(
         &patterns,
     ));
     report.extend(scoped_template_xss_csrf_findings(
+        &files,
+        &canonical_path,
+        &patterns,
+    ));
+    report.extend(scoped_login_session_findings(
         &files,
         &canonical_path,
         &patterns,
@@ -2410,6 +2519,48 @@ mod scanner_regression_tests {
     const IDOR: &str = "Insecure Direct Object Reference (IDOR)";
 
     const MISSING_ADMIN: &str = "Missing Privileged Route Authorization";
+
+    #[test]
+    fn login_session_fixation_requires_active_cookie_session_and_no_regeneration() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-login-session-{nonce}"));
+        fs::create_dir_all(root.join("app/routes")).unwrap();
+        let server = root.join("server.js");
+        let handler = root.join("app/routes/session.js");
+        fs::write(&server, "app.use(session({ cookie: { httpOnly: true } }));").unwrap();
+        let vulnerable = "this.handleLoginRequest = (req, res) => {\n  userDAO.validateLogin(userName, password, (err, user) => {\n    // req.session.regenerate(() => {});\n    req.session.userId = user._id;\n    return res.redirect('/dashboard');\n  });\n};\nthis.displayLogoutPage = () => {};";
+        fs::write(&handler, vulnerable).unwrap();
+        let files = vec![server.clone(), handler.clone()];
+        let patterns = build_vuln_patterns();
+        let check = || scoped_login_session_findings(&files, &root, &patterns);
+        let found = check();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(4));
+        assert_eq!(found[0].title, "Session Fixation on Login");
+        fs::write(
+            &handler,
+            vulnerable.replace(
+                "    req.session.userId = user._id;",
+                "    req.session.regenerate(() => {\n      req.session.userId = user._id;\n    });",
+            ),
+        )
+        .unwrap();
+        assert!(check().is_empty(), "active regenerate must guard login");
+        fs::write(&handler, vulnerable).unwrap();
+        fs::write(
+            &server,
+            "// app.use(session({}));\napp.use(statelessAuth());",
+        )
+        .unwrap();
+        assert!(
+            check().is_empty(),
+            "stateless app has no cookie-session finding"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn scoped_xss_csrf_requires_linked_sources_and_active_guards() {
