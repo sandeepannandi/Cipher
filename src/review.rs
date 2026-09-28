@@ -1772,6 +1772,70 @@ fn scoped_php_ruby_file_xss_findings(
     findings
 }
 
+/// Rails login responses disclose account existence only when the model's
+/// distinct failures flow through the controller's failed-login flash path.
+fn scoped_rails_login_enumeration(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let model = root.join("app/models/user.rb");
+    let (Ok(user), Ok(controller)) = (
+        std::fs::read_to_string(&model),
+        std::fs::read_to_string(root.join("app/controllers/sessions_controller.rb")),
+    ) else {
+        return vec![];
+    };
+    let active: Vec<&str> = user
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect();
+    let login: Vec<&str> = controller
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect();
+    if !active
+        .iter()
+        .any(|line| line.starts_with("def self.authenticate("))
+        || !active
+            .iter()
+            .any(|line| line.contains("find_by_email(email)"))
+        || !active
+            .iter()
+            .any(|line| line.contains("user.password == Digest::MD5.hexdigest(password)"))
+        || !login
+            .iter()
+            .any(|line| line.contains("User.authenticate(params[:email]"))
+        || !login.iter().any(|line| line == &"rescue RuntimeError => e")
+        || !login
+            .iter()
+            .any(|line| line == &"flash[:error] = e.message")
+        || !login
+            .iter()
+            .any(|line| line.contains("render \"sessions/new\""))
+    {
+        return vec![];
+    }
+    let Some((index, unknown)) = user
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.trim() == "raise \"#{email} doesn't exist!\" if !(user)")
+    else {
+        return vec![];
+    };
+    if !active
+        .iter()
+        .any(|line| line == &"raise \"Incorrect Password!\"")
+    {
+        return vec![];
+    }
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Login Username Enumeration")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &model, index + 1, unknown)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -2600,6 +2664,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_rails_csrf_findings(&canonical_path, &patterns));
     report.extend(scoped_rails_work_info_idor(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
+    report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
         &files,
         &canonical_path,
@@ -3734,6 +3799,55 @@ mod scanner_regression_tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn rails_login_enumeration_requires_distinct_public_model_errors() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-rails-enumeration-{nonce}"));
+        fs::create_dir_all(root.join("app/models")).unwrap();
+        fs::create_dir_all(root.join("app/controllers")).unwrap();
+        let model = root.join("app/models/user.rb");
+        let controller = root.join("app/controllers/sessions_controller.rb");
+        let vulnerable = "def self.authenticate(email, password)\n user = find_by_email(email)\n raise \"#{email} doesn't exist!\" if !(user)\n if user.password == Digest::MD5.hexdigest(password)\n  return user\n else\n  raise \"Incorrect Password!\"\n end\nend\n";
+        let public = "User.authenticate(params[:email].to_s.strip.downcase, params[:password])\nrescue RuntimeError => e\nflash[:error] = e.message\nrender \"sessions/new\"\n";
+        fs::write(&model, vulnerable).unwrap();
+        fs::write(&controller, public).unwrap();
+        let patterns = build_vuln_patterns();
+        let detect = || scoped_rails_login_enumeration(&root, &patterns);
+        assert_eq!(detect()[0].line_number, Some(3));
+        fs::write(
+            &controller,
+            public.replace(
+                "flash[:error] = e.message",
+                "flash[:error] = \"Invalid login\"",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "generic public error");
+        fs::write(&controller, public).unwrap();
+        fs::write(
+            &model,
+            vulnerable.replace(
+                "raise \"Incorrect Password!\"",
+                "raise \"#{email} doesn't exist!\"",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "same error across branches");
+        fs::write(
+            &model,
+            vulnerable.replace(
+                "raise \"#{email} doesn't exist!\"",
+                "raise \"Invalid login\"",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "no email disclosure");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn rails_login_redirect_requires_unsafe_framework_default_and_request_flow() {
