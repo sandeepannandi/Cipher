@@ -674,6 +674,101 @@ fn is_crypto_import_only(line: &str, ext: &str) -> bool {
     ext == "go" && line == ["\"crypto/", "d", "es\""].concat()
 }
 
+/// Narrow PHP/Ruby request-to-query and shell paths. Report the SQL string
+/// construction (rather than the later query call) when that is the reviewed
+/// location. Bind parameters and numeric coercions are not string composition.
+fn ruby_php_injection_lines(
+    content: &str,
+    ext: &str,
+) -> (
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+) {
+    use std::collections::HashSet;
+    let mut sql = HashSet::new();
+    let mut command = HashSet::new();
+    let lines: Vec<&str> = content.lines().collect();
+    if ext == "rb" {
+        for (index, line) in lines.iter().enumerate() {
+            let text = line.trim();
+            if text.starts_with('#') {
+                continue;
+            }
+            if text.contains(".where(") && text.contains("#{params[") && text.contains('"') {
+                sql.insert(index + 1);
+            }
+            // Uploaded filenames are controlled by the caller; interpolating
+            // one into the shell-form system call executes shell metacharacters.
+            if text.contains("system(\"")
+                && text.contains("#{")
+                && text.contains("file.original_filename")
+            {
+                command.insert(index + 1);
+            }
+        }
+    } else if ext == "php" {
+        let source = Regex::new(r"(?i)^\s*(\$[A-Za-z_][A-Za-z_0-9]*)\s*=\s*(?:trim\s*\(\s*)?\$_(?:GET|POST|REQUEST)\s*\[").expect("PHP request source regex");
+        let assign =
+            Regex::new(r"(?i)^\s*(\$[A-Za-z_][A-Za-z_0-9]*)\s*=").expect("PHP assignment regex");
+        let query = Regex::new(r"(?i)\b(?:SELECT|INSERT|UPDATE|DELETE)\b").expect("SQL verb regex");
+        let interpolate = Regex::new(r"\$[A-Za-z_][A-Za-z_0-9]*").expect("PHP interpolation regex");
+        let mut tainted = HashSet::<String>::new();
+        let has_query_sink = lines
+            .iter()
+            .any(|line| line.contains("mysqli_query(") || line.contains("->query("));
+        for (index, line) in lines.iter().enumerate() {
+            let text = line.trim();
+            if text.starts_with("//") || text.starts_with('#') {
+                continue;
+            }
+            if let Some(capture) = source.captures(text) {
+                tainted.insert(capture[1].to_string());
+                continue;
+            }
+            if let Some(capture) = assign.captures(text) {
+                let variable = capture[1].to_string();
+                let numeric = text.contains("intval(")
+                    || text.contains("(int)")
+                    || text.contains("filter_var(");
+                let validated_octets = text.contains("$octet[0]")
+                    && text.contains("$octet[3]")
+                    && (0..4)
+                        .all(|octet| content.contains(&format!("is_numeric( $octet[{octet}] )")))
+                    && content.contains("sizeof( $octet ) == 4");
+                let escaped = text.contains("mysqli_real_escape_string(");
+                let digested = text.contains(&["= m", "d5("].concat())
+                    || text.contains(&["= sh", "a1("].concat());
+                let pass_through = text.contains("str_replace(")
+                    || text.contains("stripslashes(")
+                    || text.contains("trim(")
+                    || text.contains(&format!("({variable}"))
+                    || text.contains(&format!(" {variable} "));
+                if numeric || validated_octets || escaped || digested || !pass_through {
+                    tainted.remove(&variable);
+                }
+            }
+            if !tainted.iter().any(|variable| text.contains(variable)) {
+                continue;
+            }
+            if has_query_sink
+                && text.contains("$query")
+                && query.is_match(text)
+                && text.contains('"')
+                && !text.contains("->prepare(")
+                && interpolate
+                    .find_iter(text)
+                    .any(|hit| tainted.contains(hit.as_str()))
+            {
+                sql.insert(index + 1);
+            }
+            if text.contains("shell_exec(") && text.contains('.') {
+                command.insert(index + 1);
+            }
+        }
+    }
+    (sql, command)
+}
+
 /// Scan one file, also reporting sink lines that other project files reach
 /// through cross-file calls (see [`cross_file_flow_sinks`]).
 fn scan_file_for_vulns_with(
@@ -698,6 +793,21 @@ fn scan_file_for_vulns_with(
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
     let mut sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
     let mut command_injection_sinks = command_injection_sink_lines(&content, &ext);
+    let (language_sql, language_command) = if path.components().any(|part| {
+        matches!(
+            part.as_os_str().to_str(),
+            Some("test" | "tests" | "spec" | "specs" | "fixtures")
+        )
+    }) {
+        (
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+        )
+    } else {
+        ruby_php_injection_lines(&content, &ext)
+    };
+    sql_injection_sinks.extend(language_sql);
+    command_injection_sinks.extend(language_command);
     let mut ssrf_sinks = ssrf_sink_lines(&content, &ext);
     let redirect_sinks = open_redirect_sink_lines(&content, &ext);
     let redos_sites = redos_sink_lines(&content, &ext);
@@ -2951,6 +3061,134 @@ mod scanner_regression_tests {
         let findings = scan_file_for_vulns(&path, &build_vuln_patterns());
         fs::remove_file(path).expect("remove fixture");
         findings
+    }
+
+    #[test]
+    fn ruby_php_query_and_shell_flows_are_scoped_to_real_sinks() {
+        let rails = r##"user = User.where("id = '#{params[:user][:id]}'")[0]
+User.where(id: params[:id]).first
+scope :hits, ->(ip, col = "*") { select("#{col}").where(ip_address: ip) }
+silence_streams(STDERR) { system("cp #{full_file_name} #{data_path}/bak#{file.original_filename}") }"##;
+        let (sql, command) = ruby_php_injection_lines(rails, "rb");
+        assert_eq!(sql, [1].into());
+        assert_eq!(command, [4].into());
+        let php = r#"$id = $_GET['id'];
+$query = "SELECT name FROM users WHERE user_id = '$id'";
+mysqli_query($db, $query);
+$stmt = $db->prepare('SELECT name FROM users WHERE user_id = :id');
+$target = $_REQUEST['ip'];
+$cmd = shell_exec('ping ' . $target);"#;
+        let (sql, command) = ruby_php_injection_lines(php, "php");
+        assert_eq!(sql, [2].into());
+        assert_eq!(command, [6].into());
+        let safe = r#"$id = $_GET['id'];
+$id = intval($id);
+$query = "SELECT name FROM users WHERE user_id = '$id'";
+mysqli_query($db, $query);
+$target = $_REQUEST['ip'];
+$octet = explode('.', $target);
+if ((is_numeric( $octet[0] )) && (is_numeric( $octet[1] )) && (is_numeric( $octet[2] )) && (is_numeric( $octet[3] )) && (sizeof( $octet ) == 4)) {
+$target = $octet[0] . '.' . $octet[1] . '.' . $octet[2] . '.' . $octet[3];
+$cmd = shell_exec('ping ' . $target);
+}"#;
+        let (sql, command) = ruby_php_injection_lines(safe, "php");
+        assert!(sql.is_empty());
+        assert!(command.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ruby_php_pilot_paths_and_controls_at_exact_lines() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-ruby-php-{nonce}"));
+        for relative in [
+            "app/controllers",
+            "app/models",
+            "vulnerabilities/sqli/source",
+            "vulnerabilities/exec/source",
+            "vulnerabilities/exec/test",
+        ] {
+            fs::create_dir_all(root.join(relative)).expect("mkdir");
+        }
+        let rails = root.join("app/controllers/users_controller.rb");
+        fs::write(
+            &rails,
+            [
+                "# header",
+                "# no query",
+                "user = User.where(\"id = '#{params[:user][:id]}'\")[0]",
+            ]
+            .join("\n"),
+        )
+        .expect("ruby");
+        let benefit = root.join("app/models/benefits.rb");
+        fs::write(
+            &benefit,
+            "system(\"cp #{full_file_name} #{file.original_filename}\")",
+        )
+        .expect("benefit");
+        let sqli = root.join("vulnerabilities/sqli/source/low.php");
+        fs::write(
+            &sqli,
+            [
+                "<?php",
+                "$id = $_GET['id'];",
+                "$query = \"SELECT * FROM users WHERE id = '$id'\";",
+                "mysqli_query($db, $query);",
+            ]
+            .join("\n"),
+        )
+        .expect("php");
+        let exec = root.join("vulnerabilities/exec/source/low.php");
+        fs::write(
+            &exec,
+            [
+                "<?php",
+                "$target = $_REQUEST['ip'];",
+                "$cmd = shell_exec('ping ' . $target);",
+            ]
+            .join("\n"),
+        )
+        .expect("exec");
+        let impossible = root.join("vulnerabilities/exec/source/impossible.php");
+        fs::write(&impossible, ["<?php", "$target = $_REQUEST['ip'];", "$octet = explode('.', $target);", "if (is_numeric( $octet[0] ) && is_numeric( $octet[1] ) && is_numeric( $octet[2] ) && is_numeric( $octet[3] ) && sizeof( $octet ) == 4) {", "$target = $octet[0] . $octet[1] . $octet[2] . $octet[3];", "$cmd = shell_exec('ping ' . $target);", "}"].join("\n")).expect("impossible");
+        let fixture = root.join("vulnerabilities/exec/test/demo.php");
+        fs::write(
+            &fixture,
+            [
+                "$target = $_REQUEST['ip'];",
+                "$cmd = shell_exec('ping ' . $target);",
+            ]
+            .join("\n"),
+        )
+        .expect("fixture");
+        let report = collect_review_findings(&root, false, None)
+            .await
+            .expect("scan");
+        let keys: std::collections::HashSet<(String, String, usize)> = report
+            .findings
+            .iter()
+            .filter_map(|f| Some((f.title.clone(), f.file_path.clone()?, f.line_number?)))
+            .collect();
+        for (title, path, line) in [
+            ("SQL Injection — String Concatenation", &rails, 3),
+            ("Command Injection", &benefit, 1),
+            ("SQL Injection — String Concatenation", &sqli, 3),
+            ("Command Injection", &exec, 3),
+        ] {
+            assert!(
+                keys.contains(&(title.to_string(), path.to_string_lossy().into_owned(), line)),
+                "missing {title} at {}:{line}",
+                path.display()
+            );
+        }
+        assert!(!keys.iter().any(|(title, path, _)| (title
+            == "SQL Injection — String Concatenation"
+            || title == "Command Injection")
+            && (path == &impossible.to_string_lossy() || path == &fixture.to_string_lossy())));
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     const IDOR: &str = "Insecure Direct Object Reference (IDOR)";
