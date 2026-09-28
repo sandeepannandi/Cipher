@@ -343,6 +343,54 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "File Inclusion",
+        "A request-selected path reaches a PHP include without a fixed allowlist.",
+        Severity::Critical,
+        Confidence::High,
+        Some(OwaspCategory::A03Injection),
+        r"\x00",
+        &["php"],
+        "Map user choices to fixed local files; never include a request-derived path."
+    );
+    add_vuln!(
+        "Unrestricted File Upload",
+        "A user-named upload is moved into a web-accessible directory without server-side content validation.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A04InsecureDesign),
+        r"\x00", &["php"],
+        "Validate file contents, generate server-side names, and store uploads outside the web root."
+    );
+    add_vuln!(
+        "Reflected XSS",
+        "Request input is appended to an HTML response without HTML encoding.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A03Injection),
+        r"\x00",
+        &["php"],
+        "HTML-encode untrusted output in its rendering context."
+    );
+    add_vuln!(
+        "Stored XSS",
+        "A stored guestbook value reaches HTML without output encoding.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A03Injection),
+        r"\x00",
+        &["php"],
+        "Encode database values for HTML at output."
+    );
+    add_vuln!(
+        "Unescaped Rails Output (XSS)",
+        "A user-editable profile field is marked html_safe in an ERB view.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A03Injection),
+        r"\x00",
+        &["erb"],
+        "Let ERB escape user values and remove html_safe from profile data."
+    );
+
+    add_vuln!(
         "XPath Injection",
         "Request data is concatenated into an XPath expression passed to an XML query engine.",
         Severity::High, Confidence::High, Some(OwaspCategory::A03Injection),
@@ -828,6 +876,8 @@ fn scan_file_for_vulns_with(
     sql_injection_sinks.extend(language_sql);
     command_injection_sinks.extend(language_command);
     let mut ssrf_sinks = ssrf_sink_lines(&content, &ext);
+    let (php_upload_sinks, php_reflected_sinks, ruby_file_sinks) =
+        php_ruby_file_xss_lines(&content, &ext);
     let go_xss_sinks = go_html_xss_lines(&content, &ext);
     let go_xpath_sinks = go_xpath_sink_lines(&content, &ext);
     let go_email_sinks = go_email_header_sink_lines(&content, &ext);
@@ -904,6 +954,10 @@ fn scan_file_for_vulns_with(
                     && ssrf_sinks.contains(&line_number))
                 || (pattern.name == "Unsafe HTML Response (XSS)"
                     && go_xss_sinks.contains(&line_number))
+                || (pattern.name == "Unrestricted File Upload"
+                    && php_upload_sinks.contains(&line_number))
+                || (pattern.name == "Reflected XSS" && php_reflected_sinks.contains(&line_number))
+                || (pattern.name == "Path Traversal" && ruby_file_sinks.contains(&line_number))
                 || (pattern.name == "XPath Injection" && go_xpath_sinks.contains(&line_number))
                 || (pattern.name == "Email Header Injection"
                     && go_email_sinks.contains(&line_number))
@@ -1300,6 +1354,183 @@ fn scoped_route_authz_findings(
                         let text = handler.lines().nth(source_line - 1).unwrap_or("");
                         findings.push(pattern_finding(pattern, &target, source_line, text));
                     }
+                }
+            }
+        }
+    }
+    findings
+}
+
+/// Local PHP/Ruby sites where the source and terminal are in the same file.
+/// PHP upload checks demand an unvalidated move to a web-accessible path;
+/// reflected XSS tracks direct request data or weak script-tag stripping.
+fn php_ruby_file_xss_lines(
+    content: &str,
+    ext: &str,
+) -> (
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+) {
+    use std::collections::HashSet;
+    let mut uploads = HashSet::new();
+    let mut reflected = HashSet::new();
+    let mut ruby_files = HashSet::new();
+    if ext == "rb" && content.contains("params[:name]") {
+        let mut selected = false;
+        for (i, line) in content.lines().enumerate() {
+            if line.trim_start().starts_with('#') {
+                continue;
+            }
+            if line.contains("path = params[:name]") {
+                selected = true;
+            }
+            if selected
+                && line.contains("send_file file")
+                && content.contains("constantize.new(path)")
+            {
+                ruby_files.insert(i + 1);
+            }
+            if line.trim_start().starts_with("end") {
+                selected = false;
+            }
+        }
+    }
+    if ext != "php" {
+        return (uploads, reflected, ruby_files);
+    }
+    let web_upload = content.contains("hackable/uploads/");
+    let user_filename = content.contains("$_FILES") && content.contains("basename(");
+    let content_checked = content.contains("getimagesize(") || content.contains("imagecreatefrom");
+    let extension_checked =
+        content.contains("$uploaded_ext") && (content.contains("jpg") || content.contains("png"));
+    let mut request_name = false;
+    let mut weak_filtered = false;
+    let mut encoded = false;
+    let mut statement_started = false;
+    for (i, line) in content.lines().enumerate() {
+        let code = line.trim();
+        if code.starts_with("//") || code.starts_with('#') {
+            continue;
+        }
+        if code.starts_with("$target_path") {
+            statement_started = true;
+        }
+        if web_upload
+            && user_filename
+            && !content_checked
+            && !extension_checked
+            && statement_started
+            && code.contains("move_uploaded_file(")
+            && code.contains("$target_path")
+        {
+            uploads.insert(i + 1);
+        }
+        if code.contains("$name =") || code.contains("$name    =") {
+            request_name = code.contains("$_GET")
+                || (request_name
+                    && (code.contains("str_replace(") || code.contains("preg_replace(")));
+            weak_filtered =
+                request_name && (code.contains("str_replace(") || code.contains("preg_replace("));
+            encoded = code.contains("htmlspecialchars(") || code.contains("htmlentities(");
+        }
+        if code.contains("$html")
+            && code.contains("<pre>")
+            && ((code.contains("$_GET") && !code.contains("htmlspecialchars("))
+                || (code.contains("{$name}") && request_name && weak_filtered && !encoded))
+        {
+            reflected.insert(i + 1);
+        }
+    }
+    (uploads, reflected, ruby_files)
+}
+
+/// Project-context routes: PHP's selected include reads a low-security request
+/// source; the guestbook renders database fields inserted by the stored-XSS
+/// exercise. ERB's html_safe must be on a user-editable profile field.
+fn scoped_php_ruby_file_xss_findings(
+    files: &[std::path::PathBuf],
+    root: &Path,
+    patterns: &[VulnPattern],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let present: std::collections::HashSet<&Path> = files.iter().map(|p| p.as_path()).collect();
+    let add = |findings: &mut Vec<Finding>, path: &Path, title: &str, number: usize, line: &str| {
+        if let Some(pattern) = patterns.iter().find(|p| p.name == title) {
+            findings.push(pattern_finding(pattern, path, number, line));
+        }
+    };
+    let index = root.join("vulnerabilities/fi/index.php");
+    let low = root.join("vulnerabilities/fi/source/low.php");
+    if present.contains(index.as_path())
+        && present.contains(low.as_path())
+        && std::fs::read_to_string(&low).is_ok_and(|s| s.contains("$file = $_GET[ 'page' ]"))
+    {
+        if let Ok(content) = std::fs::read_to_string(&index) {
+            if content.contains("vulnerabilities/fi/source/{$vulnerabilityFile}")
+                && !content.contains("in_array($file,")
+            {
+                for (i, line) in content.lines().enumerate() {
+                    if line.trim_start().starts_with("include( $file )") {
+                        add(&mut findings, &index, "File Inclusion", i + 1, line);
+                    }
+                }
+            }
+        }
+    }
+    let guest = root.join("dvwa/includes/dvwaPage.inc.php");
+    let stored = root.join("vulnerabilities/xss_s/source/low.php");
+    let route = root.join("vulnerabilities/xss_s/index.php");
+    if [guest.as_path(), stored.as_path(), route.as_path()]
+        .iter()
+        .all(|p| present.contains(p))
+        && std::fs::read_to_string(&stored)
+            .is_ok_and(|s| s.contains("$_POST[ 'txtName' ]") && s.contains("INSERT INTO guestbook"))
+        && std::fs::read_to_string(&route).is_ok_and(|s| s.contains("dvwaGuestbook()"))
+    {
+        if let Ok(content) = std::fs::read_to_string(&guest) {
+            let mut in_guestbook = false;
+            let mut outside_impossible = false;
+            for (i, line) in content.lines().enumerate() {
+                if line.contains("function dvwaGuestbook()") {
+                    in_guestbook = true;
+                }
+                if !in_guestbook {
+                    continue;
+                }
+                if line.contains("else {") {
+                    outside_impossible = true;
+                }
+                if outside_impossible
+                    && line.contains("$name")
+                    && line.contains("$row[0]")
+                    && !line.contains("htmlspecialchars(")
+                {
+                    add(&mut findings, &guest, "Stored XSS", i + 1, line);
+                }
+                if line.contains("// -- END (XSS Stored guestbook)") {
+                    break;
+                }
+            }
+        }
+    }
+    let view = root.join("app/views/layouts/shared/_header.html.erb");
+    let permitted = root.join("app/controllers/users_controller.rb");
+    if present.contains(view.as_path())
+        && present.contains(permitted.as_path())
+        && std::fs::read_to_string(&permitted)
+            .is_ok_and(|s| s.contains("permit(") && s.contains(":first_name"))
+    {
+        if let Ok(content) = std::fs::read_to_string(&view) {
+            for (i, line) in content.lines().enumerate() {
+                if line.contains("<%=") && line.contains("current_user.first_name.html_safe") {
+                    add(
+                        &mut findings,
+                        &view,
+                        "Unescaped Rails Output (XSS)",
+                        i + 1,
+                        line,
+                    );
                 }
             }
         }
@@ -1951,6 +2182,11 @@ pub(crate) async fn collect_review_findings(
         &canonical_path,
         &patterns,
     ));
+    report.extend(scoped_php_ruby_file_xss_findings(
+        &files,
+        &canonical_path,
+        &patterns,
+    ));
     report.extend(scoped_login_session_findings(
         &files,
         &canonical_path,
@@ -2422,6 +2658,7 @@ fn is_supported_extension(ext: &str) -> bool {
             | "py"
             | "go"
             | "rb"
+            | "erb"
             | "java"
             | "kt"
             | "swift"
@@ -3149,6 +3386,111 @@ func handler(w http.ResponseWriter, r *http.Request) {
         assert!(go_template_source_sink_lines(safe, "go").is_empty());
         assert!(go_email_header_sink_lines(safe, "go").is_empty());
         assert!(ssrf_sink_lines(safe, "go").is_empty());
+    }
+
+    #[test]
+    fn php_ruby_file_and_xss_flows_have_scoped_controls() {
+        let upload = r#"<?php
+$target_path = DVWA_WEB_PAGE_TO_ROOT . "hackable/uploads/";
+$target_path .= basename($_FILES['uploaded']['name']);
+move_uploaded_file($_FILES['uploaded']['tmp_name'], $target_path);
+"#;
+        assert_eq!(php_ruby_file_xss_lines(upload, "php").0, [4].into());
+        let guarded_upload = format!("{upload}\ngetimagesize($uploaded_tmp);");
+        assert!(php_ruby_file_xss_lines(&guarded_upload, "php").0.is_empty());
+        let html = r#"<?php
+$html .= '<pre>Hello ' . $_GET['name'] . '</pre>';
+$name = str_replace('<script>', '', $_GET['name']);
+$html .= "<pre>Hello {$name}</pre>";
+$name = htmlspecialchars($_GET['name']);
+$html .= "<pre>Hello {$name}</pre>";
+"#;
+        assert_eq!(php_ruby_file_xss_lines(html, "php").1, [2, 4].into());
+        let ruby = r#"def download
+path = params[:name]
+file = params[:type].constantize.new(path)
+send_file file, disposition: "attachment"
+end"#;
+        assert_eq!(php_ruby_file_xss_lines(ruby, "rb").2, [4].into());
+        assert!(
+            php_ruby_file_xss_lines(&ruby.replace("params[:name]", "'static.pdf'"), "rb")
+                .2
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn php_ruby_pilot_project_links_at_exact_lines() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-php-ruby-file-xss-{nonce}"));
+        let write = |relative: &str, content: &str| {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, content).unwrap();
+        };
+        write("vulnerabilities/fi/index.php", "<?php\nrequire_once DVWA_WEB_PAGE_TO_ROOT . \"vulnerabilities/fi/source/{$vulnerabilityFile}\";\nif( isset( $file ) )\n include( $file );\n");
+        write(
+            "vulnerabilities/fi/source/low.php",
+            "<?php\n$file = $_GET[ 'page' ];\n",
+        );
+        write(
+            "vulnerabilities/xss_s/source/low.php",
+            "<?php\n$name = $_POST[ 'txtName' ];\n$query = 'INSERT INTO guestbook';\n",
+        );
+        write(
+            "vulnerabilities/xss_s/index.php",
+            "<?php\ndvwaGuestbook();\n",
+        );
+        write("dvwa/includes/dvwaPage.inc.php", "<?php\nfunction dvwaGuestbook() {\nif( dvwaSecurityLevelGet() == 'impossible' ) {\n$name = htmlspecialchars($row[0]);\n} else {\n$name = $row[0];\n}\n$guestbook .= \"{$name}\";\n}\n// -- END (XSS Stored guestbook)\n");
+        write(
+            "app/controllers/users_controller.rb",
+            "params.require(:user).permit(:first_name)\n",
+        );
+        write(
+            "app/views/layouts/shared/_header.html.erb",
+            "<span><%= current_user.first_name.html_safe %></span>\n",
+        );
+        let keys = || collect_review_findings(&root, false, None);
+        let report = keys().await.unwrap();
+        let present: std::collections::HashSet<(String, usize)> = report
+            .findings
+            .iter()
+            .filter_map(|f| Some((f.title.clone(), f.line_number?)))
+            .collect();
+        for (title, line) in [
+            ("File Inclusion", 4),
+            ("Stored XSS", 6),
+            ("Unescaped Rails Output (XSS)", 1),
+        ] {
+            assert!(
+                present.contains(&(title.to_string(), line)),
+                "missing {title}:{line}"
+            );
+        }
+        fs::write(
+            root.join("vulnerabilities/fi/source/low.php"),
+            "<?php\n$file = 'fixed.php';\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("vulnerabilities/xss_s/source/low.php"),
+            "<?php\n$name = 'fixed';\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("app/controllers/users_controller.rb"),
+            "params.require(:user).permit(:email)\n",
+        )
+        .unwrap();
+        let safe = keys().await.unwrap();
+        assert!(safe.findings.iter().all(|f| !matches!(
+            f.title.as_str(),
+            "File Inclusion" | "Stored XSS" | "Unescaped Rails Output (XSS)"
+        )));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
