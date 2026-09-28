@@ -1772,6 +1772,63 @@ fn scoped_php_ruby_file_xss_findings(
     findings
 }
 
+/// Rails nested user resource selected from the URL and rendered with sensitive
+/// fields. Authentication alone is not ownership: require route and view links.
+fn scoped_rails_work_info_idor(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let controller = root.join("app/controllers/work_info_controller.rb");
+    let base = root.join("app/controllers/application_controller.rb");
+    let routes = root.join("config/routes.rb");
+    let view = root.join("app/views/work_info/index.html.erb");
+    let (Ok(text), Ok(base), Ok(routes), Ok(view)) = (
+        std::fs::read_to_string(&controller),
+        std::fs::read_to_string(base),
+        std::fs::read_to_string(routes),
+        std::fs::read_to_string(view),
+    ) else {
+        return vec![];
+    };
+    if !text.contains("< ApplicationController")
+        || !routes.contains("resources :users do")
+        || !routes.contains("resources :work_info")
+        || !base.contains("before_action :authenticated")
+        || !view.contains("@user.work_info.SSN")
+        || !view.contains("@user.work_info.income")
+    {
+        return vec![];
+    }
+    let active: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect();
+    let Some((index, source)) = active
+        .iter()
+        .enumerate()
+        .find(|(_, line)| line.contains("@user = User.find_by(id: params[:user_id])"))
+    else {
+        return vec![];
+    };
+    let ownership = Regex::new(r"(?i)(?:@user\.id\s*==?\s*current_user\.id|current_user\.id\s*==?\s*@user\.id|authorize\b|check_ownership\b|current_user\.users\b|current_user\.work_info\b)").expect("valid ownership guard");
+    if ownership.is_match(&active.join("\n"))
+        || !active.iter().any(|line| line.contains("@user.admin"))
+    {
+        return vec![];
+    }
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Insecure Direct Object Reference (IDOR)")
+    else {
+        return vec![];
+    };
+    // Find the original line because comment filtering changes positions.
+    let line_number = text
+        .lines()
+        .position(|line| line.trim() == *source)
+        .unwrap_or(index)
+        + 1;
+    vec![pattern_finding(pattern, &controller, line_number, source)]
+}
+
 /// Rails CSRF requires application-level proof. A commented out declaration alone
 /// is not enough: newer Rails defaults may still enable protection automatically.
 fn scoped_rails_csrf_findings(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -2487,6 +2544,7 @@ pub(crate) async fn collect_review_findings(
         &patterns,
     ));
     report.extend(scoped_rails_csrf_findings(&canonical_path, &patterns));
+    report.extend(scoped_rails_work_info_idor(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
         &files,
         &canonical_path,
@@ -3621,6 +3679,56 @@ mod scanner_regression_tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn rails_work_info_idor_requires_route_view_and_missing_ownership() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-rails-idor-{nonce}"));
+        for dir in ["config", "app/controllers", "app/views/work_info"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let ctl = root.join("app/controllers/work_info_controller.rb");
+        let base = root.join("app/controllers/application_controller.rb");
+        let route = root.join("config/routes.rb");
+        let view = root.join("app/views/work_info/index.html.erb");
+        let vulnerable = "class WorkInfoController < ApplicationController\n def index\n  @user = User.find_by(id: params[:user_id])\n  if !(@user) || @user.admin\n    redirect_to dashboard_path\n  end\n end\nend\n";
+        fs::write(&ctl, vulnerable).unwrap();
+        fs::write(&base, "class ApplicationController < ActionController::Base\n before_action :authenticated\nend\n").unwrap();
+        fs::write(&route, "resources :users do\n resources :work_info\nend\n").unwrap();
+        fs::write(
+            &view,
+            "<%= @user.work_info.SSN %> <%= @user.work_info.income %>",
+        )
+        .unwrap();
+        let patterns = build_vuln_patterns();
+        let detect = || scoped_rails_work_info_idor(&root, &patterns);
+        let found = detect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(3));
+        fs::write(
+            &ctl,
+            vulnerable.replace(
+                "  if !(@user)",
+                "  return unless @user.id == current_user.id\n  if !(@user)",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "ownership guard suppresses");
+        fs::write(&ctl, vulnerable).unwrap();
+        fs::write(&view, "<%= @user.first_name %>").unwrap();
+        assert!(detect().is_empty(), "no sensitive view");
+        fs::write(
+            &view,
+            "<%= @user.work_info.SSN %> <%= @user.work_info.income %>",
+        )
+        .unwrap();
+        fs::write(&route, "resources :users\n").unwrap();
+        assert!(detect().is_empty(), "no nested route");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn rails_csrf_requires_effective_config_and_state_change() {
