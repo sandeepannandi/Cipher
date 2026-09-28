@@ -330,6 +330,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Apply the administrator check unconditionally to privileged actions; do not let route parameters decide whether the check runs."
     );
 
+    add_vuln!(
+        "SSN Rendered Before Client Masking",
+        "A Rails view sends the full SSN in its HTML response and masks it only after the browser receives it.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
+        r"\x00", &["erb"],
+        "Render only a server-side masked value or last four digits; never place the full SSN in the response."
+    );
+
     // -- Security Misconfiguration --
 
     add_vuln!(
@@ -1911,6 +1919,67 @@ fn scoped_rails_admin_gate_bypass(root: &Path, patterns: &[VulnPattern]) -> Vec<
     vec![pattern_finding(pattern, &controller, index + 1, predicate)]
 }
 
+/// The browser cannot undo a full SSN already sent in HTML. Require a linked
+/// Rails view, controller, route and active client-only masking code; a server
+/// mask, commented ERB, or unrelated template does not qualify.
+fn scoped_rails_ssn_client_mask(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let view = root.join("app/views/work_info/index.html.erb");
+    let controller = root.join("app/controllers/work_info_controller.rb");
+    let routes = root.join("config/routes.rb");
+    let (Ok(html), Ok(controller), Ok(routes)) = (
+        std::fs::read_to_string(&view),
+        std::fs::read_to_string(controller),
+        std::fs::read_to_string(routes),
+    ) else {
+        return vec![];
+    };
+    fn active(source: &str) -> Vec<&str> {
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                !line.starts_with('#') && !line.starts_with("<!--") && !line.starts_with("<%#")
+            })
+            .collect()
+    }
+    let controller_code = active(&controller);
+    let route_code = active(&routes);
+    if !controller_code
+        .iter()
+        .any(|line| line == &"class WorkInfoController < ApplicationController")
+        || !controller_code.iter().any(|line| line == &"def index")
+        || !controller_code
+            .iter()
+            .any(|line| line.contains("@user = User.find_by(id: params[:user_id])"))
+        || !route_code.iter().any(|line| line == &"resources :users do")
+        || !route_code
+            .iter()
+            .any(|line| line == &"resources :work_info")
+        || !html.contains("function maskSSN()")
+        || !html.contains(r#"$("td.ssn").html(fullSSN)"#)
+        || !html.contains("maskSSN()")
+        || !html.contains("$(document).ready(")
+    {
+        return vec![];
+    }
+    let Some((line_number, source)) = html.lines().enumerate().find(|(_, line)| {
+        let trimmed = line.trim();
+        !trimmed.starts_with("<!--")
+            && !trimmed.starts_with("<%#")
+            && trimmed.contains("<%= @user.work_info.SSN %>")
+            && trimmed.contains("<td class=\"ssn\">")
+    }) else {
+        return vec![];
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "SSN Rendered Before Client Masking")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &view, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -2739,6 +2808,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_rails_csrf_findings(&canonical_path, &patterns));
     report.extend(scoped_rails_work_info_idor(&canonical_path, &patterns));
     report.extend(scoped_rails_admin_gate_bypass(&canonical_path, &patterns));
+    report.extend(scoped_rails_ssn_client_mask(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -3922,6 +3992,57 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(detect().is_empty(), "no email disclosure");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rails_ssn_client_mask_requires_active_html_and_route() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-rails-ssn-mask-{nonce}"));
+        let view = root.join("app/views/work_info/index.html.erb");
+        let ctl = root.join("app/controllers/work_info_controller.rb");
+        let routes = root.join("config/routes.rb");
+        for path in [&view, &ctl, &routes] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        let html = "<td class=\"ssn\"><%= @user.work_info.SSN %></td>\n<!--<td class=\"ssn\"><%#= @user.work_info.last_four %></td>-->\n<script>function maskSSN(){ var fullSSN = $(\"td.ssn\").html().replace(/\\d{3}.*?\\d{2}/, \"*****\"); $(\"td.ssn\").html(fullSSN); } $(document).ready(function(){maskSSN()});</script>\n";
+        fs::write(&view, html).unwrap();
+        fs::write(&ctl, "class WorkInfoController < ApplicationController\n def index\n  @user = User.find_by(id: params[:user_id])\n end\nend\n").unwrap();
+        fs::write(&routes, "resources :users do\n resources :work_info\nend\n").unwrap();
+        let patterns = build_vuln_patterns();
+        let detect = || scoped_rails_ssn_client_mask(&root, &patterns);
+        assert_eq!(detect()[0].line_number, Some(1));
+        fs::write(
+            &view,
+            html.replace(
+                "<%= @user.work_info.SSN %>",
+                "<%= @user.work_info.last_four %>",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "masked on server");
+        fs::write(
+            &view,
+            html.replace("<%= @user.work_info.SSN %>", "<%#= @user.work_info.SSN %>"),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "commented ERB");
+        fs::write(
+            &view,
+            html.replace("$(document).ready(", "// $(document).ready disabled("),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "no active masking on load");
+        fs::write(&view, html).unwrap();
+        fs::write(
+            &routes,
+            "resources :reports do\n resources :work_info\nend\n",
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "unlinked route");
         fs::remove_dir_all(root).unwrap();
     }
 
