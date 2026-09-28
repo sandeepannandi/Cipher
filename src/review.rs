@@ -338,6 +338,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Render only a server-side masked value or last four digits; never place the full SSN in the response."
     );
 
+    add_vuln!(
+        "CSRF on Password Change",
+        "A cookie-authenticated PHP password-change form accepts GET parameters and writes the new password without request-token verification.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00", &["php"],
+        "Require a validated anti-CSRF token and a state-changing POST request for password changes."
+    );
+
     // -- Security Misconfiguration --
 
     add_vuln!(
@@ -1980,6 +1988,94 @@ fn scoped_rails_ssn_client_mask(root: &Path, patterns: &[VulnPattern]) -> Vec<Fi
     vec![pattern_finding(pattern, &view, line_number + 1, source)]
 }
 
+/// Require a concrete PHP form-to-handler password mutation, cookie session,
+/// request-controlled GET inputs, and no active token validation in the handler.
+/// The GET form and empty SameSite setting are part of the evidence; do not
+/// infer CSRF from a lone database update or from a commented check.
+fn scoped_php_password_csrf(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let handler = root.join("vulnerabilities/csrf/source/low.php");
+    let form = root.join("vulnerabilities/csrf/index.php");
+    let session = root.join("dvwa/includes/dvwaPage.inc.php");
+    let (Ok(code), Ok(form), Ok(session)) = (
+        std::fs::read_to_string(&handler),
+        std::fs::read_to_string(form),
+        std::fs::read_to_string(session),
+    ) else {
+        return vec![];
+    };
+    fn active(source: &str) -> Vec<&str> {
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                !line.starts_with("//") && !line.starts_with('#') && !line.starts_with('*')
+            })
+            .collect()
+    }
+    let handler_code = active(&code);
+    let form_code = active(&form);
+    let session_code = active(&session);
+    if !form_code.iter().any(|line| line.contains("case 'low':"))
+        || !form_code
+            .iter()
+            .any(|line| line.contains("$vulnerabilityFile = 'low.php'"))
+        || !form_code
+            .iter()
+            .any(|line| line.contains("vulnerabilities/csrf/source/{$vulnerabilityFile}"))
+        || !form_code.iter().any(|line| {
+            line.contains("<form action=") && line.contains("method=") && line.contains("GET")
+        })
+        || !form_code
+            .iter()
+            .any(|line| line.contains("name=") && line.contains("password_new"))
+        || !form_code
+            .iter()
+            .any(|line| line.contains("name=") && line.contains("Change"))
+        || !session_code
+            .iter()
+            .any(|line| line.contains("session_set_cookie_params("))
+        || !session_code
+            .iter()
+            .any(|line| line.contains("$samesite = \"\";"))
+        || !handler_code
+            .iter()
+            .any(|line| line.contains("isset( $_GET[ 'Change' ] )"))
+        || !handler_code
+            .iter()
+            .any(|line| line.contains("$_GET[ 'password_new' ]"))
+        || !handler_code
+            .iter()
+            .any(|line| line.contains("$_GET[ 'password_conf' ]"))
+        || !handler_code
+            .iter()
+            .any(|line| line.contains("$pass_new == $pass_conf"))
+        || !handler_code
+            .iter()
+            .any(|line| line.contains("mysqli_query("))
+        || handler_code
+            .iter()
+            .any(|line| line.contains("checkToken(") || line.contains("hash_equals("))
+    {
+        return vec![];
+    }
+    let Some((line_number, source)) = code.lines().enumerate().find(|(_, line)| {
+        line.contains("UPDATE `users` SET ")
+            && line.contains("password = ")
+            && line.contains("$pass_new")
+            && line.contains("$current_user")
+            && !line.trim().starts_with("//")
+    }) else {
+        return vec![];
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "CSRF on Password Change")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &handler, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -2809,6 +2905,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_rails_work_info_idor(&canonical_path, &patterns));
     report.extend(scoped_rails_admin_gate_bypass(&canonical_path, &patterns));
     report.extend(scoped_rails_ssn_client_mask(&canonical_path, &patterns));
+    report.extend(scoped_php_password_csrf(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -3992,6 +4089,63 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(detect().is_empty(), "no email disclosure");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn php_password_csrf_requires_form_cookie_and_unguarded_get_write() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-php-password-csrf-{nonce}"));
+        let handler = root.join("vulnerabilities/csrf/source/low.php");
+        let form = root.join("vulnerabilities/csrf/index.php");
+        let session = root.join("dvwa/includes/dvwaPage.inc.php");
+        for path in [&handler, &form, &session] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        let code = concat!(
+            "if( isset( $_GET[ 'Change' ] ) ) {\n $pass_new = $_GET[ 'password_new' ];\n $pass_conf = $_GET[ 'password_conf' ];\n if( $pass_new == $pass_conf ) {\n  $current_user = dvwaCurrentUser();\n",
+            "  $insert = \"UPDATE `users` SET password = '",
+            "$pass_new' WHERE user = '\" . $current_user . \"';\";\n  mysqli_query($db, $insert);\n }\n}\n"
+        );
+        let html = "case 'low':\n $vulnerabilityFile = 'low.php';\nrequire_once DVWA_WEB_PAGE_TO_ROOT . \"vulnerabilities/csrf/source/{$vulnerabilityFile}\";\n<form action=\"#\" method=\"GET\">\n<input name=\"password_new\">\n<input type=\"submit\" name=\"Change\">\n";
+        fs::write(&handler, code).unwrap();
+        fs::write(&form, html).unwrap();
+        fs::write(
+            &session,
+            "session_set_cookie_params([\n$samesite = \"\";\n]);\n",
+        )
+        .unwrap();
+        let patterns = build_vuln_patterns();
+        let detect = || scoped_php_password_csrf(&root, &patterns);
+        assert_eq!(detect()[0].line_number, Some(6));
+        fs::write(
+            &handler,
+            code.replace(
+                "mysqli_query($db, $insert);",
+                "checkToken($token, $session, 'index.php');\n mysqli_query($db, $insert);",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "validated token");
+        fs::write(
+            &handler,
+            code.replace("$_GET[ 'password_new' ]", "$_POST[ 'password_new' ]"),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "non-GET input");
+        fs::write(&handler, code).unwrap();
+        fs::write(&form, html.replace("method=\"GET\"", "method=\"POST\"")).unwrap();
+        assert!(detect().is_empty(), "non-GET form");
+        fs::write(&form, html).unwrap();
+        fs::write(
+            &session,
+            "session_set_cookie_params(['samesite' => 'Strict']);",
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "strict cookie");
         fs::remove_dir_all(root).unwrap();
     }
 
