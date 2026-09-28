@@ -922,7 +922,8 @@ fn is_test_context_path(path: &Path, root: &Path) -> bool {
 /// debug flags. These are relative paths, not checkout-name heuristics.
 fn contextual_deployment_path(path: &Path, root: &Path) -> Option<&'static str> {
     let relative = path.strip_prefix(root).ok()?;
-    let parts: Vec<String> = relative.components()
+    let parts: Vec<String> = relative
+        .components()
         .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase())
         .collect();
     if parts.as_slice() == ["db", "seeds.rb"] {
@@ -936,15 +937,27 @@ fn contextual_deployment_path(path: &Path, root: &Path) -> Option<&'static str> 
 
 fn mark_deployment_context(findings: &mut [Finding], root: &Path) {
     for finding in findings {
-        let Some(path) = finding.file_path.as_deref() else { continue; };
-        let Some(context) = contextual_deployment_path(Path::new(path), root) else { continue; };
+        let Some(path) = finding.file_path.as_deref() else {
+            continue;
+        };
+        let Some(context) = contextual_deployment_path(Path::new(path), root) else {
+            continue;
+        };
         let applicable = match context {
             "Seed data context: " => finding.title == "Hardcoded Credentials",
             _ => finding.title == "Debug Mode Enabled",
         };
-        if !applicable { continue; }
-        let ceiling = if context == "Seed data context: " { Severity::Medium } else { Severity::Low };
-        if finding.severity.score() > ceiling.score() { finding.severity = ceiling; }
+        if !applicable {
+            continue;
+        }
+        let ceiling = if context == "Seed data context: " {
+            Severity::Medium
+        } else {
+            Severity::Low
+        };
+        if finding.severity.score() > ceiling.score() {
+            finding.severity = ceiling;
+        }
         if !finding.description.starts_with(context) {
             finding.description = format!("{context}{}", finding.description);
         }
@@ -3633,15 +3646,57 @@ res.render("tutorial/a1", { page: req.query.page });
     fn seed_credentials_and_development_debug_keep_context_without_disappearing() {
         let root = Path::new("/repo");
         let mut findings = vec![
-            Finding::new(FindingType::Vulnerability, "Hardcoded Credentials", "Fixed seed password", Severity::Critical, Confidence::High, "security-review").at("/repo/db/seeds.rb", 10),
-            Finding::new(FindingType::Vulnerability, "Debug Mode Enabled", "Debug enabled", Severity::High, Confidence::High, "security-review").at("/repo/config/environments/development.rb", 30),
-            Finding::new(FindingType::Vulnerability, "Debug Mode Enabled", "Debug enabled", Severity::High, Confidence::High, "security-review").at("/repo/config/environments/production.rb", 30),
-            Finding::new(FindingType::Vulnerability, "Hardcoded Credentials", "Fixed password", Severity::Critical, Confidence::High, "security-review").at("/repo/app/user.rb", 10),
+            Finding::new(
+                FindingType::Vulnerability,
+                "Hardcoded Credentials",
+                "Fixed seed password",
+                Severity::Critical,
+                Confidence::High,
+                "security-review",
+            )
+            .at("/repo/db/seeds.rb", 10),
+            Finding::new(
+                FindingType::Vulnerability,
+                "Debug Mode Enabled",
+                "Debug enabled",
+                Severity::High,
+                Confidence::High,
+                "security-review",
+            )
+            .at("/repo/config/environments/development.rb", 30),
+            Finding::new(
+                FindingType::Vulnerability,
+                "Debug Mode Enabled",
+                "Debug enabled",
+                Severity::High,
+                Confidence::High,
+                "security-review",
+            )
+            .at("/repo/config/environments/production.rb", 30),
+            Finding::new(
+                FindingType::Vulnerability,
+                "Hardcoded Credentials",
+                "Fixed password",
+                Severity::Critical,
+                Confidence::High,
+                "security-review",
+            )
+            .at("/repo/app/user.rb", 10),
         ];
         mark_deployment_context(&mut findings, root);
-        assert_eq!(findings.iter().map(|f| f.severity).collect::<Vec<_>>(), vec![Severity::Medium, Severity::Low, Severity::High, Severity::Critical]);
+        assert_eq!(
+            findings.iter().map(|f| f.severity).collect::<Vec<_>>(),
+            vec![
+                Severity::Medium,
+                Severity::Low,
+                Severity::High,
+                Severity::Critical
+            ]
+        );
         assert!(findings[0].description.starts_with("Seed data context: "));
-        assert!(findings[1].description.starts_with("Development-only setting: "));
+        assert!(findings[1]
+            .description
+            .starts_with("Development-only setting: "));
     }
 
     #[test]
