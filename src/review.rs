@@ -122,7 +122,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         // A template sink is reported only when its name/source receives
         // request-controlled data; render context is not a template source.
         r"(?i)\b(?:res|response)\s*\.\s*render\s*\(\s*(?:req|request)\s*\.\s*(?:params|query|body)\s*\.",
-        &["py", "js", "ts", "rb", "php"],
+        &["py", "js", "ts", "rb", "php", "go"],
         "Never pass user input directly to template engines. Use context-aware escaping and sandboxed templates."
     );
 
@@ -338,8 +338,27 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         Confidence::High,
         Some(OwaspCategory::A03Injection),
         r"\x00",
-        &["js", "ts"],
+        &["js", "ts", "go"],
         "Encode untrusted response data for HTML output or serve it as plain text."
+    );
+
+    add_vuln!(
+        "XPath Injection",
+        "Request data is concatenated into an XPath expression passed to an XML query engine.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A03Injection),
+        r"\x00", &["go"],
+        "Use fixed XPath expressions and compare values outside the query, or validate against a strict allowlist."
+    );
+
+    add_vuln!(
+        "Email Header Injection",
+        "Request data is concatenated into raw SMTP headers without CR/LF filtering.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A03Injection),
+        r"\x00",
+        &["go"],
+        "Reject CR and LF in mail header fields and use structured header APIs."
     );
 
     add_vuln!(
@@ -809,6 +828,10 @@ fn scan_file_for_vulns_with(
     sql_injection_sinks.extend(language_sql);
     command_injection_sinks.extend(language_command);
     let mut ssrf_sinks = ssrf_sink_lines(&content, &ext);
+    let go_xss_sinks = go_html_xss_lines(&content, &ext);
+    let go_xpath_sinks = go_xpath_sink_lines(&content, &ext);
+    let go_email_sinks = go_email_header_sink_lines(&content, &ext);
+    let go_template_sinks = go_template_source_sink_lines(&content, &ext);
     let redirect_sinks = open_redirect_sink_lines(&content, &ext);
     let redos_sites = redos_sink_lines(&content, &ext);
     let (plaintext_stores, plaintext_compares) = plaintext_password_lines(&content, &ext);
@@ -879,6 +902,11 @@ fn scan_file_for_vulns_with(
                     && command_injection_sinks.contains(&line_number))
                 || (pattern.name == "Server-Side Request Forgery (SSRF)"
                     && ssrf_sinks.contains(&line_number))
+                || (pattern.name == "Unsafe HTML Response (XSS)"
+                    && go_xss_sinks.contains(&line_number))
+                || (pattern.name == "XPath Injection" && go_xpath_sinks.contains(&line_number))
+                || (pattern.name == "Email Header Injection"
+                    && go_email_sinks.contains(&line_number))
                 || (pattern.name == "Open Redirect" && redirect_sinks.contains(&line_number))
                 || (pattern.name == "Regular Expression Denial of Service (ReDoS)"
                     && redos_sites.contains(&line_number))
@@ -889,7 +917,8 @@ fn scan_file_for_vulns_with(
                 || (pattern.name == "Code Injection"
                     && code_injection_sinks.contains(&line_number))
                 || (pattern.name == "Server-Side Template Injection (SSTI)"
-                    && ssti_sinks.contains(&line_number))
+                    && (ssti_sinks.contains(&line_number)
+                        || go_template_sinks.contains(&line_number)))
                 || (pattern.name == "Insecure Direct Object Reference (IDOR)"
                     && idor_sinks.contains(&line_number));
             if !pattern_matches {
@@ -3061,6 +3090,65 @@ mod scanner_regression_tests {
         let findings = scan_file_for_vulns(&path, &build_vuln_patterns());
         fs::remove_file(path).expect("remove fixture");
         findings
+    }
+
+    #[test]
+    fn go_web_pilot_five_sinks_and_controls() {
+        let data = r#"func Search(w http.ResponseWriter, r *http.Request) {
+q := r.URL.Query().Get("q")
+w.Header().Set("Content-Type", "text/html")
+fmt.Fprintf(w, "<html>%s</html>", q)
+}"#;
+        assert_eq!(go_html_xss_lines(data, "go"), [4].into());
+        assert!(go_xpath_sink_lines(data, "go").is_empty());
+        let xpath = r#"func QueryXML(w http.ResponseWriter, r *http.Request) {
+username := r.URL.Query().Get("username")
+query := "/users/user[@name='" + username + "']"
+nodes := xmlquery.Find(doc, query)
+}"#;
+        assert_eq!(go_xpath_sink_lines(xpath, "go"), [4].into());
+        let email = r#"func SendEmail(w http.ResponseWriter, r *http.Request) {
+to := r.FormValue("to")
+subject := r.FormValue("subject")
+message := []byte(
+"To: " + to + "\r\n" +
+"Subject: " + subject + "\r\n\r\n"
+)
+smtp.SendMail("localhost", nil, "from", []string{to}, message)
+}"#;
+        assert_eq!(go_email_header_sink_lines(email, "go"), [5, 6].into());
+        let files = r#"func RenderTemplate(w http.ResponseWriter, r *http.Request) {
+tmplStr := r.URL.Query().Get("template")
+tmpl, err := template.New("user").Parse(tmplStr)
+tmpl.Execute(w, nil)
+}"#;
+        assert_eq!(go_template_source_sink_lines(files, "go"), [3].into());
+        let network = r#"func Fetch(w http.ResponseWriter, r *http.Request) {
+url := r.URL.Query().Get("url")
+client := newInsecureClient()
+resp, err := client.Get(url)
+}"#;
+        assert!(ssrf_sink_lines(network, "go").contains(&4));
+        let safe = r#"package main
+func handler(w http.ResponseWriter, r *http.Request) {
+ q := r.FormValue("q")
+ w.Header().Set("Content-Type", "text/html")
+ fmt.Fprintf(w, "<p>%s</p>", html.EscapeString(q))
+ xpath := "/users/user[@name='admin']"
+ xmlquery.Find(doc, xpath)
+ tmpl := template.New("fixed").Parse("Hello {{.Name}}")
+ tmpl.Execute(w, map[string]string{"Name": q})
+ subject := r.FormValue("subject")
+ body := r.FormValue("body")
+ msg := []byte("Subject: static\r\n\r\n" + body)
+ smtp.SendMail("mail.example.com:587", nil, "from@example.com", []string{subject}, msg)
+ client.Get("https://example.com/static")
+ }"#;
+        assert!(go_html_xss_lines(safe, "go").is_empty());
+        assert!(go_xpath_sink_lines(safe, "go").is_empty());
+        assert!(go_template_source_sink_lines(safe, "go").is_empty());
+        assert!(go_email_header_sink_lines(safe, "go").is_empty());
+        assert!(ssrf_sink_lines(safe, "go").is_empty());
     }
 
     #[test]
@@ -10329,6 +10417,137 @@ fn ssti_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<
     )
 }
 
+/// Go HTML writes require an HTML response and a request-derived interpolation.
+#[allow(clippy::items_after_test_module)]
+fn go_html_xss_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    if extension != "go" || !content.contains("text/html") {
+        return std::collections::HashSet::new();
+    }
+    let Ok(call) = Regex::new(r"\bfmt\.Fprintf\s*\(") else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(html) = Regex::new(r#"(?i)<(?:html|body|h[1-6]|div|p|span|script|a)\b"#) else {
+        return std::collections::HashSet::new();
+    };
+    let candidates = request_flow_sink_lines(
+        content,
+        FlowLanguage::Go,
+        &[FlowSink {
+            call,
+            arguments: go_format_argument,
+            line_requires: Some(html),
+        }],
+        contains_go_html_escape,
+        false,
+    );
+    candidates
+        .into_iter()
+        .filter(|line| {
+            let lines: Vec<&str> = content.lines().collect();
+            lines[..*line]
+                .iter()
+                .rev()
+                .take_while(|s| !s.trim_start().starts_with("func "))
+                .any(|s| s.contains("Content-Type") && s.contains("text/html"))
+        })
+        .collect()
+}
+
+#[allow(clippy::items_after_test_module)]
+fn go_format_argument(_name: &str) -> Vec<usize> {
+    vec![2, 3, 4, 5, 6]
+}
+
+#[allow(clippy::items_after_test_module)]
+fn contains_go_html_escape(text: &str) -> bool {
+    text.contains("html.EscapeString(") || text.contains("template.HTMLEscapeString(")
+}
+
+#[allow(clippy::items_after_test_module)]
+fn go_xpath_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    if extension != "go" {
+        return std::collections::HashSet::new();
+    }
+    let Ok(call) = Regex::new(r"\bxmlquery\.Find\s*\(") else {
+        return std::collections::HashSet::new();
+    };
+    request_flow_sink_lines(
+        content,
+        FlowLanguage::Go,
+        &[FlowSink {
+            call,
+            arguments: go_second_argument,
+            line_requires: None,
+        }],
+        |_| false,
+        false,
+    )
+}
+
+#[allow(clippy::items_after_test_module)]
+fn go_second_argument(_name: &str) -> Vec<usize> {
+    vec![1]
+}
+
+#[allow(clippy::items_after_test_module)]
+fn go_template_source_sink_lines(
+    content: &str,
+    extension: &str,
+) -> std::collections::HashSet<usize> {
+    if extension != "go" || !content.contains("template") {
+        return std::collections::HashSet::new();
+    }
+    let Ok(call) = Regex::new(r"\btemplate\.New\s*\([^)]*\)\s*\.\s*Parse\s*\(") else {
+        return std::collections::HashSet::new();
+    };
+    request_flow_sink_lines(
+        content,
+        FlowLanguage::Go,
+        &[FlowSink {
+            call,
+            arguments: first_argument,
+            line_requires: None,
+        }],
+        |_| false,
+        false,
+    )
+}
+
+/// Only the raw header construction counts: envelope recipients and body data do not.
+#[allow(clippy::items_after_test_module)]
+fn go_email_header_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    if extension != "go" || !content.contains("smtp.SendMail(") {
+        return std::collections::HashSet::new();
+    }
+    let Some(source) = flow_source_regex(FlowLanguage::Go) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(header) = Regex::new(
+        r#"^\s*"(?:To|Subject|Cc|Bcc|Reply-To|From):\s*"\s*\+\s*([A-Za-z_][A-Za-z0-9_]*)\s*\+"#,
+    ) else {
+        return std::collections::HashSet::new();
+    };
+    let mut tainted = std::collections::HashSet::new();
+    let mut found = std::collections::HashSet::new();
+    for (index, line) in content.lines().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        if line.trim_start().starts_with("func ") {
+            tainted.clear();
+        }
+        if let Some(name) = source.captures(line).and_then(|c| c.get(1)) {
+            tainted.insert(name.as_str().to_string());
+        }
+        if let Some(value) = header.captures(line).and_then(|c| c.get(1)) {
+            if tainted.contains(value.as_str()) {
+                found.insert(index + 1);
+            }
+        }
+    }
+    found
+}
+
 /// One flow pass over `range`. Returns the sink lines reached directly, the
 /// callee sink lines reached through same-file calls, and `(file index, sink
 /// line)` pairs reached through calls into imported functions.
@@ -14412,9 +14631,10 @@ fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
             r#"\bURI\s*\.\s*(create)\s*\("#,
             r#"\b[A-Za-z_]*[Rr]est[Tt]emplate\s*\.\s*(getForObject|getForEntity|postForObject|postForEntity|exchange)\s*\("#,
         ],
-        FlowLanguage::Go => {
-            &[r#"\bhttp\s*\.\s*(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\("#]
-        }
+        FlowLanguage::Go => &[
+            r#"\bhttp\s*\.\s*(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\("#,
+            r#"\b(?:client|httpClient)\s*\.\s*(Get|Head)\s*\("#,
+        ],
         FlowLanguage::Rust => &[
             r#"\b(?:reqwest|ureq)\s*::\s*(get|post|put|delete|head|patch)\s*\("#,
             r#"\b(?:client|reqwest)\s*\.\s*(get|post|put|delete|head|patch|request)\s*\("#,
