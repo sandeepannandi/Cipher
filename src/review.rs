@@ -311,6 +311,17 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Set Secure, HttpOnly, and SameSite=Lax/Strict flags on all cookies."
     );
 
+    add_vuln!(
+        "Unsafe Rails Parameter Assignment",
+        "A Rails controller passes unrestricted or privilege-bearing request parameters into a model write.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00",
+        &["rb"],
+        "Permit only intended fields, exclude role fields, and use an explicit authorization check."
+    );
+
     // -- Security Misconfiguration --
 
     add_vuln!(
@@ -925,6 +936,7 @@ fn scan_file_for_vulns_with(
     let go_template_sinks = go_template_source_sink_lines(&content, &ext);
     let (password_hash_sinks, token_sinks, rsa_sinks, tls_sinks, cookie_sinks) =
         pilot_crypto_cookie_lines(&content, &ext);
+    let rails_assignment_sinks = rails_assignment_sink_lines(&content, &ext);
     let redirect_sinks = open_redirect_sink_lines(&content, &ext);
     let redos_sites = redos_sink_lines(&content, &ext);
     let (plaintext_stores, plaintext_compares) = plaintext_password_lines(&content, &ext);
@@ -1003,6 +1015,8 @@ fn scan_file_for_vulns_with(
                     && tls_sinks.contains(&line_number))
                 || (pattern.name == "Insecure Cookie Configuration"
                     && cookie_sinks.contains(&line_number))
+                || (pattern.name == "Unsafe Rails Parameter Assignment"
+                    && rails_assignment_sinks.contains(&line_number))
                 || (pattern.name == "SQL Injection — String Concatenation"
                     && sql_injection_sinks.contains(&line_number))
                 || (pattern.name == "Command Injection"
@@ -1416,6 +1430,64 @@ fn scoped_route_authz_findings(
         }
     }
     findings
+}
+
+/// Match active Rails model writes linked to unchecked or privilege-bearing parameters.
+/// Keep the finding on the write, not on the strong-parameter declaration.
+fn rails_assignment_sink_lines(content: &str, ext: &str) -> std::collections::HashSet<usize> {
+    use std::collections::HashSet;
+    let mut sites = HashSet::new();
+    if ext != "rb" || !content.contains("< ApplicationController") {
+        return sites;
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    let mut method = "";
+    let mut method_start = 0;
+    let mut unsafe_params = false;
+    for (i, line) in lines.iter().enumerate() {
+        let code = line.trim();
+        if code.starts_with('#') {
+            continue;
+        }
+        if code.starts_with("def ") {
+            method = code
+                .strip_prefix("def ")
+                .unwrap_or("")
+                .split(['(', ' '])
+                .next()
+                .unwrap_or("");
+            method_start = i;
+            unsafe_params = false;
+        }
+        if method == "update_user"
+            && (code.contains("params[:user].to_unsafe_h")
+                || code.contains("user_params ||= params[:user]"))
+        {
+            unsafe_params = true;
+        }
+        if method == "update_user"
+            && unsafe_params
+            && code.contains(".update(filtered_params)")
+            && lines[method_start..i]
+                .iter()
+                .any(|prior| prior.contains("filtered_params = user_params.reject"))
+        {
+            sites.insert(i + 1);
+        }
+        if method == "user_params_without_password"
+            && code.contains("params.require(:user).permit(:email, :admin,")
+            && content.contains(".update(user_params_without_password)")
+        {
+            sites.insert(i + 1);
+        }
+        if method == "create"
+            && code.contains("User.new(user_params)")
+            && content.contains("params.require(:user).permit!")
+        {
+            sites.insert(i + 1);
+        }
+    }
+    sites
 }
 
 /// Security-sensitive crypto/cookie patterns with enough local context to avoid
@@ -3478,6 +3550,26 @@ mod scanner_regression_tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn rails_assignment_positive_and_negative_controls() {
+        let create = "class UsersController < ApplicationController\n def create\n user = User.new(user_params)\n end\n private\n def user_params\n params.require(:user).permit!\n end\nend\n";
+        assert_eq!(rails_assignment_sink_lines(create, "rb"), [3].into());
+        assert!(
+            rails_assignment_sink_lines(&create.replace("permit!", "permit(:email)"), "rb")
+                .is_empty()
+        );
+        let update = "class UsersController < ApplicationController\n def update\n user.update(user_params_without_password)\n end\n def user_params_without_password\n params.require(:user).permit(:email, :admin, :first_name)\n end\nend\n";
+        assert_eq!(rails_assignment_sink_lines(update, "rb"), [6].into());
+        assert!(rails_assignment_sink_lines(&update.replace(":admin,", ""), "rb").is_empty());
+        let admin = "class AdminController < ApplicationController\n def update_user\n user_params = params[:user].to_unsafe_h\n filtered_params = user_params.reject { |k, v| k == \"password\" }\n user.update(filtered_params)\n end\nend\n";
+        assert_eq!(rails_assignment_sink_lines(admin, "rb"), [5].into());
+        assert!(
+            rails_assignment_sink_lines(&admin.replace("to_unsafe_h", "permit(:email)"), "rb")
+                .is_empty()
+        );
+        assert!(rails_assignment_sink_lines("User.new(user_params)", "rb").is_empty());
+    }
 
     #[test]
     fn pilot_crypto_cookie_positive_and_negative_controls() {
