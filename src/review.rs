@@ -322,6 +322,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Permit only intended fields, exclude role fields, and use an explicit authorization check."
     );
 
+    add_vuln!(
+        "Conditional Admin Gate Bypass",
+        "An administrator-only Rails action skips its admin check for a request-controlled route parameter.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00", &["rb"],
+        "Apply the administrator check unconditionally to privileged actions; do not let route parameters decide whether the check runs."
+    );
+
     // -- Security Misconfiguration --
 
     add_vuln!(
@@ -1836,6 +1844,73 @@ fn scoped_rails_login_enumeration(root: &Path, patterns: &[VulnPattern]) -> Vec<
     vec![pattern_finding(pattern, &model, index + 1, unknown)]
 }
 
+/// Only report a conditional Rails admin gate when the predicate demonstrably
+/// switches off the gate for a client-selected route id. The privileged route,
+/// inherited login filter, and actual admin check must all be present.
+fn scoped_rails_admin_gate_bypass(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let controller = root.join("app/controllers/admin_controller.rb");
+    let base = root.join("app/controllers/application_controller.rb");
+    let routes = root.join("config/routes.rb");
+    let (Ok(text), Ok(base), Ok(routes)) = (
+        std::fs::read_to_string(&controller),
+        std::fs::read_to_string(base),
+        std::fs::read_to_string(routes),
+    ) else {
+        return vec![];
+    };
+    fn active(source: &str) -> Vec<&str> {
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with('#'))
+            .collect()
+    }
+    let code = active(&text);
+    let base_code = active(&base);
+    let route_code = active(&routes);
+    if !code
+        .iter()
+        .any(|line| line.starts_with("class AdminController < ApplicationController"))
+        || !code.iter().any(|line| {
+            line.contains("before_action :administrative, if: :admin_param")
+                && line.contains("except: [:get_user]")
+        })
+        || !code.iter().any(|line| line.starts_with("def dashboard"))
+        || !route_code.iter().any(|line| line == &"resources :admin do")
+        || !route_code.iter().any(|line| line == &"get \"dashboard\"")
+        || !base_code
+            .iter()
+            .any(|line| line.contains("before_action :authenticated"))
+        || !base_code.iter().any(|line| line == &"def administrative")
+        || !base_code.iter().any(|line| line.contains("!is_admin?"))
+        || !base_code
+            .iter()
+            .any(|line| line.contains("redirect_to root_url"))
+    {
+        return vec![];
+    }
+    let Some((index, predicate)) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.trim() == "params[:admin_id] != \"1\"")
+    else {
+        return vec![];
+    };
+    let Some((_, previous)) = text.lines().enumerate().take(index).last() else {
+        return vec![];
+    };
+    if previous.trim() != "def admin_param" {
+        return vec![];
+    }
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Conditional Admin Gate Bypass")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &controller, index + 1, predicate)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -2663,6 +2738,7 @@ pub(crate) async fn collect_review_findings(
     ));
     report.extend(scoped_rails_csrf_findings(&canonical_path, &patterns));
     report.extend(scoped_rails_work_info_idor(&canonical_path, &patterns));
+    report.extend(scoped_rails_admin_gate_bypass(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -3846,6 +3922,57 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(detect().is_empty(), "no email disclosure");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rails_admin_gate_bypass_requires_route_filter_and_unguarded_predicate() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-rails-admin-gate-{nonce}"));
+        let files = [
+            ("app/controllers/admin_controller.rb", "class AdminController < ApplicationController\n  before_action :administrative, if: :admin_param, except: [:get_user]\n  def dashboard\n  end\n  def get_user\n  end\n  private\n  def admin_param\n    params[:admin_id] != \"1\"\n  end\nend\n"),
+            ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\n  before_action :authenticated, :has_info\n  def administrative\n    if !is_admin?\n      redirect_to root_url\n    end\n  end\nend\n"),
+            ("config/routes.rb", "resources :admin do\n  get \"dashboard\"\nend\n"),
+        ];
+        for (path, contents) in files {
+            let target = root.join(path);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(target, contents).unwrap();
+        }
+        let patterns = build_vuln_patterns();
+        let detect = || scoped_rails_admin_gate_bypass(&root, &patterns);
+        let found = detect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(9));
+        let admin = root.join("app/controllers/admin_controller.rb");
+        let original = fs::read_to_string(&admin).unwrap();
+        fs::write(&admin, original.replace("if: :admin_param, ", "")).unwrap();
+        assert!(detect().is_empty(), "unconditional admin gate");
+        fs::write(
+            &admin,
+            original.replace("params[:admin_id] != \"1\"", "params[:admin_id] == \"1\""),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "predicate does not bypass on id 1");
+        fs::write(
+            &admin,
+            original.replace(
+                "params[:admin_id] != \"1\"",
+                "# params[:admin_id] != \"1\"\n    true",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "commented predicate");
+        fs::write(&admin, original).unwrap();
+        fs::write(
+            root.join("config/routes.rb"),
+            "resources :users do\n  get \"dashboard\"\nend\n",
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "not an admin route");
         fs::remove_dir_all(root).unwrap();
     }
 
