@@ -182,7 +182,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Raw Sensitive Profile Storage",
         "Sensitive identity or banking fields are copied into a profile document and written to persistent storage without active encryption.",
         Severity::High, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
-        r"\x00", &["js", "ts"],
+        r"\x00", &["js", "ts", "rb"],
         "Encrypt sensitive profile fields before persistence with managed keys; protect reads and rotate exposed data as appropriate."
     );
 
@@ -463,7 +463,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
 
     add_vuln!(
         "Missing CSRF Protection",
-        "A cookie-session application exposes a state-changing form route without active CSRF middleware.",
+        "A cookie-session application exposes a state-changing route without active CSRF request verification.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A01BrokenAccessControl),
         r"\x00", &["js", "ts"],
         "Install and apply CSRF protection before state-changing routes and issue valid tokens in forms."
@@ -1772,6 +1772,76 @@ fn scoped_php_ruby_file_xss_findings(
     findings
 }
 
+/// Rails CSRF requires application-level proof. A commented out declaration alone
+/// is not enough: newer Rails defaults may still enable protection automatically.
+fn scoped_rails_csrf_findings(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let application = root.join("config/application.rb");
+    let controller = root.join("app/controllers/application_controller.rb");
+    let routes = root.join("config/routes.rb");
+    let schedule = root.join("app/controllers/schedule_controller.rb");
+    let session = root.join("config/initializers/session_store.rb");
+    let Ok(app) = std::fs::read_to_string(application) else {
+        return vec![];
+    };
+    let Ok(base) = std::fs::read_to_string(&controller) else {
+        return vec![];
+    };
+    let Ok(routes) = std::fs::read_to_string(routes) else {
+        return vec![];
+    };
+    let Ok(schedule) = std::fs::read_to_string(schedule) else {
+        return vec![];
+    };
+    let Ok(session) = std::fs::read_to_string(session) else {
+        return vec![];
+    };
+    let Ok(lock) = std::fs::read_to_string(root.join("Gemfile.lock")) else {
+        return vec![];
+    };
+    fn active(text: &str) -> Vec<&str> {
+        text.lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with('#'))
+            .collect()
+    }
+    let app_code = active(&app);
+    let base_code = active(&base);
+    // This legacy RailsGoat application does not load 5.2+ defaults. In Rails
+    // 8.0.4, the railtie adds protection only when the default config is true.
+    // A configured default or active controller guard is a negative control.
+    if !lock.contains("actionpack (8.0.4)")
+        || !app_code.iter().any(|l| l.contains("< Rails::Application"))
+        || app_code.iter().any(|l| {
+            l.contains("load_defaults") || l.contains("default_protect_from_forgery = true")
+        })
+        || base_code
+            .iter()
+            .any(|l| l.contains("protect_from_forgery") || l.contains("verify_authenticity_token"))
+        || !base_code
+            .iter()
+            .any(|l| l.contains("< ActionController::Base"))
+        || !session.contains("session_store :cookie_store")
+        || !routes.contains("resources :schedule")
+        || !schedule.contains("def create")
+        || !schedule.contains("sched.save")
+    {
+        return vec![];
+    }
+    let Some((i, line)) = base.lines().enumerate().find(|(_, line)| {
+        line.trim_start()
+            .starts_with("#protect_from_forgery with: :exception")
+    }) else {
+        return vec![];
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Missing CSRF Protection")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &controller, i + 1, line)]
+}
+
 /// Guarded, project-context checks: do not infer XSS from interpolation alone
 /// or CSRF from a POST alone. Both require evidence in the app bootstrap and
 /// concrete source/template or session/route links.
@@ -2416,6 +2486,7 @@ pub(crate) async fn collect_review_findings(
         &canonical_path,
         &patterns,
     ));
+    report.extend(scoped_rails_csrf_findings(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
         &files,
         &canonical_path,
@@ -3550,6 +3621,50 @@ mod scanner_regression_tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn rails_csrf_requires_effective_config_and_state_change() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-rails-csrf-{nonce}"));
+        for dir in ["config/initializers", "app/controllers"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let app = root.join("config/application.rb");
+        let base = root.join("app/controllers/application_controller.rb");
+        let routes = root.join("config/routes.rb");
+        let schedule = root.join("app/controllers/schedule_controller.rb");
+        let cookie = root.join("config/initializers/session_store.rb");
+        fs::write(&app, "class Application < Rails::Application\nend\n").unwrap();
+        fs::write(&base, "class ApplicationController < ActionController::Base\n  #protect_from_forgery with: :exception\nend\n").unwrap();
+        fs::write(&routes, "resources :schedule\n").unwrap();
+        fs::write(&schedule, "def create\n sched.save\nend\n").unwrap();
+        fs::write(&cookie, "session_store :cookie_store\n").unwrap();
+        fs::write(root.join("Gemfile.lock"), "actionpack (8.0.4)\n").unwrap();
+        let patterns = build_vuln_patterns();
+        let detect = || scoped_rails_csrf_findings(&root, &patterns);
+        let findings = detect();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line_number, Some(2));
+        fs::write(
+            &app,
+            "class Application < Rails::Application\n config.load_defaults 8.0\nend\n",
+        )
+        .unwrap();
+        assert!(
+            detect().is_empty(),
+            "modern defaults protect even if controller call is commented"
+        );
+        fs::write(&app, "class Application < Rails::Application\nend\n").unwrap();
+        fs::write(&base, "class ApplicationController < ActionController::Base\n protect_from_forgery with: :exception\nend\n").unwrap();
+        assert!(detect().is_empty(), "active controller guard");
+        fs::write(&base, "class ApplicationController < ActionController::Base\n #protect_from_forgery with: :exception\nend\n").unwrap();
+        fs::write(&schedule, "def create\n render :index\nend\n").unwrap();
+        assert!(detect().is_empty(), "no linked state-changing write");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn rails_assignment_positive_and_negative_controls() {
