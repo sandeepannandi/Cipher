@@ -498,6 +498,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Unescaped Django Output (XSS)",
+        "A template value is rendered through the safe filter, disabling Django's autoescaping for user-influenced data.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A03Injection),
+        r"\x00", &["html"],
+        "Let Django autoescape template values and remove the safe filter from user-influenced data."
+    );
+
+    add_vuln!(
         "XPath Injection",
         "Request data is concatenated into an XPath expression passed to an XML query engine.",
         Severity::High, Confidence::High, Some(OwaspCategory::A03Injection),
@@ -2582,6 +2590,65 @@ fn scoped_rails_work_info_idor(root: &Path, patterns: &[VulnPattern]) -> Vec<Fin
 
 /// Rails CSRF requires application-level proof. A commented out declaration alone
 /// is not enough: newer Rails defaults may still enable protection automatically.
+/// Django templates autoescape by default; the `safe` filter disables
+/// escaping for the rendered value, so a user-influenced value marked safe is
+/// rendered as raw HTML. Gate on Django project evidence (`manage.py` naming
+/// the settings module) and scan HTML templates for `{{ value|safe }}`.
+/// HTML comments and Django `{# ... #}` comments are not findings, and
+/// HTML-escaped documentation (`&#123;&#123;`) never forms a literal tag.
+#[allow(clippy::items_after_test_module)]
+fn scoped_django_safe_filter_findings(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let Ok(manage) = std::fs::read_to_string(root.join("manage.py")) else {
+        return findings;
+    };
+    if !manage.contains("DJANGO_SETTINGS_MODULE") {
+        return findings;
+    }
+    let Ok(safe_output) = Regex::new(r"\{\{[^{}]*\|\s*safe\s*\}\}") else {
+        return findings;
+    };
+    let walker = WalkBuilder::new(root)
+        .git_ignore(true)
+        .git_global(true)
+        .hidden(false)
+        .max_depth(Some(scan::MAX_WALK_DEPTH))
+        .build();
+    let mut scanned = 0usize;
+    for result in walker {
+        if scanned >= scan::MAX_SCAN_FILES {
+            break;
+        }
+        let Ok(entry) = result else {
+            continue;
+        };
+        let path = entry.path();
+        if !path.is_file() || file_extension(path) != "html" || scan::should_exclude_in(path, root)
+        {
+            continue;
+        }
+        scanned += 1;
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (index, line) in content.lines().enumerate() {
+            let trim = line.trim_start();
+            if trim.starts_with("<!--") || trim.starts_with("{#") {
+                continue;
+            }
+            if safe_output.is_match(line) {
+                if let Some(pattern) = patterns
+                    .iter()
+                    .find(|p| p.name == "Unescaped Django Output (XSS)")
+                {
+                    findings.push(pattern_finding(pattern, path, index + 1, line));
+                }
+            }
+        }
+    }
+    findings
+}
+
 fn scoped_rails_csrf_findings(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
     let application = root.join("config/application.rb");
     let controller = root.join("app/controllers/application_controller.rb");
@@ -3291,6 +3358,10 @@ pub(crate) async fn collect_review_findings(
     ));
     report.extend(scoped_template_xss_csrf_findings(
         &files,
+        &canonical_path,
+        &patterns,
+    ));
+    report.extend(scoped_django_safe_filter_findings(
         &canonical_path,
         &patterns,
     ));
@@ -5168,6 +5239,35 @@ end"#;
                 .2
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn django_safe_filter_project_links_at_exact_lines() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-django-safe-{nonce}"));
+        let write = |relative: &str, content: &str| {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, content).unwrap();
+        };
+        write(
+            "manage.py",
+            "import os\nos.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"taskManager.settings\")\n",
+        );
+        write(
+            "taskManager/templates/taskManager/base_backend.html",
+            "<span class=\"username\">{{ user.username|safe }}</span>\n<!-- {{ old|safe }} -->\n<p>{{ user.username }}</p>\n&lt;span&gt;&#123;&#123; user.username|safe &#125;&#125;&lt;/span&gt;\n",
+        );
+        let patterns = build_vuln_patterns();
+        let hits = scoped_django_safe_filter_findings(&root, &patterns);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].title, "Unescaped Django Output (XSS)");
+        assert_eq!(hits[0].line_number, Some(1));
+        fs::remove_file(root.join("manage.py")).unwrap();
+        assert!(scoped_django_safe_filter_findings(&root, &patterns).is_empty());
     }
 
     #[tokio::test]
