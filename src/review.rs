@@ -141,9 +141,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Open Redirect",
         "A redirect target taken from request input can send users to an attacker-controlled site.",
         Severity::High, Confidence::High, Some(OwaspCategory::A01BrokenAccessControl),
-        // Require request-to-target flow, not every Express redirect.
+        // Require request-to-target flow, not every Express or Go redirect.
         r"\x00",
-        &["js", "ts"],
+        &["js", "ts", "go"],
         "Allow only known local redirect destinations, or validate the destination against an allowlist."
     );
 
@@ -4247,6 +4247,24 @@ mod scanner_regression_tests {
         .unwrap();
         assert!(detect().is_empty(), "allowlisted target");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn go_open_redirect_requires_request_controlled_target() {
+        let data = r#"func Redirect(w http.ResponseWriter, r *http.Request) {
+target := r.URL.Query().Get("to")
+http.Redirect(w, r, target, http.StatusFound)
+}"#;
+        assert_eq!(open_redirect_sink_lines(data, "go"), [3].into());
+        let constant = r#"func Home(w http.ResponseWriter, r *http.Request) {
+http.Redirect(w, r, "/dashboard", http.StatusFound)
+}"#;
+        assert!(open_redirect_sink_lines(constant, "go").is_empty());
+        let other_arg = r#"func Forward(w http.ResponseWriter, r *http.Request) {
+http.Redirect(w, r, "/dashboard", http.StatusFound)
+proxy(r.URL.Query().Get("to"))
+}"#;
+        assert!(open_redirect_sink_lines(other_arg, "go").is_empty());
     }
 
     #[test]
@@ -15656,6 +15674,12 @@ fn first_argument(_name: &str) -> Vec<usize> {
     vec![0]
 }
 
+/// `http.Redirect(w, r, target, status)`: only the destination argument.
+#[allow(clippy::items_after_test_module)]
+fn redirect_target_argument(_name: &str) -> Vec<usize> {
+    vec![2]
+}
+
 #[allow(clippy::items_after_test_module)]
 fn go_sql_query_argument(name: &str) -> Vec<usize> {
     if name.ends_with("Context") {
@@ -15950,6 +15974,22 @@ fn outbound_url_argument(name: &str) -> Vec<usize> {
 /// Express accepts either `redirect(path)` or `redirect(status, path)`.
 #[allow(clippy::items_after_test_module)]
 fn open_redirect_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    if extension == "go" {
+        let Ok(call) = Regex::new(r"\bhttp\s*\.\s*(Redirect)\s*\(") else {
+            return std::collections::HashSet::new();
+        };
+        return request_flow_sink_lines(
+            content,
+            FlowLanguage::Go,
+            &[FlowSink {
+                call,
+                arguments: redirect_target_argument,
+                line_requires: None,
+            }],
+            |_| false,
+            false,
+        );
+    }
     if !matches!(extension, "js" | "ts") {
         return std::collections::HashSet::new();
     }
