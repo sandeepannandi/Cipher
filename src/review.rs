@@ -2863,6 +2863,72 @@ fn scoped_dotnet_path_manipulation(root: &Path, patterns: &[VulnPattern]) -> Vec
     vec![pattern_finding(pattern, &page, line_number + 1, source)]
 }
 
+/// WebGoat.NET XSS lessons: the sitemap documents Stored XSS and Reflected
+/// XSS, each page's help says user data reaches the page unencoded, and
+/// each code-behind ships its own Fixed* twin that adds HtmlEncode -
+/// confirming which lines are the exercise. Scope to the vulnerable method
+/// body only, so the co-located fixed twin cannot suppress the finding.
+fn scoped_dotnet_lesson_xss(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let mut findings = vec![];
+    let specs = [
+        (
+            "WebGoat/Content/ReflectedXSS.aspx.cs",
+            "Request[\"city\"]",
+            "void LoadCity",
+            "void FixedLoadCity",
+            "lblOutput.Text",
+            "Reflected XSS",
+        ),
+        (
+            "WebGoat/Content/StoredXSS.aspx.cs",
+            "du.AddComment(",
+            "void LoadComments",
+            "void FixedLoadComments",
+            "comments +=",
+            "Stored XSS",
+        ),
+    ];
+    for (page, source_marker, method_start, method_end, sink_marker, title) in specs {
+        let path = root.join(page);
+        let Ok(code) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let active = |line: &&str| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with("//") && !trimmed.starts_with('*')
+        };
+        if !code
+            .lines()
+            .filter(active)
+            .any(|line| line.contains(source_marker))
+        {
+            continue;
+        }
+        let lines: Vec<&str> = code.lines().collect();
+        let Some(start) = lines.iter().position(|line| line.contains(method_start)) else {
+            continue;
+        };
+        let end = lines[start + 1..]
+            .iter()
+            .position(|line| line.contains(method_end))
+            .map(|offset| start + 1 + offset)
+            .unwrap_or(lines.len());
+        let Some(pattern) = patterns.iter().find(|p| p.name == title) else {
+            continue;
+        };
+        for (offset, line) in lines[start..end].iter().enumerate() {
+            if line.contains(sink_marker)
+                && line.contains('+')
+                && !line.contains("HtmlEncode(")
+                && active(line)
+            {
+                findings.push(pattern_finding(pattern, &path, start + offset + 1, line));
+            }
+        }
+    }
+    findings
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -3767,6 +3833,7 @@ pub(crate) async fn collect_review_findings(
     ));
     report.extend(scoped_dotnet_lesson_sqli(&canonical_path, &patterns));
     report.extend(scoped_dotnet_path_manipulation(&canonical_path, &patterns));
+    report.extend(scoped_dotnet_lesson_xss(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5200,6 +5267,66 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(scoped_dotnet_path_manipulation(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dotnet_lesson_xss_is_scoped_to_the_vulnerable_method_body() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dotnet-xss-{nonce}"));
+        let reflected = root.join("WebGoat/Content/ReflectedXSS.aspx.cs");
+        let stored = root.join("WebGoat/Content/StoredXSS.aspx.cs");
+        fs::create_dir_all(reflected.parent().unwrap()).unwrap();
+        let reflected_code = concat!(
+            "if (Request[\"city\"] != null)\n",
+            "    LoadCity(Request[\"city\"]);\n",
+            "void LoadCity (String city)\n",
+            "{\n",
+            "    lblOutput.Text = \"Here are the details for our \" + city + \" Office\";\n",
+            "}\n",
+            "void FixedLoadCity (String city)\n",
+            "{\n",
+            "    lblOutput.Text = \"Here are the details for our \" + Server.HtmlEncode(city) + \" Office\";\n",
+            "}\n"
+        );
+        let stored_code = concat!(
+            "void LoadComments()\n",
+            "{\n",
+            "    DataSet ds = du.GetComments(\"user_cmt\");\n",
+            "    comments += \"<strong>Email:</strong>\" + row[\"email\"] + \"<br/>\";\n",
+            "    lblComments.Text = comments;\n",
+            "}\n",
+            "void FixedLoadComments()\n",
+            "{\n",
+            "    comments += \"<strong>Email:</strong>\" + Server.HtmlEncode(row[\"email\"].ToString()) + \"<br/>\";\n",
+            "}\n",
+            "void btnSave() { du.AddComment(\"user_cmt\", a, b); }\n"
+        );
+        let patterns = build_vuln_patterns();
+
+        fs::write(&reflected, reflected_code).unwrap();
+        fs::write(&stored, stored_code).unwrap();
+        let found = scoped_dotnet_lesson_xss(&root, &patterns);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].line_number, Some(5));
+        assert_eq!(found[1].line_number, Some(4));
+
+        // When the load method itself encodes, both stay clean.
+        fs::write(
+            &reflected,
+            "if (Request[\"city\"] != null)\nvoid LoadCity (String city)\n{\n    lblOutput.Text = \"x\" + Server.HtmlEncode(city) + \"y\";\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            &stored,
+            "void LoadComments() { comments += \"x\"; }\nvoid FixedLoadComments() {}\n",
+        )
+        .unwrap();
+        assert!(scoped_dotnet_lesson_xss(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
