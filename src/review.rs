@@ -835,6 +835,34 @@ fn is_embedded_sample_credential(line: &str, ext: &str) -> bool {
         && line.contains(" password=\"")
 }
 
+/// DEBUG = True inside a development/test configuration class is not a
+/// production debug flag. Suppress only when the same file also sets
+/// DEBUG = False in another class, which shows the file separates
+/// production from non-production configuration.
+fn python_debug_in_nonprod_config(content: &str, line_number: usize) -> bool {
+    let lines: Vec<&str> = content.lines().collect();
+    let Some(index) = line_number.checked_sub(1).filter(|&i| i < lines.len()) else {
+        return false;
+    };
+    let mut nonprod_class = false;
+    for line in lines[..=index].iter().rev() {
+        if let Some(rest) = line.strip_prefix("class ") {
+            let name = rest
+                .split(['(', ':'])
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            nonprod_class = name.contains("dev") || name.contains("test");
+            break;
+        }
+        if !line.starts_with([' ', '\t']) && !line.trim().is_empty() {
+            break;
+        }
+    }
+    nonprod_class && lines.iter().any(|line| line.trim() == "DEBUG = False")
+}
+
 /// An import names an algorithm but does not use it. Report the cipher
 /// construction instead, so a single DES site has one location.
 fn is_crypto_import_only(line: &str, ext: &str) -> bool {
@@ -1140,6 +1168,16 @@ fn scan_file_for_vulns_with(
             // a development-tool credential in non-production environment
             // config, not an application credential.
             if pattern.name == "Hardcoded Credentials" && trimmed.contains("zapApiKey") {
+                continue;
+            }
+
+            // DEBUG = True scoped to a development/test config class in a
+            // file that also defines DEBUG = False for production is not a
+            // production debug flag.
+            if pattern.name == "Debug Mode Enabled"
+                && ext == "py"
+                && python_debug_in_nonprod_config(&content, line_number)
+            {
                 continue;
             }
 
