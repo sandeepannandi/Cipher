@@ -488,6 +488,13 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Map user choices to fixed local files; never include a request-derived path."
     );
     add_vuln!(
+        "Single-Pass Path Traversal Filter",
+        "A path traversal strip runs once over a request-selected include target, so doubled sequences such as ..././ collapse back into a traversal payload after filtering.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00", &["php"],
+        "Apply the filter until the value stops changing, or replace filtering with a fixed allowlist of includable files."
+    );
+    add_vuln!(
         "Unrestricted File Upload",
         "A user-named upload is moved into a web-accessible directory without server-side content validation.",
         Severity::High, Confidence::High, Some(OwaspCategory::A04InsecureDesign),
@@ -2684,6 +2691,52 @@ fn scoped_php_level_conditional_authz(root: &Path, patterns: &[VulnPattern]) -> 
     findings
 }
 
+/// DVWA file inclusion, medium level: the module help documents that the
+/// traversal strip cycles through the pattern matching only once, so a
+/// doubled sequence survives the filter and still reaches the include sink
+/// in index.php. Require the request-selected page, a single-pass
+/// str_replace of the traversal sequences, and no allowlist (in_array or
+/// fnmatch) in the same file; the include sink wiring must also be present.
+fn scoped_php_single_pass_include_filter(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let medium = root.join("vulnerabilities/fi/source/medium.php");
+    let index = root.join("vulnerabilities/fi/index.php");
+    let Ok(code) = std::fs::read_to_string(&medium) else {
+        return vec![];
+    };
+    let Ok(index_code) = std::fs::read_to_string(&index) else {
+        return vec![];
+    };
+    let sink_wired = index_code.contains("vulnerabilities/fi/source/{$vulnerabilityFile}")
+        && index_code.contains("include( $file )");
+    let active = |line: &&str| {
+        let trimmed = line.trim_start();
+        !trimmed.starts_with("//") && !trimmed.starts_with('#') && !trimmed.starts_with('*')
+    };
+    let request_selected = code
+        .lines()
+        .filter(active)
+        .any(|line| line.contains("$file = $_GET["));
+    let allowlisted = code
+        .lines()
+        .filter(active)
+        .any(|line| line.contains("in_array($file,") || line.contains("fnmatch("));
+    if !sink_wired || !request_selected || allowlisted {
+        return vec![];
+    }
+    let Some((line_number, source)) = code.lines().enumerate().find(|(_, line)| {
+        line.contains("str_replace(") && line.contains("\"../\"") && active(line)
+    }) else {
+        return vec![];
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Single-Pass Path Traversal Filter")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &medium, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -3578,6 +3631,10 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_rails_ssn_client_mask(&canonical_path, &patterns));
     report.extend(scoped_php_password_csrf(&canonical_path, &patterns));
     report.extend(scoped_php_open_redirect(&canonical_path, &patterns));
+    report.extend(scoped_php_single_pass_include_filter(
+        &canonical_path,
+        &patterns,
+    ));
     report.extend(scoped_php_level_conditional_authz(
         &canonical_path,
         &patterns,
@@ -4881,6 +4938,61 @@ mod scanner_regression_tests {
         .unwrap();
         let found = detect();
         assert_eq!(found.len(), 1, "no user update on the changer");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn php_single_pass_include_filter_requires_single_pass_strip_and_sink() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-php-fi-filter-{nonce}"));
+        let medium = root.join("vulnerabilities/fi/source/medium.php");
+        let index = root.join("vulnerabilities/fi/index.php");
+        fs::create_dir_all(medium.parent().unwrap()).unwrap();
+        let medium_code = concat!(
+            "<?php\n",
+            "$file = $_GET[ 'page' ];\n",
+            "$file = str_replace( array( \"http://\", \"https://\" ), \"\", $file );\n",
+            "$file = str_replace( array( \"../\", \"..\\\\\" ), \"\", $file );\n",
+            "?>\n"
+        );
+        let index_code = concat!(
+            "<?php\n",
+            "require_once DVWA_WEB_PAGE_TO_ROOT . \"vulnerabilities/fi/source/{$vulnerabilityFile}\";\n",
+            "if( isset( $file ) )\n    include( $file );\n",
+            "?>\n"
+        );
+        fs::write(&index, index_code).unwrap();
+        let patterns = build_vuln_patterns();
+
+        fs::write(&medium, medium_code).unwrap();
+        let found = scoped_php_single_pass_include_filter(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(4));
+
+        // An allowlist in place of the strip stays clean.
+        fs::write(
+            &medium,
+            "<?php\n$file = $_GET[ 'page' ];\nif( !in_array($file, $configFileNames) ) { exit; }\n",
+        )
+        .unwrap();
+        assert!(scoped_php_single_pass_include_filter(&root, &patterns).is_empty());
+
+        // An fnmatch prefix gate (high level) stays clean.
+        fs::write(
+            &medium,
+            "<?php\n$file = $_GET[ 'page' ];\nif( !fnmatch( \"file*\", $file ) && $file != \"include.php\" ) { exit; }\n",
+        )
+        .unwrap();
+        assert!(scoped_php_single_pass_include_filter(&root, &patterns).is_empty());
+
+        // Without the include sink wiring there is no reachable sink.
+        fs::write(&medium, medium_code).unwrap();
+        fs::write(&index, "<?php\nprint \"ok\";\n").unwrap();
+        assert!(scoped_php_single_pass_include_filter(&root, &patterns).is_empty());
+
         fs::remove_dir_all(root).unwrap();
     }
 
