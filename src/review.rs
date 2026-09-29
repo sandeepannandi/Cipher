@@ -1007,6 +1007,10 @@ fn ruby_php_injection_lines(
         let request_expr = Regex::new(r"\$_(?:GET|POST|REQUEST)\s*\[[^\]]+\]")
             .expect("PHP request expression regex");
         let mut tainted = HashSet::<String>::new();
+        // Escaping neutralizes a value only inside a quoted SQL string
+        // context; track escaped variables separately so an unquoted
+        // (numeric-context) interpolation still reports.
+        let mut escaped_only = HashSet::<String>::new();
         let has_query_sink = lines
             .iter()
             .any(|line| line.contains("mysqli_query(") || line.contains("->query("));
@@ -1025,6 +1029,7 @@ fn ruby_php_injection_lines(
                 if !guarded {
                     tainted.insert(capture[1].to_string());
                 }
+                escaped_only.remove(&capture[1]);
                 continue;
             }
             if let Some(capture) = assign.captures(text) {
@@ -1045,21 +1050,39 @@ fn ruby_php_injection_lines(
                     || text.contains("trim(")
                     || text.contains(&format!("({variable}"))
                     || text.contains(&format!(" {variable} "));
-                if numeric || validated_octets || escaped || digested || !pass_through {
+                if escaped && tainted.remove(&variable) {
+                    // The value came from a request and passed only through
+                    // the escape; it is neutralized solely in quoted context.
+                    escaped_only.insert(variable);
+                } else if numeric || validated_octets || escaped || digested || !pass_through {
                     tainted.remove(&variable);
+                    escaped_only.remove(&variable);
                 }
             }
-            if !tainted.iter().any(|variable| text.contains(variable)) {
+            if !tainted.iter().any(|variable| text.contains(variable))
+                && !escaped_only.iter().any(|variable| text.contains(variable))
+            {
                 continue;
             }
+            // An escaped variable inside single quotes stays neutralized; the
+            // same variable interpolated without quotes (a numeric context)
+            // bypasses the escape, which only encodes string delimiters.
+            let unquoted_escape = interpolate.find_iter(text).any(|hit| {
+                escaped_only.contains(hit.as_str())
+                    && text[..hit.start()]
+                        .chars()
+                        .next_back()
+                        .is_none_or(|prev| prev != '\'')
+            });
             if has_query_sink
                 && text.contains("$query")
                 && query.is_match(text)
                 && text.contains('"')
                 && !text.contains("->prepare(")
-                && interpolate
+                && (interpolate
                     .find_iter(text)
                     .any(|hit| tainted.contains(hit.as_str()))
+                    || unquoted_escape)
             {
                 sql.insert(index + 1);
             }
@@ -5694,6 +5717,31 @@ $cmd = shell_exec('ping ' . $target);
         let (sql, command) = ruby_php_injection_lines(safe, "php");
         assert!(sql.is_empty());
         assert!(command.is_empty());
+        let numeric_context = r#"$id = $_POST['id'];
+$id = mysqli_real_escape_string($db, $id);
+$query = "SELECT name FROM users WHERE user_id = $id";
+mysqli_query($db, $query);"#;
+        let (sql, _) = ruby_php_injection_lines(numeric_context, "php");
+        assert_eq!(sql, [3].into(), "escaped value in unquoted numeric context");
+        let quoted_context = r#"$id = $_POST['id'];
+$id = mysqli_real_escape_string($db, $id);
+$query = "SELECT name FROM users WHERE user_id = '$id'";
+mysqli_query($db, $query);"#;
+        let (sql, _) = ruby_php_injection_lines(quoted_context, "php");
+        assert!(
+            sql.is_empty(),
+            "escaped value stays neutralized inside quotes"
+        );
+        let escaped_then_numeric = r#"$id = $_POST['id'];
+$id = mysqli_real_escape_string($db, $id);
+$id = intval($id);
+$query = "SELECT name FROM users WHERE user_id = $id";
+mysqli_query($db, $query);"#;
+        let (sql, _) = ruby_php_injection_lines(escaped_then_numeric, "php");
+        assert!(
+            sql.is_empty(),
+            "numeric cast after escaping closes the context"
+        );
     }
 
     #[tokio::test]
