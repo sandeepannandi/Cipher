@@ -397,6 +397,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Require a validated anti-CSRF token and a state-changing POST request for password changes."
     );
 
+    add_vuln!(
+        "Level-Conditional Authorization Check",
+        "A user-management endpoint reads or writes account data while its administrator role check runs only at specific security levels, leaving the remaining levels with no authorisation check.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00", &["php"],
+        "Enforce the administrator role check unconditionally before reading or modifying user accounts."
+    );
+
     // -- Security Misconfiguration --
 
     add_vuln!(
@@ -2597,6 +2605,62 @@ fn scoped_php_open_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Findin
     vec![pattern_finding(pattern, &handler, line_number + 1, source)]
 }
 
+/// DVWA authorisation bypass: the module's JSON endpoints gate their admin
+/// role check behind a security-level equality, so at the lower levels no
+/// authorisation check runs before the sensitive user-store operation.
+/// Require the level-conditional gate and the operation; an unconditional
+/// role check anywhere in the file, or a missing operation, suppresses the
+/// finding.
+fn scoped_php_level_conditional_authz(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let specs = [
+        (
+            "vulnerabilities/authbypass/get_user_data.php",
+            "SELECT user_id, first_name, last_name FROM users",
+        ),
+        (
+            "vulnerabilities/authbypass/change_user_details.php",
+            "UPDATE users SET first_name = '",
+        ),
+    ];
+    let mut findings = vec![];
+    for (relative, query_marker) in specs {
+        let path = root.join(relative);
+        let Ok(code) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let active = |line: &&str| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with("//") && !trimmed.starts_with('#') && !trimmed.starts_with('*')
+        };
+        let gated_role_check = code.lines().filter(active).any(|line| {
+            line.contains("dvwaSecurityLevelGet() ==")
+                && line.contains("dvwaCurrentUser() != \"admin\"")
+        });
+        let unconditional_role_check = code.lines().filter(active).any(|line| {
+            line.contains("dvwaCurrentUser() != \"admin\"")
+                && !line.contains("dvwaSecurityLevelGet()")
+        });
+        if !gated_role_check || unconditional_role_check {
+            continue;
+        }
+        let Some((line_number, source)) = code
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains(query_marker) && active(line))
+        else {
+            continue;
+        };
+        let Some(pattern) = patterns
+            .iter()
+            .find(|p| p.name == "Level-Conditional Authorization Check")
+        else {
+            continue;
+        };
+        findings.push(pattern_finding(pattern, &path, line_number + 1, source));
+    }
+    findings
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -3491,6 +3555,10 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_rails_ssn_client_mask(&canonical_path, &patterns));
     report.extend(scoped_php_password_csrf(&canonical_path, &patterns));
     report.extend(scoped_php_open_redirect(&canonical_path, &patterns));
+    report.extend(scoped_php_level_conditional_authz(
+        &canonical_path,
+        &patterns,
+    ));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -4731,6 +4799,65 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(detect().is_empty(), "strict cookie");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn php_level_conditional_authz_requires_gated_role_check_and_operation() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-php-level-authz-{nonce}"));
+        let getter = root.join("vulnerabilities/authbypass/get_user_data.php");
+        let changer = root.join("vulnerabilities/authbypass/change_user_details.php");
+        for path in [&getter, &changer] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        let getter_code = concat!(
+            "<?php\n\n\n\n\n\n/*\nOn high and impossible, only the admin is allowed to retrieve the data.\n*/\n",
+            "if ((dvwaSecurityLevelGet() == \"high\" || dvwaSecurityLevelGet() == \"impossible\") && dvwaCurrentUser() != \"admin\") {\n",
+            "\tprint json_encode (array (\"result\" => \"fail\", \"error\" => \"Access denied\"));\n\texit;\n}\n\n",
+            "$query  = \"SELECT user_id, first_name, last_name FROM users\";\n",
+            "$result = mysqli_query($GLOBALS[\"___mysqli_ston\"],  $query );\n"
+        );
+        let changer_code = concat!(
+            "<?php\n\n\n\n\n\n/*\nOn impossible only the admin is allowed to retrieve the data.\n*/\n\n",
+            "if (dvwaSecurityLevelGet() == \"impossible\" && dvwaCurrentUser() != \"admin\") {\n",
+            "\tprint json_encode (array (\"result\" => \"fail\", \"error\" => \"Access denied\"));\n\texit;\n}\n\n",
+            "$query = \"UPDATE users SET first_name = '\" . $data->first_name . \"' where user_id = \" . $data->id . \"\";\n"
+        );
+        fs::write(&getter, getter_code).unwrap();
+        fs::write(&changer, changer_code).unwrap();
+        let patterns = build_vuln_patterns();
+        let detect = || scoped_php_level_conditional_authz(&root, &patterns);
+        let found = detect();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].line_number, Some(15));
+        assert_eq!(found[1].line_number, Some(16));
+        // An unconditional admin gate covers every level: no finding.
+        fs::write(
+            &getter,
+            getter_code.replace(
+                "if ((dvwaSecurityLevelGet() == \"high\" || dvwaSecurityLevelGet() == \"impossible\") && dvwaCurrentUser() != \"admin\") {",
+                "if (dvwaCurrentUser() != \"admin\") {",
+            ),
+        )
+        .unwrap();
+        let found = detect();
+        assert_eq!(found.len(), 1, "unconditional gate on the getter");
+        // No sensitive operation: the gated check alone is not reported.
+        fs::write(&getter, getter_code).unwrap();
+        fs::write(
+            &changer,
+            changer_code.replace(
+                "$query = \"UPDATE users SET first_name = '\" . $data->first_name . \"' where user_id = \" . $data->id . \"\";",
+                "$query = \"SELECT 1\";",
+            ),
+        )
+        .unwrap();
+        let found = detect();
+        assert_eq!(found.len(), 1, "no user update on the changer");
         fs::remove_dir_all(root).unwrap();
     }
 
