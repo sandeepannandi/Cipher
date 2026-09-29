@@ -206,6 +206,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Predictable Random Generator",
+        "A deterministic hand-rolled recurrence generates 'random' values that are fully predictable from the seed.",
+        Severity::Medium, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
+        r"\x00", &["cs"],
+        "Use a cryptographically secure generator (RandomNumberGenerator) for security-relevant values."
+    );
+
+    add_vuln!(
         "Fast Password Hash (MD5)",
         "A password is stored with fast, unsalted MD5 instead of a password KDF.",
         Severity::High,
@@ -3059,6 +3067,37 @@ fn scoped_dotnet_weak_digest(root: &Path, patterns: &[VulnPattern]) -> Vec<Findi
     vec![pattern_finding(pattern, &digest, line_number + 1, source)]
 }
 
+/// WebGoat.NET Weak Random Number Generators lesson: the sitemap documents
+/// the lesson and its page challenges the user to "predict the next number
+/// in the sequence" - the generator is a deterministic recurrence over a
+/// fixed default seed, with Peek() exposing the next value. Require the
+/// lesson page's use of WeakRandom, then flag the recurrence line.
+fn scoped_dotnet_weak_random(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let page = root.join("WebGoat/Content/Random.aspx.cs");
+    let Ok(page_code) = std::fs::read_to_string(&page) else {
+        return vec![];
+    };
+    if !page_code.contains("WeakRandom") {
+        return vec![];
+    }
+    let random = root.join("WebGoat/App_Code/WeakRandom.cs");
+    let Ok(code) = std::fs::read_to_string(&random) else {
+        return vec![];
+    };
+    let Some((line_number, source)) = code.lines().enumerate().find(|(_, line)| {
+        line.contains("_seed = _seed * _seed + _seed;") && !line.trim_start().starts_with("//")
+    }) else {
+        return vec![];
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Predictable Random Generator")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &random, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -3970,6 +4009,7 @@ pub(crate) async fn collect_review_findings(
     ));
     report.extend(scoped_dotnet_debug_disclosure(&canonical_path, &patterns));
     report.extend(scoped_dotnet_weak_digest(&canonical_path, &patterns));
+    report.extend(scoped_dotnet_weak_random(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5595,6 +5635,59 @@ mod scanner_regression_tests {
         .unwrap();
         fs::write(&digest, "var bytes = SHA256.Create().ComputeHash(data);\n").unwrap();
         assert!(scoped_dotnet_weak_digest(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dotnet_weak_random_requires_lesson_wiring_and_recurrence() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dotnet-random-{nonce}"));
+        let page = root.join("WebGoat/Content/Random.aspx.cs");
+        let random = root.join("WebGoat/App_Code/WeakRandom.cs");
+        fs::create_dir_all(page.parent().unwrap()).unwrap();
+        fs::create_dir_all(random.parent().unwrap()).unwrap();
+        let random_code = concat!(
+            "public uint Next(uint min, uint max)\n",
+            "{\n",
+            "    unchecked\n",
+            "    {\n",
+            "        _seed = _seed * _seed + _seed;\n",
+            "    }\n",
+            "    return _seed % (max - min) + min;\n",
+            "}\n"
+        );
+        let patterns = build_vuln_patterns();
+
+        fs::write(
+            &page,
+            "WeakRandom rnd = (WeakRandom) Session[\"Random\"];\n",
+        )
+        .unwrap();
+        fs::write(&random, random_code).unwrap();
+        let found = scoped_dotnet_weak_random(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(5));
+
+        // Without the lesson page there is no documented route.
+        fs::write(&page, "// nothing\n").unwrap();
+        assert!(scoped_dotnet_weak_random(&root, &patterns).is_empty());
+
+        // A cryptographic generator in place of the recurrence stays clean.
+        fs::write(
+            &page,
+            "WeakRandom rnd = (WeakRandom) Session[\"Random\"];\n",
+        )
+        .unwrap();
+        fs::write(
+            &random,
+            "return RandomNumberGenerator.GetInt32((int)min, (int)max);\n",
+        )
+        .unwrap();
+        assert!(scoped_dotnet_weak_random(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
