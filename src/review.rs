@@ -204,8 +204,29 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         Confidence::High,
         Some(OwaspCategory::A02CryptographicFailures),
         r"\x00",
-        &["rb", "go"],
+        &["rb", "go", "py"],
         "Hash passwords with a salted, memory-hard password KDF such as Argon2id."
+    );
+
+    add_vuln!(
+        "Client-Side Session Storage",
+        "Session data is stored in signed client-side cookies: users can read session contents, and a leaked signing key enables forgery.",
+        Severity::Medium,
+        Confidence::High,
+        Some(OwaspCategory::A02CryptographicFailures),
+        r"\x00",
+        &["py"],
+        "Store sessions server-side (database or cache backend) and pass only an opaque session token to the client."
+    );
+    add_vuln!(
+        "Pickle Session Serializer",
+        "The Pickle session serializer enables remote code execution if the signing key is compromised.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A08IntegrityFailures),
+        r"\x00",
+        &["py"],
+        "Use the JSON session serializer; reserve Pickle for trusted, signed payloads."
     );
     add_vuln!(
         "Predictable Session Token",
@@ -1053,6 +1074,8 @@ fn scan_file_for_vulns_with(
     let go_template_sinks = go_template_source_sink_lines(&content, &ext);
     let (password_hash_sinks, token_sinks, rsa_sinks, tls_sinks, cookie_sinks) =
         pilot_crypto_cookie_lines(&content, &ext);
+    let (django_password_sinks, django_cookie_session_sinks, django_pickle_sinks) =
+        django_settings_sink_lines(&content, &ext);
     let rails_assignment_sinks = rails_assignment_sink_lines(&content, &ext);
     let redirect_sinks = open_redirect_sink_lines(&content, &ext);
     let redos_sites = redos_sink_lines(&content, &ext);
@@ -1124,7 +1147,12 @@ fn scan_file_for_vulns_with(
                 || (pattern.name == "Weak Hash Algorithm — MD5"
                     && python_md5_alias_calls.contains(&line_number))
                 || (pattern.name == "Fast Password Hash (MD5)"
-                    && password_hash_sinks.contains(&line_number))
+                    && (password_hash_sinks.contains(&line_number)
+                        || django_password_sinks.contains(&line_number)))
+                || (pattern.name == "Client-Side Session Storage"
+                    && django_cookie_session_sinks.contains(&line_number))
+                || (pattern.name == "Pickle Session Serializer"
+                    && django_pickle_sinks.contains(&line_number))
                 || (pattern.name == "Predictable Session Token"
                     && token_sinks.contains(&line_number))
                 || (pattern.name == "Weak RSA Key Size" && rsa_sinks.contains(&line_number))
@@ -1641,6 +1669,44 @@ fn rails_assignment_sink_lines(content: &str, ext: &str) -> std::collections::Ha
         }
     }
     sites
+}
+
+/// Django settings misconfigurations: MD5 password hasher, signed-cookie
+/// session storage, and the Pickle session serializer. Each is a real
+/// configuration value with a documented weakness; detection is by exact
+/// settings assignment, so the FP surface is empty.
+#[allow(clippy::type_complexity)]
+fn django_settings_sink_lines(
+    content: &str,
+    ext: &str,
+) -> (
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+) {
+    use std::collections::HashSet;
+    let mut password = HashSet::new();
+    let mut cookie_session = HashSet::new();
+    let mut pickle = HashSet::new();
+    if ext != "py" {
+        return (password, cookie_session, pickle);
+    }
+    for (i, line) in content.lines().enumerate() {
+        let code = line.trim();
+        if code.starts_with('#') {
+            continue;
+        }
+        if code.contains("PASSWORD_HASHERS") && code.contains("MD5PasswordHasher") {
+            password.insert(i + 1);
+        }
+        if code.contains("SESSION_ENGINE") && code.contains("signed_cookies") {
+            cookie_session.insert(i + 1);
+        }
+        if code.contains("SESSION_SERIALIZER") && code.contains("PickleSerializer") {
+            pickle.insert(i + 1);
+        }
+    }
+    (password, cookie_session, pickle)
 }
 
 /// Security-sensitive crypto/cookie patterns with enough local context to avoid
@@ -4426,6 +4492,26 @@ _ = err
 }"#;
         assert!(go_jwt_unpinned_parse_lines(valid_methods, "go").is_empty());
         assert!(go_jwt_unpinned_parse_lines(unpinned, "js").is_empty());
+    }
+
+    #[test]
+    fn django_settings_md5_hasher_cookie_session_and_pickle_are_reported() {
+        let settings = r#"DEBUG = False
+PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
+SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
+SESSION_SERIALIZER = "django.contrib.sessions.serializers.PickleSerializer"
+"#;
+        let (password, cookie_session, pickle) = django_settings_sink_lines(settings, "py");
+        assert_eq!(password, [2].into());
+        assert_eq!(cookie_session, [3].into());
+        assert_eq!(pickle, [4].into());
+        let safe = r#"SESSION_ENGINE = "django.contrib.sessions.backends.db"
+SESSION_SERIALIZER = "django.contrib.sessions.serializers.JSONSerializer"
+"#;
+        let (password, cookie_session, pickle) = django_settings_sink_lines(safe, "py");
+        assert!(password.is_empty() && cookie_session.is_empty() && pickle.is_empty());
+        let (password, _, _) = django_settings_sink_lines(settings, "rb");
+        assert!(password.is_empty());
     }
 
     #[test]
