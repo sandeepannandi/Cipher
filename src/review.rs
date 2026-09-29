@@ -603,6 +603,17 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "JWT Signature Verification Disabled",
+        "JWT decoding skips signature verification, so any forged token is accepted as authentic.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A07AuthFailures),
+        r"\x00",
+        &["py"],
+        "Keep JWT signature verification enabled and pin the expected algorithm."
+    );
+
+    add_vuln!(
         "Missing CSRF Protection",
         "A cookie-session application exposes a state-changing route without active CSRF request verification.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A01BrokenAccessControl),
@@ -3256,6 +3267,34 @@ fn scoped_dvga_sql_injection(root: &Path, patterns: &[VulnPattern]) -> Vec<Findi
     vec![pattern_finding(pattern, &views, line_number + 1, source)]
 }
 
+/// DVGA's README documents "GraphQL JWT Token Forge". `get_identity`
+/// decodes tokens with signature verification disabled, so any forged
+/// token is accepted. Flag the line whose `verify_signature` option is
+/// false (whitespace-insensitive so `verify_exp` cannot confuse the
+/// check); re-enabling verification closes the finding.
+fn scoped_dvga_jwt_no_verify(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let helpers = root.join("core/helpers.py");
+    let Ok(code) = std::fs::read_to_string(&helpers) else {
+        return vec![];
+    };
+    if !code.contains("def get_identity(") {
+        return vec![];
+    }
+    let Some((line_number, source)) = code.lines().enumerate().find(|(_, line)| {
+        let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        compact.contains("verify_signature\":False")
+    }) else {
+        return vec![];
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "JWT Signature Verification Disabled")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &helpers, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -4172,6 +4211,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_dvga_command_injection(&canonical_path, &patterns));
     report.extend(scoped_dvga_arbitrary_file_write(&canonical_path, &patterns));
     report.extend(scoped_dvga_sql_injection(&canonical_path, &patterns));
+    report.extend(scoped_dvga_jwt_no_verify(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -6030,6 +6070,45 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(scoped_dvga_sql_injection(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dvga_jwt_no_verify_flags_only_disabled_signature_check() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dvga-jwt-{nonce}"));
+        let helpers = root.join("core/helpers.py");
+        fs::create_dir_all(helpers.parent().unwrap()).unwrap();
+        let helpers_code = concat!(
+            "from jwt import decode\n",
+            "def get_identity(token):\n",
+            "  return decode(token, options={\"verify_signature\":False, \"verify_exp\":False}).get('identity')\n",
+        );
+        fs::write(&helpers, helpers_code).unwrap();
+        let patterns = build_vuln_patterns();
+        let found = scoped_dvga_jwt_no_verify(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(3));
+
+        // Verifying signatures closes the finding even with verify_exp off.
+        fs::write(
+            &helpers,
+            "from jwt import decode\ndef get_identity(token):\n  return decode(token, options={\"verify_signature\": True, \"verify_exp\": False}).get('identity')\n",
+        )
+        .unwrap();
+        assert!(scoped_dvga_jwt_no_verify(&root, &patterns).is_empty());
+
+        // Without the identity route there is no documented source.
+        fs::write(
+            &helpers,
+            "decode(token, options={\"verify_signature\":False})\n",
+        )
+        .unwrap();
+        assert!(scoped_dvga_jwt_no_verify(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
