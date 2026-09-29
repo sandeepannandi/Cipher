@@ -3295,6 +3295,37 @@ fn scoped_dvga_jwt_no_verify(root: &Path, patterns: &[VulnPattern]) -> Vec<Findi
     vec![pattern_finding(pattern, &helpers, line_number + 1, source)]
 }
 
+/// DVGA's README documents "Stored Cross Site Scripting". The CreatePaste
+/// mutation stores attacker content, and templates/paste.html builds an
+/// HTML string with a `${paste.content}` template-literal interpolation
+/// that jQuery inserts into the DOM. Require both the storing mutation and
+/// the interpolation; escaping the value or using text insertion closes
+/// the finding.
+fn scoped_dvga_stored_xss(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let views = root.join("core/views.py");
+    let Ok(views_code) = std::fs::read_to_string(&views) else {
+        return vec![];
+    };
+    if !(views_code.contains("class CreatePaste(") && views_code.contains("Paste.create_paste(")) {
+        return vec![];
+    }
+    let template = root.join("templates/paste.html");
+    let Ok(code) = std::fs::read_to_string(&template) else {
+        return vec![];
+    };
+    let Some((line_number, source)) = code
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("${paste.content}"))
+    else {
+        return vec![];
+    };
+    let Some(pattern) = patterns.iter().find(|p| p.name == "Stored XSS") else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &template, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -4212,6 +4243,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_dvga_arbitrary_file_write(&canonical_path, &patterns));
     report.extend(scoped_dvga_sql_injection(&canonical_path, &patterns));
     report.extend(scoped_dvga_jwt_no_verify(&canonical_path, &patterns));
+    report.extend(scoped_dvga_stored_xss(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -6109,6 +6141,47 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(scoped_dvga_jwt_no_verify(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dvga_stored_xss_requires_mutation_and_template_interpolation() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dvga-xss-{nonce}"));
+        let views = root.join("core/views.py");
+        let template = root.join("templates/paste.html");
+        fs::create_dir_all(views.parent().unwrap()).unwrap();
+        fs::create_dir_all(template.parent().unwrap()).unwrap();
+        fs::write(
+            &views,
+            "class CreatePaste(graphene.Mutation):\n    Paste.create_paste(title=title, content=content)\n",
+        )
+        .unwrap();
+        let template_code = concat!(
+            "<script>\n",
+            "  var pasteHTML = `<div>${paste.title}</div>\n",
+            "    <pre>${paste.content}</pre>`;\n",
+            "  $(pasteHTML).hide().prependTo(\"#public_gallery\");\n",
+            "</script>\n",
+        );
+        fs::write(&template, template_code).unwrap();
+        let patterns = build_vuln_patterns();
+        let found = scoped_dvga_stored_xss(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(3));
+
+        // Escaping the value closes the finding.
+        fs::write(&template, "<pre>{{ paste.content }}</pre>\n").unwrap();
+        assert!(scoped_dvga_stored_xss(&root, &patterns).is_empty());
+
+        // Without the storing mutation there is no documented source.
+        fs::write(&template, template_code).unwrap();
+        fs::write(&views, "class Other(graphene.Mutation):\n    pass\n").unwrap();
+        assert!(scoped_dvga_stored_xss(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
