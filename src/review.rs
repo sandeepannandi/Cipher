@@ -1087,6 +1087,7 @@ fn scan_file_for_vulns_with(
     let (django_password_sinks, django_cookie_session_sinks, django_pickle_sinks) =
         django_settings_sink_lines(&content, &ext);
     let django_csrf_exempt_sinks = django_csrf_exempt_lines(&content, &ext);
+    let django_idor_sinks = django_idor_sink_lines(&content, &ext);
     let rails_assignment_sinks = rails_assignment_sink_lines(&content, &ext);
     let redirect_sinks = open_redirect_sink_lines(&content, &ext);
     let redos_sites = redos_sink_lines(&content, &ext);
@@ -1205,7 +1206,8 @@ fn scan_file_for_vulns_with(
                     && (ssti_sinks.contains(&line_number)
                         || go_template_sinks.contains(&line_number)))
                 || (pattern.name == "Insecure Direct Object Reference (IDOR)"
-                    && idor_sinks.contains(&line_number));
+                    && (idor_sinks.contains(&line_number)
+                        || django_idor_sinks.contains(&line_number)));
             if !pattern_matches {
                 continue;
             }
@@ -1739,6 +1741,109 @@ fn django_csrf_exempt_lines(content: &str, ext: &str) -> std::collections::HashS
         if code == "@csrf_exempt" {
             sinks.insert(i + 1);
         }
+    }
+    sinks
+}
+
+/// Django ORM IDOR: `<Model>.objects.get(pk=<url param>)` inside a view whose
+/// signature takes the parameter, with no same-model ownership filter
+/// (`Model.objects.filter(... request.user ...)` or a
+/// `instance.users_assigned.filter(... request.user ...)` relation check) in
+/// the view body. POST-derived and literal primary keys are out of scope.
+fn django_idor_sink_lines(content: &str, ext: &str) -> std::collections::HashSet<usize> {
+    use std::collections::{HashMap, HashSet};
+    let mut sinks = HashSet::new();
+    if ext != "py" {
+        return sinks;
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    let def_re =
+        Regex::new(r"^def\s+[A-Za-z_][A-Za-z0-9_]*\(\s*request\s*(?:,\s*([^)]*))?\)\s*:").unwrap();
+    let get_re =
+        Regex::new(r"\b([A-Z][A-Za-z0-9_]*)\.objects\.get\(\s*pk\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b")
+            .unwrap();
+    let assign_re =
+        Regex::new(r"\b([a-z_][A-Za-z0-9_]*)\s*=\s*([A-Z][A-Za-z0-9_]*)\.objects\.get\(").unwrap();
+    let model_filter_re = Regex::new(r"\b([A-Z][A-Za-z0-9_]*)\.objects\.filter\(").unwrap();
+    let rel_filter_re =
+        Regex::new(r"\b([a-z_][A-Za-z0-9_]*)\.(?:users_assigned|members|owners?)\.filter\(")
+            .unwrap();
+    let mut i = 0;
+    while i < lines.len() {
+        let Some(def_caps) = def_re.captures(lines[i]) else {
+            i += 1;
+            continue;
+        };
+        let params: HashSet<String> = def_caps
+            .get(1)
+            .map(|m| {
+                m.as_str()
+                    .split(',')
+                    .map(|p| p.trim().trim_start_matches('*').to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut j = i + 1;
+        while j < lines.len()
+            && !lines[j].starts_with("def ")
+            && !lines[j].starts_with('@')
+            && !lines[j].starts_with("# A")
+        {
+            j += 1;
+        }
+        let body = &lines[i + 1..j];
+        let var_model: HashMap<String, String> = body
+            .iter()
+            .filter_map(|line| {
+                assign_re
+                    .captures(line)
+                    .map(|c| (c[1].to_string(), c[2].to_string()))
+            })
+            .collect();
+        let mut guarded: HashSet<String> = HashSet::new();
+        for (k, line) in body.iter().enumerate() {
+            let code = line.trim();
+            if code.starts_with('#') {
+                continue;
+            }
+            // Filter calls can span lines; gather text to the closing paren.
+            let mut call_text = code.to_string();
+            if model_filter_re.is_match(code) || rel_filter_re.is_match(code) {
+                let mut depth = code.matches('(').count() as i32 - code.matches(')').count() as i32;
+                let mut m = k + 1;
+                while depth > 0 && m < body.len() {
+                    let next = body[m].trim();
+                    depth += next.matches('(').count() as i32 - next.matches(')').count() as i32;
+                    call_text.push(' ');
+                    call_text.push_str(next);
+                    m += 1;
+                }
+            }
+            if !call_text.contains("request.user") {
+                continue;
+            }
+            if let Some(caps) = model_filter_re.captures(&call_text) {
+                guarded.insert(caps[1].to_string());
+            }
+            if let Some(caps) = rel_filter_re.captures(&call_text) {
+                if let Some(model) = var_model.get(&caps[1]) {
+                    guarded.insert(model.clone());
+                }
+            }
+        }
+        for (offset, line) in body.iter().enumerate() {
+            let code = line.trim();
+            if code.starts_with('#') || code.contains("request.user") {
+                continue;
+            }
+            if let Some(caps) = get_re.captures(code) {
+                if params.contains(&caps[2]) && !guarded.contains(&caps[1]) {
+                    sinks.insert(i + 2 + offset);
+                }
+            }
+        }
+        i = j;
     }
     sinks
 }
@@ -4567,6 +4672,38 @@ def commented_out(request):
         let sinks = django_csrf_exempt_lines(views, "py");
         assert_eq!(sinks, [3].into_iter().collect());
         assert!(django_csrf_exempt_lines(views, "js").is_empty());
+    }
+
+    #[test]
+    fn django_orm_get_by_url_param_without_ownership_filter_is_reported() {
+        let views = r#"def upload(request, project_id):
+    proj = Project.objects.get(pk=project_id)
+    return render(request, 'u.html')
+
+def details(request, project_id):
+    proj = Project.objects.filter(
+        users_assigned=request.user.id,
+        pk=project_id)
+    if not proj:
+        return redirect('/')
+    proj = Project.objects.get(pk=project_id)
+    return render(request, 'd.html')
+
+def task_details(request, task_id):
+    task = Task.objects.get(pk=task_id)
+    ok = task.users_assigned.filter(username=request.user.username).exists()
+    return render(request, 't.html', {'ok': ok})
+
+def assign(request, project_id):
+    userid = request.POST.get("userid")
+    user = User.objects.get(pk=userid)
+    # proj = Project.objects.get(pk=project_id)
+    return redirect('/')
+"#;
+        let sinks = django_idor_sink_lines(views, "py");
+        assert!(sinks.contains(&2));
+        assert_eq!(sinks.len(), 1);
+        assert!(django_idor_sink_lines(views, "js").is_empty());
     }
 
     #[test]
