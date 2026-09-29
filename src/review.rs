@@ -1135,6 +1135,14 @@ fn scan_file_for_vulns_with(
                 continue;
             }
 
+            // A zapApiKey value authenticates to a locally running OWASP
+            // ZAP daemon driven by the app's own security test suite. It is
+            // a development-tool credential in non-production environment
+            // config, not an application credential.
+            if pattern.name == "Hardcoded Credentials" && trimmed.contains("zapApiKey") {
+                continue;
+            }
+
             // Suppress matches that also hit the negative filter, e.g. a
             // cookie call that already sets HttpOnly/Secure/SameSite.
             if pattern
