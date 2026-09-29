@@ -1113,6 +1113,13 @@ fn scan_file_for_vulns_with(
             {
                 continue;
             }
+
+            // The Rails asset pipeline's debug flag only expands how assets
+            // are served in development; it is not the framework debug mode
+            // this rule measures, and it carries no debug-mode exposure.
+            if pattern.name == "Debug Mode Enabled" && trimmed.contains("assets.debug") {
+                continue;
+            }
             if pattern.name == ["Weak Encryption — ", "D", "ES"].concat()
                 && is_crypto_import_only(trimmed, &ext)
             {
