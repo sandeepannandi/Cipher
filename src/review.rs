@@ -79,7 +79,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "SQL Injection — ORM Raw Queries",
         "Raw SQL queries bypass ORM protections. Review for potential injection vectors.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A03Injection),
-        r#"(?i)(raw_sql|execute_sql|rawQuery|nativeQuery|createNativeQuery|raw\(|\.sql\()"#,
+        r#"(?i)(raw_sql|execute_sql|rawQuery|nativeQuery|createNativeQuery|\braw\s*\(|\.sql\()"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Use the ORM's query builder instead of raw SQL. If raw SQL is required, use parameterized queries."
     );
@@ -6784,6 +6784,21 @@ return algorithm(payload).hexdigest()"#,
     }
 
     const SQLI: &str = "SQL Injection — String Concatenation";
+    const ORM_RAW: &str = "SQL Injection — ORM Raw Queries";
+
+    #[test]
+    fn orm_raw_query_word_boundary_keeps_vendored_draw_calls_clean() {
+        let vendored = scan(
+            "if (!(this.target = this.$el.simpledraw(this.width, this.height, this.options.get('composite'), interactive))) {\nthis.target = this.$el.simpledraw(width, height, options.get('composite'));\n",
+            "js",
+        );
+        assert!(!titles(&vendored).contains(&ORM_RAW));
+        let django = scan(
+            "cursor = Model.objects.raw(\"SELECT * FROM app_model\")\n",
+            "py",
+        );
+        assert!(titles(&django).contains(&ORM_RAW));
+    }
 
     #[test]
     fn python_request_value_built_into_executed_query_is_reported() {
