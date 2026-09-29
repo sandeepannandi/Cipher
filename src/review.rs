@@ -239,6 +239,16 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Remove the csrf_exempt decorator and rely on CsrfViewMiddleware; exempt only endpoints that genuinely cannot carry a nonce."
     );
     add_vuln!(
+        "Django ModelForm Mass Assignment",
+        "A ModelForm over the User model uses an exclude blacklist that omits a privilege flag, so a crafted form submission can set it.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00",
+        &["py"],
+        "Replace the exclude blacklist with a fields whitelist naming only user-editable attributes."
+    );
+    add_vuln!(
         "Predictable Session Token",
         "A security token or session cookie is derived from a predictable random or counter value.",
         Severity::High,
@@ -1096,6 +1106,7 @@ fn scan_file_for_vulns_with(
         django_settings_sink_lines(&content, &ext);
     let django_csrf_exempt_sinks = django_csrf_exempt_lines(&content, &ext);
     let django_idor_sinks = django_idor_sink_lines(&content, &ext);
+    let django_modelform_sinks = django_modelform_exclude_lines(&content, &ext);
     let rails_assignment_sinks = rails_assignment_sink_lines(&content, &ext);
     let redirect_sinks = open_redirect_sink_lines(&content, &ext);
     let redos_sites = redos_sink_lines(&content, &ext);
@@ -1175,6 +1186,8 @@ fn scan_file_for_vulns_with(
                     && django_pickle_sinks.contains(&line_number))
                 || (pattern.name == "CSRF Protection Disabled"
                     && django_csrf_exempt_sinks.contains(&line_number))
+                || (pattern.name == "Django ModelForm Mass Assignment"
+                    && django_modelform_sinks.contains(&line_number))
                 || (pattern.name == "Predictable Session Token"
                     && token_sinks.contains(&line_number))
                 || (pattern.name == "Weak RSA Key Size" && rsa_sinks.contains(&line_number))
@@ -1730,6 +1743,57 @@ fn django_settings_sink_lines(
         }
     }
     (password, cookie_session, pickle)
+}
+
+/// Django ModelForm mass assignment: a `Meta` with `model = User` whose
+/// `exclude` blacklist omits `is_superuser` or `is_staff`, so a crafted
+/// registration or profile submission can set the flag. `fields` whitelists
+/// and blacklists covering both flags are clean. The documented form is a
+/// single- or few-line list; the list is read across up to six lines.
+#[allow(clippy::items_after_test_module)]
+fn django_modelform_exclude_lines(content: &str, ext: &str) -> std::collections::HashSet<usize> {
+    use std::collections::HashSet;
+    let mut sinks = HashSet::new();
+    if ext != "py" || !content.contains("forms.ModelForm") {
+        return sinks;
+    }
+    let Ok(exclude) = Regex::new(r"^\s*exclude\s*=\s*[\[\(]") else {
+        return sinks;
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if !exclude.is_match(line) {
+            continue;
+        }
+        let mut list = String::new();
+        for extra in lines.iter().skip(i).take(6) {
+            list.push_str(extra);
+            if extra.contains(']') || extra.contains(')') {
+                break;
+            }
+        }
+        if list.contains("is_superuser") && list.contains("is_staff") {
+            continue;
+        }
+        // The `model = User` binding must belong to the same class body:
+        // walk back at most ten lines and stop at the previous class header.
+        let in_user_form = lines[..i]
+            .iter()
+            .rev()
+            .take(10)
+            .take_while(|prior| !prior.trim_start().starts_with("class "))
+            .any(|prior| {
+                prior.trim_start().starts_with("model =")
+                    && prior
+                        .split('=')
+                        .nth(1)
+                        .is_some_and(|value| value.trim().trim_end_matches(',').trim() == "User")
+            });
+        if in_user_form {
+            sinks.insert(i + 1);
+        }
+    }
+    sinks
 }
 
 /// Django views decorated with @csrf_exempt opt out of CSRF token validation.
@@ -4743,6 +4807,38 @@ def commented_out(request):
         let sinks = django_csrf_exempt_lines(views, "py");
         assert_eq!(sinks, [3].into_iter().collect());
         assert!(django_csrf_exempt_lines(views, "js").is_empty());
+    }
+
+    #[test]
+    fn django_modelform_exclude_missing_privilege_flag_is_reported() {
+        let forms = r#"class UserForm(forms.ModelForm):
+    """ User registration form """
+    class Meta:
+        model = User
+        exclude = ['groups', 'user_permissions', 'last_login', 'date_joined', 'is_active']
+
+
+class ProfileForm(forms.ModelForm):
+    class Meta:
+        model = User
+        fields = ('username', 'first_name', 'last_name', 'email', 'password')
+
+
+class CompleteForm(forms.ModelForm):
+    class Meta:
+        model = User
+        exclude = ['is_superuser', 'is_staff', 'groups']
+
+
+class OtherForm(forms.ModelForm):
+    class Meta:
+        model = Project
+        exclude = ['owner']
+"#;
+        let sinks = django_modelform_exclude_lines(forms, "py");
+        assert_eq!(sinks, [5].into_iter().collect());
+        assert!(django_modelform_exclude_lines(forms, "rb").is_empty());
+        assert!(django_modelform_exclude_lines("exclude = ['x']", "py").is_empty());
     }
 
     #[test]
