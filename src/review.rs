@@ -143,7 +143,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         Severity::High, Confidence::High, Some(OwaspCategory::A01BrokenAccessControl),
         // Require request-to-target flow, not every Express or Go redirect.
         r"\x00",
-        &["js", "ts", "go"],
+        &["js", "ts", "go", "py"],
         "Allow only known local redirect destinations, or validate the destination against an allowlist."
     );
 
@@ -7041,6 +7041,15 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
         );
         assert_eq!(titles(&findings), vec![CMDI]);
         assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn django_logout_redirect_from_query_is_reported() {
+        let exposed = "def logout_view(request):\n    return redirect(request.GET.get('redirect', '/taskManager/'))\n";
+        assert_eq!(open_redirect_sink_lines(exposed, "py"), [2].into());
+        let safe = "def logout_view(request):\n    return redirect('/taskManager/')\n";
+        assert!(open_redirect_sink_lines(safe, "py").is_empty());
+        assert!(open_redirect_sink_lines(exposed, "js").is_empty());
     }
 
     #[test]
@@ -16505,6 +16514,30 @@ fn outbound_url_argument(name: &str) -> Vec<usize> {
 /// Express accepts either `redirect(path)` or `redirect(status, path)`.
 #[allow(clippy::items_after_test_module)]
 fn open_redirect_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    if extension == "py" {
+        let Ok(call) = Regex::new(r"\b(?:redirect|HttpResponseRedirect)\s*\(") else {
+            return std::collections::HashSet::new();
+        };
+        let mut lines = request_flow_sink_lines(
+            content,
+            FlowLanguage::Python,
+            &[FlowSink {
+                call,
+                arguments: first_argument,
+                line_requires: None,
+            }],
+            |_| false,
+            false,
+        );
+        // URL parameters interpolated into a fixed local path are not open
+        // redirects. Require the target itself to be read from request input.
+        lines.retain(|line_number| {
+            content.lines().nth(line_number - 1).is_some_and(|code| {
+                code.contains("request.GET.get(") || code.contains("request.POST.get(")
+            })
+        });
+        return lines;
+    }
     if extension == "go" {
         let Ok(call) = Regex::new(r"\bhttp\s*\.\s*(Redirect)\s*\(") else {
             return std::collections::HashSet::new();
