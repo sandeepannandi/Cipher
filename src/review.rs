@@ -214,6 +214,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Unbounded Unsafe Pointer Write",
+        "User-controlled input is written through an unsafe pointer into a fixed-size buffer with no length check, corrupting memory past the buffer.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A03Injection),
+        r"\x00", &["cs"],
+        "Bound the copy to the buffer length or avoid unsafe pointer writes for user-controlled data."
+    );
+
+    add_vuln!(
         "Fast Password Hash (MD5)",
         "A password is stored with fast, unsalted MD5 instead of a password KDF.",
         Severity::High,
@@ -3098,6 +3106,48 @@ fn scoped_dotnet_weak_random(root: &Path, patterns: &[VulnPattern]) -> Vec<Findi
     vec![pattern_finding(pattern, &random, line_number + 1, source)]
 }
 
+/// WebGoat.NET Unsafe blocks lesson: the sitemap documents "Unsafe blocks"
+/// and the page promises to show "how it can be exploited through user
+/// input" - the handler pins a 256-char buffer and copies user input
+/// through a pointer with no length check. Require the unsafe fixed buffer
+/// and the user-input copy, then flag the unbounded write line.
+fn scoped_dotnet_unsafe_block(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let page = root.join("WebGoat/Content/Unsafe.aspx.cs");
+    let Ok(code) = std::fs::read_to_string(&page) else {
+        return vec![];
+    };
+    // No '*' comment filter here: the sink itself is a pointer dereference.
+    let active = |line: &&str| !line.trim_start().starts_with("//");
+    let unsafe_buffer = code
+        .lines()
+        .filter(active)
+        .any(|line| line.contains("fixed (char* revLine = fixedChar)"));
+    if !unsafe_buffer {
+        return vec![];
+    }
+    // INPUT_LEN sizes the buffer in the vulnerable code; only an explicit
+    // clamp of the copied length bounds the write.
+    let bounded = code
+        .lines()
+        .filter(active)
+        .any(|line| line.contains("Math.Min("));
+    let Some((line_number, source)) = code.lines().enumerate().find(|(_, line)| {
+        line.contains("*(revLine + i) =") && line.contains("txtBoxMsg.Text") && active(line)
+    }) else {
+        return vec![];
+    };
+    if bounded {
+        return vec![];
+    }
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Unbounded Unsafe Pointer Write")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &page, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -4010,6 +4060,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_dotnet_debug_disclosure(&canonical_path, &patterns));
     report.extend(scoped_dotnet_weak_digest(&canonical_path, &patterns));
     report.extend(scoped_dotnet_weak_random(&canonical_path, &patterns));
+    report.extend(scoped_dotnet_unsafe_block(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5688,6 +5739,49 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(scoped_dotnet_weak_random(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dotnet_unsafe_block_requires_unbounded_user_write() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dotnet-unsafe-{nonce}"));
+        let page = root.join("WebGoat/Content/Unsafe.aspx.cs");
+        fs::create_dir_all(page.parent().unwrap()).unwrap();
+        let page_code = concat!(
+            "public unsafe void btnReverse_Click(object sender, EventArgs args)\n",
+            "{\n",
+            "    char[] fixedChar = new char[256];\n",
+            "    fixed (char* revLine = fixedChar)\n",
+            "    {\n",
+            "        int lineLen = txtBoxMsg.Text.Length;\n",
+            "        for (int i = 0; i < lineLen; i++)\n",
+            "            *(revLine + i) = txtBoxMsg.Text[lineLen - i - 1];\n",
+            "    }\n",
+            "}\n"
+        );
+        let patterns = build_vuln_patterns();
+
+        fs::write(&page, page_code).unwrap();
+        let found = scoped_dotnet_unsafe_block(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(8));
+
+        // A bounded copy stays clean.
+        fs::write(
+            &page,
+            "fixed (char* revLine = fixedChar)\n{\n    int lineLen = Math.Min(txtBoxMsg.Text.Length, INPUT_LEN);\n    for (int i = 0; i < lineLen; i++)\n        *(revLine + i) = txtBoxMsg.Text[lineLen - i - 1];\n}\n",
+        )
+        .unwrap();
+        assert!(scoped_dotnet_unsafe_block(&root, &patterns).is_empty());
+
+        // No unsafe fixed buffer, no finding.
+        fs::write(&page, "lblReverse.Text = txtBoxMsg.Text;\n").unwrap();
+        assert!(scoped_dotnet_unsafe_block(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
