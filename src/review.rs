@@ -3227,6 +3227,35 @@ fn scoped_dvga_arbitrary_file_write(root: &Path, patterns: &[VulnPattern]) -> Ve
     vec![pattern_finding(pattern, &helpers, line_number + 1, source)]
 }
 
+/// DVGA's README documents "SQL Injection". `resolve_pastes` interpolates
+/// the `filter` GraphQL argument into a SQLAlchemy `text()` clause with
+/// `%`-formatting. Require the resolver route and flag the raw-format
+/// `.filter(text(...))` line; parameter binding or dropping the format
+/// closes the finding.
+fn scoped_dvga_sql_injection(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let views = root.join("core/views.py");
+    let Ok(code) = std::fs::read_to_string(&views) else {
+        return vec![];
+    };
+    if !code.contains("def resolve_pastes(") {
+        return vec![];
+    }
+    let Some((line_number, source)) = code
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains(".filter(text(") && line.contains("% ("))
+    else {
+        return vec![];
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name.starts_with("SQL Injection"))
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &views, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -4142,6 +4171,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_dotnet_unsafe_block(&canonical_path, &patterns));
     report.extend(scoped_dvga_command_injection(&canonical_path, &patterns));
     report.extend(scoped_dvga_arbitrary_file_write(&canonical_path, &patterns));
+    report.extend(scoped_dvga_sql_injection(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5960,6 +5990,46 @@ mod scanner_regression_tests {
         fs::write(&helpers, helpers_code).unwrap();
         fs::write(&views, "  def mutate(self, info):\n    pass\n").unwrap();
         assert!(scoped_dvga_arbitrary_file_write(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dvga_sql_injection_requires_resolver_and_raw_format() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dvga-sqli-{nonce}"));
+        let views = root.join("core/views.py");
+        fs::create_dir_all(views.parent().unwrap()).unwrap();
+        let views_code = concat!(
+            "  def resolve_pastes(self, info, public=False, limit=1000, filter=None):\n",
+            "    result = query.filter_by(public=public, burn=False)\n",
+            "    if filter:\n",
+            "      result = result.filter(text(\"title = '%s' or content = '%s'\" % (filter, filter)))\n",
+        );
+        fs::write(&views, views_code).unwrap();
+        let patterns = build_vuln_patterns();
+        let found = scoped_dvga_sql_injection(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(4));
+
+        // Bound parameters close the finding.
+        fs::write(
+            &views,
+            "  def resolve_pastes(self, info, filter=None):\n    result = result.filter(text(\"title = :t\").bindparams(t=filter))\n",
+        )
+        .unwrap();
+        assert!(scoped_dvga_sql_injection(&root, &patterns).is_empty());
+
+        // Without the resolver route there is no documented source.
+        fs::write(
+            &views,
+            "result = result.filter(text(\"x = '%s'\" % (f,)))\n",
+        )
+        .unwrap();
+        assert!(scoped_dvga_sql_injection(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
