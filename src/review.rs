@@ -2076,6 +2076,65 @@ fn scoped_php_password_csrf(root: &Path, patterns: &[VulnPattern]) -> Vec<Findin
     vec![pattern_finding(pattern, &handler, line_number + 1, source)]
 }
 
+/// DVWA open redirect: the low-level handler writes a request-controlled GET
+/// parameter straight into a Location header, and the index page routes the
+/// low level to that handler. Require the wiring; an allowlist, parse check,
+/// or non-request target suppresses the finding.
+fn scoped_php_open_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let handler = root.join("vulnerabilities/open_redirect/source/low.php");
+    let index = root.join("vulnerabilities/open_redirect/index.php");
+    let (Ok(code), Ok(page)) = (
+        std::fs::read_to_string(&handler),
+        std::fs::read_to_string(index),
+    ) else {
+        return vec![];
+    };
+    fn active(source: &str) -> Vec<&str> {
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                !line.starts_with("//") && !line.starts_with('#') && !line.starts_with('*')
+            })
+            .collect()
+    }
+    let handler_code = active(&code);
+    let page_code = active(&page);
+    if !page_code
+        .iter()
+        .any(|line| line.contains("dvwaPageStartup("))
+        || !page_code.iter().any(|line| line.contains("case 'low':"))
+        || !page_code
+            .iter()
+            .any(|line| line.contains("source/low.php?redirect="))
+        || !handler_code
+            .iter()
+            .any(|line| line.contains("$_GET") && line.contains("redirect"))
+        || handler_code.iter().any(|line| {
+            line.contains("in_array")
+                || line.contains("allowlist")
+                || line.contains("whitelist")
+                || line.contains("parse_url")
+        })
+    {
+        return vec![];
+    }
+    let Some((line_number, source)) = code.lines().enumerate().find(|(_, line)| {
+        let trimmed = line.trim();
+        trimmed.starts_with("header")
+            && trimmed.contains("location:")
+            && trimmed.contains("$_GET")
+            && trimmed.contains("redirect")
+            && !trimmed.starts_with("//")
+    }) else {
+        return vec![];
+    };
+    let Some(pattern) = patterns.iter().find(|p| p.name == "Open Redirect") else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &handler, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -2906,6 +2965,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_rails_admin_gate_bypass(&canonical_path, &patterns));
     report.extend(scoped_rails_ssn_client_mask(&canonical_path, &patterns));
     report.extend(scoped_php_password_csrf(&canonical_path, &patterns));
+    report.extend(scoped_php_open_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -4146,6 +4206,46 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(detect().is_empty(), "strict cookie");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn php_open_redirect_requires_get_location_write_and_low_route() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-php-open-redirect-{nonce}"));
+        let handler = root.join("vulnerabilities/open_redirect/source/low.php");
+        let index = root.join("vulnerabilities/open_redirect/index.php");
+        for path in [&handler, &index] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        let code = concat!(
+            "<?php\nif (array_key_exists (\"redirect\", $_GET) && $_GET['redirect'] != \"\") {\n",
+            "\theader (\"location: \" . $_GET['redirect']);\n\texit;\n}\n"
+        );
+        let page = concat!(
+            "dvwaPageStartup( array( 'authenticated' ) );\ncase 'low':\n",
+            " $link1 = \"source/low.php?redirect=info.php?id=1\";\n"
+        );
+        fs::write(&handler, code).unwrap();
+        fs::write(&index, page).unwrap();
+        let patterns = build_vuln_patterns();
+        let detect = || scoped_php_open_redirect(&root, &patterns);
+        assert_eq!(detect()[0].line_number, Some(3));
+        fs::write(&index, page.replace("case 'low':", "case 'medium':")).unwrap();
+        assert!(detect().is_empty(), "low level not routed");
+        fs::write(&index, page).unwrap();
+        fs::write(
+            &handler,
+            code.replace(
+                "header (\"location: \" . $_GET['redirect']);",
+                "$allowed = [\"info.php?id=1\", \"info.php?id=2\"];\nif (in_array($_GET['redirect'], $allowed)) { header (\"location: \" . $_GET['redirect']); }",
+            ),
+        )
+        .unwrap();
+        assert!(detect().is_empty(), "allowlisted target");
         fs::remove_dir_all(root).unwrap();
     }
 
