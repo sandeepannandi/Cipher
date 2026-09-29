@@ -249,6 +249,16 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Replace the exclude blacklist with a fields whitelist naming only user-editable attributes."
     );
     add_vuln!(
+        "Missing Function Level Access Control",
+        "A Django view checks only authentication, then mutates group or permission membership without any role check.",
+        Severity::High,
+        Confidence::High,
+        Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00",
+        &["py"],
+        "Require an appropriate role or permission (is_staff, has_perm, permission_required) before changing group or permission membership."
+    );
+    add_vuln!(
         "Predictable Session Token",
         "A security token or session cookie is derived from a predictable random or counter value.",
         Severity::High,
@@ -1107,6 +1117,7 @@ fn scan_file_for_vulns_with(
     let django_csrf_exempt_sinks = django_csrf_exempt_lines(&content, &ext);
     let django_idor_sinks = django_idor_sink_lines(&content, &ext);
     let django_modelform_sinks = django_modelform_exclude_lines(&content, &ext);
+    let django_role_check_sinks = django_missing_role_check_lines(&content, &ext);
     let rails_assignment_sinks = rails_assignment_sink_lines(&content, &ext);
     let redirect_sinks = open_redirect_sink_lines(&content, &ext);
     let redos_sites = redos_sink_lines(&content, &ext);
@@ -1188,6 +1199,8 @@ fn scan_file_for_vulns_with(
                     && django_csrf_exempt_sinks.contains(&line_number))
                 || (pattern.name == "Django ModelForm Mass Assignment"
                     && django_modelform_sinks.contains(&line_number))
+                || (pattern.name == "Missing Function Level Access Control"
+                    && django_role_check_sinks.contains(&line_number))
                 || (pattern.name == "Predictable Session Token"
                     && token_sinks.contains(&line_number))
                 || (pattern.name == "Weak RSA Key Size" && rsa_sinks.contains(&line_number))
@@ -1743,6 +1756,49 @@ fn django_settings_sink_lines(
         }
     }
     (password, cookie_session, pickle)
+}
+
+/// Missing function-level access control: a Django view that verifies only
+/// `is_authenticated` and then mutates group or permission membership, with
+/// no role check (`is_staff`, `is_superuser`, `has_perm`,
+/// `permission_required`, `user_passes_test`) anywhere in the view body.
+/// Authentication is not authorization; the mutation line is the sink.
+#[allow(clippy::items_after_test_module)]
+fn django_missing_role_check_lines(content: &str, ext: &str) -> std::collections::HashSet<usize> {
+    use std::collections::HashSet;
+    let mut sinks = HashSet::new();
+    if ext != "py" || !content.contains("is_authenticated") {
+        return sinks;
+    }
+    let Ok(mutation) = Regex::new(
+        r"\.(?:groups|user_permissions)\s*\.\s*add\s*\(|\b(?:is_staff|is_superuser)\s*=\s*True",
+    ) else {
+        return sinks;
+    };
+    let Ok(role_check) =
+        Regex::new(r"is_staff|is_superuser|has_perm|permission_required|user_passes_test")
+    else {
+        return sinks;
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    for function in flow_functions(&lines, FlowLanguage::Python) {
+        let body: Vec<&str> = lines[function.body.clone()].to_vec();
+        if !body.join("\n").contains("is_authenticated") {
+            continue;
+        }
+        // A role check guards only what follows it: a check placed after the
+        // mutation (django.nV checks GET but not POST) leaves the sink open.
+        let mut guarded = false;
+        for (offset, line) in body.iter().enumerate() {
+            let code = line.split('#').next().unwrap_or("");
+            if role_check.is_match(code) {
+                guarded = true;
+            } else if !guarded && mutation.is_match(code) {
+                sinks.insert(function.body.start + offset + 1);
+            }
+        }
+    }
+    sinks
 }
 
 /// Django ModelForm mass assignment: a `Meta` with `model = User` whose
@@ -4839,6 +4895,46 @@ class OtherForm(forms.ModelForm):
         assert_eq!(sinks, [5].into_iter().collect());
         assert!(django_modelform_exclude_lines(forms, "rb").is_empty());
         assert!(django_modelform_exclude_lines("exclude = ['x']", "py").is_empty());
+    }
+
+    #[test]
+    fn django_privilege_mutation_without_role_check_is_reported() {
+        let views = r#"def manage_groups(request):
+    user = request.user
+    if user.is_authenticated():
+        if request.method == 'POST':
+            post_data = request.POST.dict()
+            grp = Group.objects.get(name=post_data["accesslevel"])
+            specified_user = User.objects.get(pk=post_data["userid"])
+            specified_user.groups.add(grp)
+            specified_user.save()
+
+
+def admin_only(request):
+    user = request.user
+    if user.is_authenticated() and user.is_staff:
+        target = User.objects.get(pk=1)
+        target.groups.add(Group.objects.get(name='admin_g'))
+
+
+def readonly(request):
+    if request.user.is_authenticated():
+        return Group.objects.all()
+
+
+def get_checked_post_not(request):
+    user = request.user
+    if user.is_authenticated():
+        if request.method == 'POST':
+            target = User.objects.get(pk=1)
+            target.groups.add(Group.objects.get(name='admin_g'))
+        else:
+            if user.has_perm('can_change_group'):
+                return Group.objects.all()
+"#;
+        let sinks = django_missing_role_check_lines(views, "py");
+        assert_eq!(sinks, [8, 29].into_iter().collect());
+        assert!(django_missing_role_check_lines(views, "rb").is_empty());
     }
 
     #[test]
