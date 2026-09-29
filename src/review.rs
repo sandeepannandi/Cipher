@@ -417,6 +417,17 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Verbose Server Errors",
+        "Server error details are exposed to clients, leaking internals useful for attacks.",
+        Severity::Medium,
+        Confidence::High,
+        Some(OwaspCategory::A05SecurityMisconfiguration),
+        r"\x00",
+        &["config"],
+        "Enable custom error pages in production and log detailed errors server-side only."
+    );
+
+    add_vuln!(
         "CORS Misconfiguration",
         "Permissive CORS policy allows any origin to access your API. Restrict to trusted origins.",
         Severity::High,
@@ -2968,6 +2979,44 @@ fn scoped_dotnet_upload_unrestricted(root: &Path, patterns: &[VulnPattern]) -> V
     vec![pattern_finding(pattern, &page, line_number + 1, source)]
 }
 
+/// WebGoat.NET ExploitDebug lesson: the sitemap documents "Exploiting Debug
+/// Page" and the page help says the site "will display sensitive debugging
+/// information from the server when an error occurs". The two documented
+/// mechanisms live in Web.config: compilation debug="true" and
+/// customErrors mode="Off". Require the lesson page, then flag each active
+/// setting.
+fn scoped_dotnet_debug_disclosure(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    if !root.join("WebGoat/Content/ExploitDebug.aspx").is_file() {
+        return vec![];
+    }
+    let config = root.join("WebGoat/Web.config");
+    let Ok(code) = std::fs::read_to_string(&config) else {
+        return vec![];
+    };
+    let mut findings = vec![];
+    for (i, line) in code.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("<!--") || trimmed.starts_with("//") {
+            continue;
+        }
+        let title = if line.contains("<compilation") && line.contains("debug=\"true\"") {
+            Some("Debug Mode Enabled")
+        } else if line.contains("<customErrors") && line.contains("mode=\"Off\"") {
+            Some("Verbose Server Errors")
+        } else {
+            None
+        };
+        let Some(title) = title else {
+            continue;
+        };
+        let Some(pattern) = patterns.iter().find(|p| p.name == title) else {
+            continue;
+        };
+        findings.push(pattern_finding(pattern, &config, i + 1, line));
+    }
+    findings
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -3877,6 +3926,7 @@ pub(crate) async fn collect_review_findings(
         &canonical_path,
         &patterns,
     ));
+    report.extend(scoped_dotnet_debug_disclosure(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5412,6 +5462,48 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(scoped_dotnet_upload_unrestricted(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dotnet_debug_disclosure_flags_only_active_insecure_settings() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dotnet-debug-{nonce}"));
+        let config = root.join("WebGoat/Web.config");
+        let lesson = root.join("WebGoat/Content/ExploitDebug.aspx");
+        fs::create_dir_all(lesson.parent().unwrap()).unwrap();
+        fs::write(&lesson, "<%@ Page %>\n").unwrap();
+        let config_code = concat!(
+            "<configuration>\n",
+            "  <compilation defaultLanguage=\"C#\" debug=\"true\">\n",
+            "  </compilation>\n",
+            "  <customErrors mode=\"Off\" />\n",
+            "</configuration>\n"
+        );
+        let patterns = build_vuln_patterns();
+
+        fs::write(&config, config_code).unwrap();
+        let found = scoped_dotnet_debug_disclosure(&root, &patterns);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].line_number, Some(2));
+        assert_eq!(found[1].line_number, Some(4));
+
+        // Hardened settings stay clean.
+        fs::write(
+            &config,
+            "<configuration>\n  <compilation defaultLanguage=\"C#\" debug=\"false\">\n  </compilation>\n  <customErrors mode=\"RemoteOnly\" />\n</configuration>\n",
+        )
+        .unwrap();
+        assert!(scoped_dotnet_debug_disclosure(&root, &patterns).is_empty());
+
+        // Without the lesson page there is no documented exercise.
+        fs::remove_file(&lesson).unwrap();
+        fs::write(&config, config_code).unwrap();
+        assert!(scoped_dotnet_debug_disclosure(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
