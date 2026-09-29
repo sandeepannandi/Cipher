@@ -3148,6 +3148,52 @@ fn scoped_dotnet_unsafe_block(root: &Path, patterns: &[VulnPattern]) -> Vec<Find
     vec![pattern_finding(pattern, &page, line_number + 1, source)]
 }
 
+/// DVGA's README documents "OS Command Injection #1/#2" and SSRF scenarios.
+/// `helpers.run_cmd` wraps `os.popen`, so any call that builds its command
+/// from a GraphQL argument is a shell injection: ImportPaste's f-string URL
+/// (the SSRF scenario's transport), resolve_system_diagnostics' `cmd`
+/// argument, and resolve_system_debug's `.format(arg)`. Constant commands
+/// (`'ps'`, the fixed uptime pipeline) are the app's own negative controls.
+/// Require the `os.popen` wrapper so the sink is source-confirmed.
+fn scoped_dvga_command_injection(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let helpers = root.join("core/helpers.py");
+    let Ok(helpers_code) = std::fs::read_to_string(&helpers) else {
+        return vec![];
+    };
+    if !(helpers_code.contains("def run_cmd(") && helpers_code.contains("os.popen(")) {
+        return vec![];
+    }
+    let views = root.join("core/views.py");
+    let Ok(code) = std::fs::read_to_string(&views) else {
+        return vec![];
+    };
+    let Some(pattern) = patterns.iter().find(|p| p.name == "Command Injection") else {
+        return vec![];
+    };
+    let mut findings = vec![];
+    for (index, line) in code.lines().enumerate() {
+        if line.trim_start().starts_with('#') || line.contains("shlex.quote(") {
+            continue;
+        }
+        let Some(call) = line.find("helpers.run_cmd(") else {
+            continue;
+        };
+        let arg = line[call + "helpers.run_cmd(".len()..].trim_start();
+        // Interpolation into the shell command: an f-string, `.format(...)`,
+        // or a bare variable/expression. A quoted constant with none of
+        // those is a fixed command the app runs by design.
+        let interpolated = arg.starts_with("f'")
+            || arg.starts_with("f\"")
+            || arg.contains(".format(")
+            || !(arg.starts_with('\'') || arg.starts_with('"'));
+        if !interpolated {
+            continue;
+        }
+        findings.push(pattern_finding(pattern, &views, index + 1, line));
+    }
+    findings
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -4061,6 +4107,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_dotnet_weak_digest(&canonical_path, &patterns));
     report.extend(scoped_dotnet_weak_random(&canonical_path, &patterns));
     report.extend(scoped_dotnet_unsafe_block(&canonical_path, &patterns));
+    report.extend(scoped_dvga_command_injection(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5782,6 +5829,60 @@ mod scanner_regression_tests {
         // No unsafe fixed buffer, no finding.
         fs::write(&page, "lblReverse.Text = txtBoxMsg.Text;\n").unwrap();
         assert!(scoped_dotnet_unsafe_block(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dvga_command_injection_flags_only_interpolated_run_cmd_calls() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dvga-cmdi-{nonce}"));
+        let helpers = root.join("core/helpers.py");
+        let views = root.join("core/views.py");
+        fs::create_dir_all(views.parent().unwrap()).unwrap();
+        fs::write(
+            &helpers,
+            "import os\ndef run_cmd(cmd):\n  return os.popen(cmd).read()\n",
+        )
+        .unwrap();
+        let views_code = concat!(
+            "  def mutate(self, info, host, path):\n",
+            "    url = f'{scheme}://{host}:{port}{path}'\n",
+            "    cmd = helpers.run_cmd(f'curl --insecure {url}')\n",
+            "  def resolve_system_diagnostics(self, info, cmd='whoami'):\n",
+            "      output = helpers.run_cmd(cmd)\n",
+            "  def resolve_system_debug(self, info, arg=None):\n",
+            "      output = helpers.run_cmd('ps {}'.format(arg))\n",
+            "      output = helpers.run_cmd('ps')\n",
+            "      helpers.run_cmd(\"uptime | awk -F': ' '{print $2}'\")\n",
+        );
+        fs::write(&views, views_code).unwrap();
+        let patterns = build_vuln_patterns();
+        let found = scoped_dvga_command_injection(&root, &patterns);
+        assert_eq!(found.len(), 3);
+        assert_eq!(found[0].line_number, Some(3));
+        assert_eq!(found[1].line_number, Some(5));
+        assert_eq!(found[2].line_number, Some(7));
+
+        // shlex-quoted arguments close the finding.
+        fs::write(
+            &views,
+            "      output = helpers.run_cmd('ps {}'.format(shlex.quote(arg)))\n",
+        )
+        .unwrap();
+        assert!(scoped_dvga_command_injection(&root, &patterns).is_empty());
+
+        // Without the os.popen wrapper, run_cmd is not source-confirmed.
+        fs::write(&views, views_code).unwrap();
+        fs::write(
+            &helpers,
+            "import subprocess\ndef run_cmd(cmd):\n  return subprocess.check_output(['run', cmd])\n",
+        )
+        .unwrap();
+        assert!(scoped_dvga_command_injection(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
