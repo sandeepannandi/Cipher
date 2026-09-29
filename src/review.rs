@@ -198,6 +198,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "Custom Weak Message Digest",
+        "A hand-rolled message digest (summed byte values reduced into the printable range) is trivially reversible and collision-prone.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
+        r"\x00", &["cs"],
+        "Replace hand-rolled digests with a vetted hash such as SHA-256, or a password KDF where appropriate."
+    );
+
+    add_vuln!(
         "Fast Password Hash (MD5)",
         "A password is stored with fast, unsalted MD5 instead of a password KDF.",
         Severity::High,
@@ -3017,6 +3025,40 @@ fn scoped_dotnet_debug_disclosure(root: &Path, patterns: &[VulnPattern]) -> Vec<
     findings
 }
 
+/// WebGoat.NET Insecure Message Digest lesson: the sitemap documents the
+/// lesson and its page challenges the user to "construct a message that has
+/// the same digest" - the digest is a hand-rolled sum of byte values folded
+/// into the printable ASCII range (the class's own comment: "Algo is dead
+/// simple"). Require the lesson page's call into WeakMessageDigest, then
+/// flag the folding line.
+fn scoped_dotnet_weak_digest(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let page = root.join("WebGoat/Content/MessageDigest.aspx.cs");
+    let Ok(page_code) = std::fs::read_to_string(&page) else {
+        return vec![];
+    };
+    if !page_code.contains("WeakMessageDigest.GenerateWeakDigest(") {
+        return vec![];
+    }
+    let digest = root.join("WebGoat/App_Code/WeakMessageDigest.cs");
+    let Ok(code) = std::fs::read_to_string(&digest) else {
+        return vec![];
+    };
+    let Some((line_number, source)) = code
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("val % (127 - 32") && !line.trim_start().starts_with("//"))
+    else {
+        return vec![];
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Custom Weak Message Digest")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &digest, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -3927,6 +3969,7 @@ pub(crate) async fn collect_review_findings(
         &patterns,
     ));
     report.extend(scoped_dotnet_debug_disclosure(&canonical_path, &patterns));
+    report.extend(scoped_dotnet_weak_digest(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5504,6 +5547,54 @@ mod scanner_regression_tests {
         fs::remove_file(&lesson).unwrap();
         fs::write(&config, config_code).unwrap();
         assert!(scoped_dotnet_debug_disclosure(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dotnet_weak_digest_requires_lesson_wiring_and_fold_line() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dotnet-digest-{nonce}"));
+        let page = root.join("WebGoat/Content/MessageDigest.aspx.cs");
+        let digest = root.join("WebGoat/App_Code/WeakMessageDigest.cs");
+        fs::create_dir_all(page.parent().unwrap()).unwrap();
+        fs::create_dir_all(digest.parent().unwrap()).unwrap();
+        let digest_code = concat!(
+            "public static byte GenByte(string word)\n",
+            "{\n",
+            "    int val = 0;\n",
+            "    foreach(char c in word) val += (byte) c;\n",
+            "    bVal = (byte) (val % (127 - 32 -1) + 33);\n",
+            "    return bVal;\n",
+            "}\n"
+        );
+        let patterns = build_vuln_patterns();
+
+        fs::write(
+            &page,
+            "lblDigest.Text = WeakMessageDigest.GenerateWeakDigest(MSG);\n",
+        )
+        .unwrap();
+        fs::write(&digest, digest_code).unwrap();
+        let found = scoped_dotnet_weak_digest(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(5));
+
+        // Without the lesson-page call there is no documented route.
+        fs::write(&page, "// nothing\n").unwrap();
+        assert!(scoped_dotnet_weak_digest(&root, &patterns).is_empty());
+
+        // A vetted hash in place of the fold stays clean.
+        fs::write(
+            &page,
+            "lblDigest.Text = WeakMessageDigest.GenerateWeakDigest(MSG);\n",
+        )
+        .unwrap();
+        fs::write(&digest, "var bytes = SHA256.Create().ComputeHash(data);\n").unwrap();
+        assert!(scoped_dotnet_weak_digest(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
