@@ -524,7 +524,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Sensitive Data in Logging",
         "Logging potentially sensitive data (passwords, tokens, PII) can lead to data exposure.",
         Severity::Medium, Confidence::Low, Some(OwaspCategory::A09LoggingFailures),
-        r#"(?i)(?:log\.(?:info|debug|warn|error)|console\.log)\s*\([^)]*(?:password|token|secret|credit|ssn)\b[^)]*\)"#,
+        r#"(?i)(?:log\.(?:info|debug|warn|error)|console\.log|log\.(?:Printf|Println|Print|Fatalf|Fatal|Panicf))\s*\([^)]*(?:password|token|secret|credit|ssn)\b[^)]*\)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Sanitize logs to remove sensitive data. Use structured logging with sensitive field redaction."
     );
@@ -4265,6 +4265,42 @@ http.Redirect(w, r, "/dashboard", http.StatusFound)
 proxy(r.URL.Query().Get("to"))
 }"#;
         assert!(open_redirect_sink_lines(other_arg, "go").is_empty());
+    }
+
+    #[test]
+    fn go_log_printf_with_password_arg_is_reported() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-go-cred-log-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("auth.go");
+        let patterns = build_vuln_patterns();
+        fs::write(
+            &file,
+            r#"func Login(w http.ResponseWriter, r *http.Request) {
+password := r.FormValue("password")
+log.Printf("Login attempt: username=%s password=%s", username, password)
+}"#,
+        )
+        .unwrap();
+        let findings = scan_file_for_vulns(&file, &patterns);
+        assert!(findings
+            .iter()
+            .any(|f| f.title == "Sensitive Data in Logging" && f.line_number == Some(3)));
+        fs::write(
+            &file,
+            r#"func Login(w http.ResponseWriter, r *http.Request) {
+log.Printf("login ok for %s", username)
+}"#,
+        )
+        .unwrap();
+        let findings = scan_file_for_vulns(&file, &patterns);
+        assert!(!findings
+            .iter()
+            .any(|f| f.title == "Sensitive Data in Logging"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
