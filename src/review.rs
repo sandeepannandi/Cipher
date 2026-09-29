@@ -486,6 +486,14 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
     );
 
     add_vuln!(
+        "JWT Algorithm Not Pinned",
+        "JWT parsing does not restrict the accepted signing algorithm, so a forged alg=none or algorithm-confusion token verifies.",
+        Severity::High, Confidence::High, Some(OwaspCategory::A07AuthFailures),
+        r"\x00", &["go"],
+        "Pin the expected signing method in the key function, for example token.Method.(*jwt.SigningMethodHMAC), or pass jwt.WithValidMethods."
+    );
+
+    add_vuln!(
         "Missing CSRF Protection",
         "A cookie-session application exposes a state-changing route without active CSRF request verification.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A01BrokenAccessControl),
@@ -1041,6 +1049,7 @@ fn scan_file_for_vulns_with(
     let go_xss_sinks = go_html_xss_lines(&content, &ext);
     let go_xpath_sinks = go_xpath_sink_lines(&content, &ext);
     let go_email_sinks = go_email_header_sink_lines(&content, &ext);
+    let go_jwt_unpinned = go_jwt_unpinned_parse_lines(&content, &ext);
     let go_template_sinks = go_template_source_sink_lines(&content, &ext);
     let (password_hash_sinks, token_sinks, rsa_sinks, tls_sinks, cookie_sinks) =
         pilot_crypto_cookie_lines(&content, &ext);
@@ -1140,6 +1149,8 @@ fn scan_file_for_vulns_with(
                 || (pattern.name == "XPath Injection" && go_xpath_sinks.contains(&line_number))
                 || (pattern.name == "Email Header Injection"
                     && go_email_sinks.contains(&line_number))
+                || (pattern.name == "JWT Algorithm Not Pinned"
+                    && go_jwt_unpinned.contains(&line_number))
                 || (pattern.name == "Open Redirect" && redirect_sinks.contains(&line_number))
                 || (pattern.name == "Regular Expression Denial of Service (ReDoS)"
                     && redos_sites.contains(&line_number))
@@ -4383,6 +4394,38 @@ http.Redirect(w, r, "/dashboard", http.StatusFound)
 proxy(r.URL.Query().Get("to"))
 }"#;
         assert!(open_redirect_sink_lines(other_arg, "go").is_empty());
+    }
+
+    #[test]
+    fn go_jwt_parse_without_method_pinning_is_reported() {
+        let unpinned = r#"func ValidateJWT(w http.ResponseWriter, r *http.Request) {
+tokenStr := r.URL.Query().Get("token")
+token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+return jwtSecret, nil
+})
+_ = token
+_ = err
+}"#;
+        assert_eq!(go_jwt_unpinned_parse_lines(unpinned, "go"), [3].into());
+        let pinned = r#"func ValidateJWT(w http.ResponseWriter, r *http.Request) {
+tokenStr := r.URL.Query().Get("token")
+token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+return nil, fmt.Errorf("unexpected signing method")
+}
+return jwtSecret, nil
+})
+_ = token
+_ = err
+}"#;
+        assert!(go_jwt_unpinned_parse_lines(pinned, "go").is_empty());
+        let valid_methods = r#"func ValidateJWT(w http.ResponseWriter, r *http.Request) {
+token, err := jwt.Parse(tokenStr, keyFunc, jwt.WithValidMethods([]string{"HS256"}))
+_ = token
+_ = err
+}"#;
+        assert!(go_jwt_unpinned_parse_lines(valid_methods, "go").is_empty());
+        assert!(go_jwt_unpinned_parse_lines(unpinned, "js").is_empty());
     }
 
     #[test]
@@ -12287,6 +12330,32 @@ fn go_template_source_sink_lines(
 
 /// Only the raw header construction counts: envelope recipients and body data do not.
 #[allow(clippy::items_after_test_module)]
+/// A jwt.Parse/jwt.ParseWithClaims call in a file that never validates the
+/// token's signing method accepts alg=none and algorithm-confusion tokens
+/// (the key function is invoked for every algorithm). Files that pin the
+/// method via the standard type assertion or jwt.WithValidMethods are
+/// suppressed.
+fn go_jwt_unpinned_parse_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    if extension != "go" || !content.contains("jwt.Parse") {
+        return found;
+    }
+    if content.contains("token.Method.(*jwt.SigningMethod") || content.contains("WithValidMethods")
+    {
+        return found;
+    }
+    for (index, line) in content.lines().enumerate() {
+        let text = line.trim_start();
+        if text.starts_with("//") {
+            continue;
+        }
+        if text.contains("jwt.Parse(") || text.contains("jwt.ParseWithClaims(") {
+            found.insert(index + 1);
+        }
+    }
+    found
+}
+
 fn go_email_header_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
     if extension != "go" || !content.contains("smtp.SendMail(") {
         return std::collections::HashSet::new();
