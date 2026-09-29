@@ -3194,6 +3194,39 @@ fn scoped_dvga_command_injection(root: &Path, patterns: &[VulnPattern]) -> Vec<F
     findings
 }
 
+/// DVGA's README documents "Arbitrary File Write // Path Traversal".
+/// `UploadPaste` takes a `filename` GraphQL argument and passes it straight
+/// to `helpers.save_file`, which concatenates it onto WEB_UPLOADDIR in
+/// `open(...)`. Require both the mutation route and the concatenating open
+/// so the finding is source-confirmed end to end; a basename/join rewrite
+/// of the open line closes it.
+fn scoped_dvga_arbitrary_file_write(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let views = root.join("core/views.py");
+    let Ok(views_code) = std::fs::read_to_string(&views) else {
+        return vec![];
+    };
+    if !(views_code.contains("def mutate(self, info, filename, content):")
+        && views_code.contains("helpers.save_file(filename, content)"))
+    {
+        return vec![];
+    }
+    let helpers = root.join("core/helpers.py");
+    let Ok(code) = std::fs::read_to_string(&helpers) else {
+        return vec![];
+    };
+    let Some((line_number, source)) = code
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("open(WEB_UPLOADDIR + filename"))
+    else {
+        return vec![];
+    };
+    let Some(pattern) = patterns.iter().find(|p| p.name == "Path Traversal") else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &helpers, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -4108,6 +4141,7 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_dotnet_weak_random(&canonical_path, &patterns));
     report.extend(scoped_dotnet_unsafe_block(&canonical_path, &patterns));
     report.extend(scoped_dvga_command_injection(&canonical_path, &patterns));
+    report.extend(scoped_dvga_arbitrary_file_write(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5883,6 +5917,49 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(scoped_dvga_command_injection(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dvga_arbitrary_file_write_needs_route_and_concat_open() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dvga-afw-{nonce}"));
+        let helpers = root.join("core/helpers.py");
+        let views = root.join("core/views.py");
+        fs::create_dir_all(views.parent().unwrap()).unwrap();
+        fs::write(
+            &views,
+            "  def mutate(self, info, filename, content):\n    result = helpers.save_file(filename, content)\n",
+        )
+        .unwrap();
+        let helpers_code = concat!(
+            "def save_file(filename, text):\n",
+            "  try:\n",
+            "    f = open(WEB_UPLOADDIR + filename, 'w')\n",
+            "    f.write(text)\n",
+        );
+        fs::write(&helpers, helpers_code).unwrap();
+        let patterns = build_vuln_patterns();
+        let found = scoped_dvga_arbitrary_file_write(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(3));
+
+        // A basename scrub closes the finding.
+        fs::write(
+            &helpers,
+            "import os\ndef save_file(filename, text):\n  f = open(WEB_UPLOADDIR + os.path.basename(filename), 'w')\n",
+        )
+        .unwrap();
+        assert!(scoped_dvga_arbitrary_file_write(&root, &patterns).is_empty());
+
+        // Without the mutation route, the open is not user-reachable.
+        fs::write(&helpers, helpers_code).unwrap();
+        fs::write(&views, "  def mutate(self, info):\n    pass\n").unwrap();
+        assert!(scoped_dvga_arbitrary_file_write(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
