@@ -869,6 +869,28 @@ fn is_crypto_import_only(line: &str, ext: &str) -> bool {
     ext == "go" && line == ["\"crypto/", "d", "es\""].concat()
 }
 
+/// A request value constrained to ASCII digits by a guard on the exact same
+/// request expression cannot break out of a SQL string literal. The guard
+/// must appear earlier in the same file and reference the same expression.
+fn php_digits_guarded_request_source(
+    lines: &[&str],
+    assign_index: usize,
+    source_expr: &str,
+) -> bool {
+    let compact_expr: String = source_expr.chars().filter(|c| !c.is_whitespace()).collect();
+    lines[..assign_index].iter().any(|line| {
+        let text = line.trim();
+        if !text.contains("preg_match(") {
+            return false;
+        }
+        if !text.contains(r"'/^\d+$/'") && !text.contains(r#""/^\d+$/""#) {
+            return false;
+        }
+        let compact_line: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        compact_line.contains(&compact_expr)
+    })
+}
+
 /// Narrow PHP/Ruby request-to-query and shell paths. Report the SQL string
 /// construction (rather than the later query call) when that is the reviewed
 /// location. Bind parameters and numeric coercions are not string composition.
@@ -907,6 +929,8 @@ fn ruby_php_injection_lines(
             Regex::new(r"(?i)^\s*(\$[A-Za-z_][A-Za-z_0-9]*)\s*=").expect("PHP assignment regex");
         let query = Regex::new(r"(?i)\b(?:SELECT|INSERT|UPDATE|DELETE)\b").expect("SQL verb regex");
         let interpolate = Regex::new(r"\$[A-Za-z_][A-Za-z_0-9]*").expect("PHP interpolation regex");
+        let request_expr = Regex::new(r"\$_(?:GET|POST|REQUEST)\s*\[[^\]]+\]")
+            .expect("PHP request expression regex");
         let mut tainted = HashSet::<String>::new();
         let has_query_sink = lines
             .iter()
@@ -917,7 +941,15 @@ fn ruby_php_injection_lines(
                 continue;
             }
             if let Some(capture) = source.captures(text) {
-                tainted.insert(capture[1].to_string());
+                // A digits-only preg_match guard on the exact same request
+                // expression constrains the value to [0-9]+ before the
+                // assignment, so it cannot break out of a SQL string.
+                let guarded = request_expr.find(text).is_some_and(|hit| {
+                    php_digits_guarded_request_source(&lines, index, hit.as_str())
+                });
+                if !guarded {
+                    tainted.insert(capture[1].to_string());
+                }
                 continue;
             }
             if let Some(capture) = assign.captures(text) {
