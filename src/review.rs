@@ -229,6 +229,16 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Use the JSON session serializer; reserve Pickle for trusted, signed payloads."
     );
     add_vuln!(
+        "CSRF Protection Disabled",
+        "A Django view opts out of CSRF validation with the csrf_exempt decorator: state-changing requests can be forged cross-site.",
+        Severity::Medium,
+        Confidence::High,
+        Some(OwaspCategory::A01BrokenAccessControl),
+        r"\x00",
+        &["py"],
+        "Remove the csrf_exempt decorator and rely on CsrfViewMiddleware; exempt only endpoints that genuinely cannot carry a nonce."
+    );
+    add_vuln!(
         "Predictable Session Token",
         "A security token or session cookie is derived from a predictable random or counter value.",
         Severity::High,
@@ -1076,6 +1086,7 @@ fn scan_file_for_vulns_with(
         pilot_crypto_cookie_lines(&content, &ext);
     let (django_password_sinks, django_cookie_session_sinks, django_pickle_sinks) =
         django_settings_sink_lines(&content, &ext);
+    let django_csrf_exempt_sinks = django_csrf_exempt_lines(&content, &ext);
     let rails_assignment_sinks = rails_assignment_sink_lines(&content, &ext);
     let redirect_sinks = open_redirect_sink_lines(&content, &ext);
     let redos_sites = redos_sink_lines(&content, &ext);
@@ -1153,6 +1164,8 @@ fn scan_file_for_vulns_with(
                     && django_cookie_session_sinks.contains(&line_number))
                 || (pattern.name == "Pickle Session Serializer"
                     && django_pickle_sinks.contains(&line_number))
+                || (pattern.name == "CSRF Protection Disabled"
+                    && django_csrf_exempt_sinks.contains(&line_number))
                 || (pattern.name == "Predictable Session Token"
                     && token_sinks.contains(&line_number))
                 || (pattern.name == "Weak RSA Key Size" && rsa_sinks.contains(&line_number))
@@ -1707,6 +1720,27 @@ fn django_settings_sink_lines(
         }
     }
     (password, cookie_session, pickle)
+}
+
+/// Django views decorated with @csrf_exempt opt out of CSRF token validation.
+/// The decorator is an exact, intentional opt-out, so the FP surface is empty;
+/// commented-out lines are skipped by the trim/'#' guard.
+fn django_csrf_exempt_lines(content: &str, ext: &str) -> std::collections::HashSet<usize> {
+    use std::collections::HashSet;
+    let mut sinks = HashSet::new();
+    if ext != "py" {
+        return sinks;
+    }
+    for (i, line) in content.lines().enumerate() {
+        let code = line.trim();
+        if code.starts_with('#') {
+            continue;
+        }
+        if code == "@csrf_exempt" {
+            sinks.insert(i + 1);
+        }
+    }
+    sinks
 }
 
 /// Security-sensitive crypto/cookie patterns with enough local context to avoid
@@ -4512,6 +4546,27 @@ SESSION_SERIALIZER = "django.contrib.sessions.serializers.JSONSerializer"
         assert!(password.is_empty() && cookie_session.is_empty() && pickle.is_empty());
         let (password, _, _) = django_settings_sink_lines(settings, "rb");
         assert!(password.is_empty());
+    }
+
+    #[test]
+    fn django_csrf_exempt_decorator_is_reported() {
+        let views = r#"from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def reset_password(request):
+    pass
+
+@csrf_protect
+def safe_view(request):
+    pass
+
+# @csrf_exempt
+def commented_out(request):
+    pass
+"#;
+        let sinks = django_csrf_exempt_lines(views, "py");
+        assert_eq!(sinks, [3].into_iter().collect());
+        assert!(django_csrf_exempt_lines(views, "js").is_empty());
     }
 
     #[test]
