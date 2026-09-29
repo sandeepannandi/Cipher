@@ -698,6 +698,30 @@ fn signing_secret_sink_lines(
     let properties_key = Regex::new(
         r#"(?i)^\s*(?:jwt[._-]secret|jwt[._-]key|session[._-]secret|cookie[._-]secret|signing[._-]key)\s*[=:]\s*([^\s#]+)"#
     ).expect("properties signing secret regex");
+    // Go: a var/const whose name marks signing material holds a fixed string
+    // or []byte literal, and the same file passes that identifier to
+    // SignedString. Environment-derived values do not match the literal.
+    if ext == "go" {
+        let decl = Regex::new(
+            r#"(?i)^\s*(?:var|const)\s+([A-Za-z_]\w*(?:secret|signing)\w*)\s*=\s*(?:\[\]byte\s*\(\s*)?["'][^"']{4,}["']\s*\)?"#
+        )
+        .expect("Go signing secret declaration regex");
+        for (index, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+                continue;
+            }
+            let Some(caps) = decl.captures(line) else {
+                continue;
+            };
+            let identifier = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let usage = format!(".SignedString({identifier})");
+            if content.contains(&usage) {
+                lines.insert(index + 1);
+            }
+        }
+        return lines;
+    }
     for (index, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty()
@@ -4300,6 +4324,36 @@ log.Printf("login ok for %s", username)
         assert!(!findings
             .iter()
             .any(|f| f.title == "Sensitive Data in Logging"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn go_signing_secret_requires_literal_decl_and_signedstring_use() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-go-jwt-secret-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("jwt.go");
+        let used = r#"package handlers
+var jwtSecret = []byte("secret")
+func sign(token *jwt.Token) (string, error) {
+return token.SignedString(jwtSecret)
+}"#;
+        assert_eq!(signing_secret_sink_lines(&file, used, "go"), [2].into());
+        let unused = r#"package handlers
+var jwtSecret = []byte("secret")
+func sign(token *jwt.Token) (string, error) {
+return token.SignedString(os.Getenv("JWT_KEY"))
+}"#;
+        assert!(signing_secret_sink_lines(&file, unused, "go").is_empty());
+        let env = r#"package handlers
+var jwtSecret = []byte(os.Getenv("JWT_SECRET"))
+func sign(token *jwt.Token) (string, error) {
+return token.SignedString(jwtSecret)
+}"#;
+        assert!(signing_secret_sink_lines(&file, env, "go").is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
