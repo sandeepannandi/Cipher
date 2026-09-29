@@ -2737,6 +2737,93 @@ fn scoped_php_single_pass_include_filter(root: &Path, patterns: &[VulnPattern]) 
     vec![pattern_finding(pattern, &medium, line_number + 1, source)]
 }
 
+/// WebGoat.NET SQLi lessons: the sitemap documents "Exploiting SQL
+/// Injection" and "SQL Error Messages"; both lesson pages call into the DB
+/// provider methods that build their queries by concatenating the user
+/// value. Require the lesson-page call wiring, then flag the concatenated
+/// query line inside each documented method. Commented-out code never
+/// reports.
+fn scoped_dotnet_lesson_sqli(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let lessons = [
+        (
+            "WebGoat/Content/SQLInjection.aspx.cs",
+            "GetEmailByName",
+            "firstName like '\" + name +",
+        ),
+        (
+            "WebGoat/Content/SQLInjectionDiscovery.aspx.cs",
+            "GetEmailByCustomerNumber",
+            "customerNumber = \" + num",
+        ),
+    ];
+    let providers = [
+        "WebGoat/App_Code/DB/SqliteDbProvider.cs",
+        "WebGoat/App_Code/DB/MySqlDbProvider.cs",
+    ];
+    let mut findings = vec![];
+    for (lesson_page, method, query_marker) in lessons {
+        let lesson = root.join(lesson_page);
+        let Ok(lesson_code) = std::fs::read_to_string(&lesson) else {
+            continue;
+        };
+        if !lesson_code.contains(&format!("du.{method}(")) {
+            continue;
+        }
+        for provider in providers {
+            let path = root.join(provider);
+            let Ok(code) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            // Strip block comments so dead code cannot report.
+            let mut active = String::with_capacity(code.len());
+            let mut in_comment = false;
+            let mut chars = code.chars().peekable();
+            while let Some(c) = chars.next() {
+                if in_comment {
+                    if c == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        in_comment = false;
+                    }
+                    if c == '\n' {
+                        active.push('\n');
+                    }
+                } else if c == '/' && chars.peek() == Some(&'*') {
+                    chars.next();
+                    in_comment = true;
+                } else {
+                    active.push(c);
+                }
+            }
+            let lines: Vec<&str> = active.lines().collect();
+            let Some(signature) = lines
+                .iter()
+                .position(|line| line.contains(&format!("{method}(string ")))
+            else {
+                continue;
+            };
+            let Some(offset) = lines[signature + 1..].iter().position(|line| {
+                line.contains(query_marker) && !line.trim_start().starts_with("//")
+            }) else {
+                continue;
+            };
+            let line_number = signature + 1 + offset;
+            let Some(pattern) = patterns
+                .iter()
+                .find(|p| p.name.starts_with("SQL Injection"))
+            else {
+                continue;
+            };
+            findings.push(pattern_finding(
+                pattern,
+                &path,
+                line_number + 1,
+                lines[line_number],
+            ));
+        }
+    }
+    findings
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -3639,6 +3726,7 @@ pub(crate) async fn collect_review_findings(
         &canonical_path,
         &patterns,
     ));
+    report.extend(scoped_dotnet_lesson_sqli(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -4992,6 +5080,43 @@ mod scanner_regression_tests {
         fs::write(&medium, medium_code).unwrap();
         fs::write(&index, "<?php\nprint \"ok\";\n").unwrap();
         assert!(scoped_php_single_pass_include_filter(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dotnet_lesson_sqli_requires_lesson_wiring_and_active_concat() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dotnet-sqli-{nonce}"));
+        let lesson = root.join("WebGoat/Content/SQLInjection.aspx.cs");
+        let provider = root.join("WebGoat/App_Code/DB/SqliteDbProvider.cs");
+        fs::create_dir_all(lesson.parent().unwrap()).unwrap();
+        fs::create_dir_all(provider.parent().unwrap()).unwrap();
+        let provider_code = concat!(
+            "public DataSet GetEmailByName(string name)\n",
+            "{\n",
+            "    string sql = \"select firstName, lastName, email from Employees where firstName like '\" + name + \"%'\";\n",
+            "/*\n",
+            "    string sql2 = \"select firstName from Employees where firstName like '\" + name + \"%'\";\n",
+            "*/\n",
+            "}\n"
+        );
+        let patterns = build_vuln_patterns();
+
+        // Wired lesson page: the active concatenated query reports, the
+        // commented-out twin stays dead.
+        fs::write(&lesson, "DataSet ds = du.GetEmailByName(name);\n").unwrap();
+        fs::write(&provider, provider_code).unwrap();
+        let found = scoped_dotnet_lesson_sqli(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(3));
+
+        // Without the lesson-page call there is no documented route.
+        fs::write(&lesson, "// nothing here\n").unwrap();
+        assert!(scoped_dotnet_lesson_sqli(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
