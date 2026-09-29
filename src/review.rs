@@ -6624,6 +6624,63 @@ def show_user(uid):
     }
 
     #[test]
+    fn python_multiline_execute_percent_format_is_reported() {
+        let findings = scan(
+            r#"def upload(request, project_id):
+    name = request.POST.get('name', False)
+    curs = connection.cursor()
+    curs.execute(
+        "insert into taskManager_file ('name','path','project_id') values ('%s','%s',%s)" %
+        (name, upload_path, project_id))"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(4));
+    }
+
+    #[test]
+    fn python_multiline_fstring_argument_is_reported() {
+        let findings = scan(
+            r#"def show(request):
+    name = request.GET.get('name')
+    cursor.execute(
+        f"SELECT * FROM users WHERE name = '{name}'"
+    )"#,
+            "py",
+        );
+        assert_eq!(titles(&findings), vec![SQLI]);
+        assert_eq!(findings[0].line_number, Some(3));
+    }
+
+    #[test]
+    fn python_multiline_parameterized_execute_is_clean() {
+        let findings = scan(
+            r#"def upload(request):
+    name = request.POST.get('name')
+    curs = connection.cursor()
+    curs.execute(
+        "insert into files ('name') values (%s)",
+        (name,),
+    )"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn python_multiline_execute_without_request_input_is_clean() {
+        let findings = scan(
+            r#"def rebuild():
+    curs = connection.cursor()
+    curs.execute(
+        "insert into t ('name') values ('%s')" %
+        (constant_name,))"#,
+            "py",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
     fn python_plain_helper_param_is_not_seeded() {
         let findings = scan(
             r#"def build_query(name):
@@ -12027,6 +12084,66 @@ fn call_arguments(text: &str, open: usize) -> Vec<String> {
     args
 }
 
+/// True when the call whose argument list starts at `open` has no closing
+/// bracket at depth zero before the end of `text`: the call's arguments
+/// continue on later lines.
+#[allow(clippy::items_after_test_module)]
+fn call_unterminated(text: &str, open: usize) -> bool {
+    let mut depth = 0usize;
+    for ch in text[open + 1..].chars() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth == 0 => return false,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    true
+}
+
+/// Join continuation lines onto an unterminated call's text so its argument
+/// list can be read by `call_arguments`. Bounded at eight extra lines; each
+/// continuation gets the same comment stripping and string blanking the flow
+/// pass applies per line, so brackets inside string literals do not skew the
+/// balance.
+#[allow(clippy::items_after_test_module)]
+fn extend_call_text(
+    lines: &[&str],
+    line_index: usize,
+    visible: &str,
+    language: FlowLanguage,
+    open: usize,
+) -> String {
+    let balance = |text: &str| -> i32 {
+        text.chars().fold(0, |acc, ch| match ch {
+            '(' | '[' | '{' => acc + 1,
+            ')' | ']' | '}' => acc - 1,
+            _ => acc,
+        })
+    };
+    let mut joined = visible.to_string();
+    let mut open_brackets = balance(&visible[open..]);
+    for next in lines.iter().skip(line_index + 1).take(8) {
+        if open_brackets <= 0 {
+            break;
+        }
+        let raw = if language == FlowLanguage::Python {
+            next.split('#').next().unwrap_or("")
+        } else {
+            next
+        };
+        let code = raw.trim();
+        if code.is_empty() {
+            continue;
+        }
+        let blanked = blank_plain_strings(code, language);
+        joined.push(' ');
+        joined.push_str(&blanked);
+        open_brackets += balance(&blanked);
+    }
+    joined
+}
+
 /// Request-input sources for each language, matching the ones proven in the
 /// path-traversal flow models.
 #[allow(clippy::items_after_test_module)]
@@ -12847,7 +12964,15 @@ fn flow_pass(
                         return false;
                     };
                     let name = captures.get(1).map(|m| m.as_str()).unwrap_or("");
-                    let args = call_arguments(&visible, whole.end() - 1);
+                    let open = whole.end() - 1;
+                    let extended;
+                    let text = if call_unterminated(&visible, open) {
+                        extended = extend_call_text(lines, line_index, &visible, language, open);
+                        extended.as_str()
+                    } else {
+                        visible.as_str()
+                    };
+                    let args = call_arguments(text, open);
                     (sink.arguments)(name).into_iter().any(|position| {
                         args.get(position).is_some_and(|arg| {
                             !sanitized(arg)
