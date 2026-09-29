@@ -1120,6 +1120,15 @@ fn scan_file_for_vulns_with(
             if pattern.name == "Debug Mode Enabled" && trimmed.contains("assets.debug") {
                 continue;
             }
+
+            // The vendored Google JS API loader ships with the literal
+            // placeholder key 'notsupplied'; it is a placeholder string,
+            // not a credential.
+            if pattern.name == "Hardcoded Credentials"
+                && (trimmed.contains("'notsupplied'") || trimmed.contains("\"notsupplied\""))
+            {
+                continue;
+            }
             if pattern.name == ["Weak Encryption — ", "D", "ES"].concat()
                 && is_crypto_import_only(trimmed, &ext)
             {
