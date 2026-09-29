@@ -2824,6 +2824,45 @@ fn scoped_dotnet_lesson_sqli(root: &Path, patterns: &[VulnPattern]) -> Vec<Findi
     findings
 }
 
+/// WebGoat.NET file-download lesson: the sitemap documents "File Download
+/// Path Manipulation" and the page's own help says the flaw is trusting a
+/// user-supplied filename to build a path ("try manipulating the get
+/// parameter and download WebGoat.NET's Web.config"). Require the query
+/// string source and flag the line that concatenates the filename into the
+/// MapPath target. A Path.GetFileName scrub closes the finding.
+fn scoped_dotnet_path_manipulation(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let page = root.join("WebGoat/Content/PathManipulation.aspx.cs");
+    let Ok(code) = std::fs::read_to_string(&page) else {
+        return vec![];
+    };
+    let active = |line: &&str| {
+        let trimmed = line.trim_start();
+        !trimmed.starts_with("//") && !trimmed.starts_with('*')
+    };
+    let sourced = code
+        .lines()
+        .filter(active)
+        .any(|line| line.contains("Request.QueryString[\"filename\"]"));
+    let scrubbed = code
+        .lines()
+        .filter(active)
+        .any(|line| line.contains("Path.GetFileName("));
+    if !sourced || scrubbed {
+        return vec![];
+    }
+    let Some((line_number, source)) = code
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("MapPath(\"~/Downloads/\" + filename)") && active(line))
+    else {
+        return vec![];
+    };
+    let Some(pattern) = patterns.iter().find(|p| p.name == "Path Traversal") else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &page, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -3727,6 +3766,7 @@ pub(crate) async fn collect_review_findings(
         &patterns,
     ));
     report.extend(scoped_dotnet_lesson_sqli(&canonical_path, &patterns));
+    report.extend(scoped_dotnet_path_manipulation(&canonical_path, &patterns));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5117,6 +5157,49 @@ mod scanner_regression_tests {
         // Without the lesson-page call there is no documented route.
         fs::write(&lesson, "// nothing here\n").unwrap();
         assert!(scoped_dotnet_lesson_sqli(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dotnet_path_manipulation_requires_source_and_unscrubbed_concat() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dotnet-path-{nonce}"));
+        let page = root.join("WebGoat/Content/PathManipulation.aspx.cs");
+        fs::create_dir_all(page.parent().unwrap()).unwrap();
+        let page_code = concat!(
+            "protected void Page_Load(object sender, EventArgs e)\n",
+            "{\n",
+            "    string filename = Request.QueryString[\"filename\"];\n",
+            "    if(filename != null)\n",
+            "        ResponseFile(Request, Response, filename, MapPath(\"~/Downloads/\" + filename), 100);\n",
+            "}\n"
+        );
+        let patterns = build_vuln_patterns();
+
+        fs::write(&page, page_code).unwrap();
+        let found = scoped_dotnet_path_manipulation(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(5));
+
+        // A Path.GetFileName scrub closes the traversal.
+        fs::write(
+            &page,
+            "string filename = Path.GetFileName(Request.QueryString[\"filename\"]);\nResponseFile(Request, Response, filename, MapPath(\"~/Downloads/\" + filename), 100);\n",
+        )
+        .unwrap();
+        assert!(scoped_dotnet_path_manipulation(&root, &patterns).is_empty());
+
+        // A fixed download target has no user-controlled component.
+        fs::write(
+            &page,
+            "ResponseFile(Request, Response, \"report.pdf\", MapPath(\"~/Downloads/report.pdf\"), 100);\n",
+        )
+        .unwrap();
+        assert!(scoped_dotnet_path_manipulation(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
