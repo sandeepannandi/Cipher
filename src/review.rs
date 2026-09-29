@@ -2929,6 +2929,45 @@ fn scoped_dotnet_lesson_xss(root: &Path, patterns: &[VulnPattern]) -> Vec<Findin
     findings
 }
 
+/// WebGoat.NET file-upload lesson: the sitemap documents "File Upload Path
+/// Manipulation" and the page help says to "upload a file that will execute
+/// on the server" - the upload handler saves the user-named file into a
+/// web-accessible directory with no extension or content allowlist (the
+/// page's own "PDF, Excel or Plain Text" label is unenforced). Flag the
+/// SaveAs line; an extension allowlist anywhere in the handler closes it.
+fn scoped_dotnet_upload_unrestricted(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
+    let page = root.join("WebGoat/Content/UploadPathManipulation.aspx.cs");
+    let Ok(code) = std::fs::read_to_string(&page) else {
+        return vec![];
+    };
+    let active = |line: &&str| {
+        let trimmed = line.trim_start();
+        !trimmed.starts_with("//") && !trimmed.starts_with('*')
+    };
+    let allowlisted = code
+        .lines()
+        .filter(active)
+        .any(|line| line.contains("EndsWith(\".") || line.contains("AllowedExtension"));
+    if allowlisted {
+        return vec![];
+    }
+    let Some((line_number, source)) = code.lines().enumerate().find(|(_, line)| {
+        line.contains("FileUpload1.SaveAs(")
+            && line.contains("Server.MapPath(")
+            && line.contains('+')
+            && active(line)
+    }) else {
+        return vec![];
+    };
+    let Some(pattern) = patterns
+        .iter()
+        .find(|p| p.name == "Unrestricted File Upload")
+    else {
+        return vec![];
+    };
+    vec![pattern_finding(pattern, &page, line_number + 1, source)]
+}
+
 /// Rails 8.0's legacy redirect default allows off-site redirects unless the
 /// application opts into 7.0+ defaults or explicitly forbids other hosts.
 fn scoped_rails_login_redirect(root: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
@@ -3834,6 +3873,10 @@ pub(crate) async fn collect_review_findings(
     report.extend(scoped_dotnet_lesson_sqli(&canonical_path, &patterns));
     report.extend(scoped_dotnet_path_manipulation(&canonical_path, &patterns));
     report.extend(scoped_dotnet_lesson_xss(&canonical_path, &patterns));
+    report.extend(scoped_dotnet_upload_unrestricted(
+        &canonical_path,
+        &patterns,
+    ));
     report.extend(scoped_rails_login_redirect(&canonical_path, &patterns));
     report.extend(scoped_rails_login_enumeration(&canonical_path, &patterns));
     report.extend(scoped_php_ruby_file_xss_findings(
@@ -5327,6 +5370,48 @@ mod scanner_regression_tests {
         )
         .unwrap();
         assert!(scoped_dotnet_lesson_xss(&root, &patterns).is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dotnet_upload_unrestricted_requires_saveas_without_allowlist() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("cipher-dotnet-upload-{nonce}"));
+        let page = root.join("WebGoat/Content/UploadPathManipulation.aspx.cs");
+        fs::create_dir_all(page.parent().unwrap()).unwrap();
+        let page_code = concat!(
+            "if (FileUpload1.HasFile)\n",
+            "{\n",
+            "    string filename = Path.GetFileName(FileUpload1.FileName);\n",
+            "    FileUpload1.SaveAs(Server.MapPath(\"~/WebGoatCoins/uploads/\") + filename);\n",
+            "}\n"
+        );
+        let patterns = build_vuln_patterns();
+
+        fs::write(&page, page_code).unwrap();
+        let found = scoped_dotnet_upload_unrestricted(&root, &patterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_number, Some(4));
+
+        // An extension allowlist closes the finding.
+        fs::write(
+            &page,
+            "if (!FileUpload1.FileName.EndsWith(\".pdf\")) { return; }\nFileUpload1.SaveAs(Server.MapPath(\"~/uploads/\") + filename);\n",
+        )
+        .unwrap();
+        assert!(scoped_dotnet_upload_unrestricted(&root, &patterns).is_empty());
+
+        // A fixed server-side name has no user-controlled path component.
+        fs::write(
+            &page,
+            "FileUpload1.SaveAs(Server.MapPath(\"~/uploads/report.pdf\"));\n",
+        )
+        .unwrap();
+        assert!(scoped_dotnet_upload_unrestricted(&root, &patterns).is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
