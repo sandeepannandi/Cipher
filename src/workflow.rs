@@ -353,7 +353,10 @@ pub fn scan_workflow(path: &Path, content: &str) -> Vec<Finding> {
                         (
                             UNPINNED_ACTION_TITLE,
                             FindingType::Dependency,
-                            Severity::Medium,
+                            // CI hygiene: real supply-chain signal, but not
+                            // a vulnerability - report at low severity so
+                            // --fail-on medium pipelines are not gated on it.
+                            Severity::Low,
                             Confidence::High,
                             OwaspCategory::A08IntegrityFailures,
                             "CWE-829",
@@ -503,6 +506,19 @@ mod tests {
                 (UNPINNED_ACTION_TITLE.to_string(), 11),
             ]
         );
+        // CI hygiene is reported at low severity - real signal, not a vuln.
+        let findings = scan_workflow(Path::new("repo/.github/workflows/test.yml"), &src);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.title == UNPINNED_ACTION_TITLE)
+                .count(),
+            2
+        );
+        assert!(findings
+            .iter()
+            .filter(|f| f.title == UNPINNED_ACTION_TITLE)
+            .all(|f| f.severity == Severity::Low));
     }
 
     #[test]
