@@ -1468,7 +1468,13 @@ fn is_test_context_path(path: &Path, root: &Path) -> bool {
                 | "examples"
                 | "sample"
                 | "samples"
-        )
+                | "benchmark"
+                | "benchmarks"
+                | "step_definitions"
+        ) || part.ends_with("-tests")
+            || part.ends_with("_tests")
+            || part.ends_with("-test")
+            || part.ends_with("_test")
     }) {
         return true;
     }
@@ -4289,6 +4295,18 @@ pub(crate) async fn collect_review_findings(
         }
     }
 
+    // Test, example, fixture and benchmark paths are excluded outright: usage
+    // there is deliberate and does not ship, so these findings are noise
+    // rather than low-severity signal. Detectors keep their full surface on
+    // shipped code.
+    let root_for_filter = canonical_path.clone();
+    report.findings.retain(|finding| {
+        finding
+            .file_path
+            .as_deref()
+            .map(|path| !is_test_context_path(Path::new(path), &root_for_filter))
+            .unwrap_or(true)
+    });
     attach_verified_paths(&mut report.findings, &canonical_path);
     downgrade_test_context(&mut report.findings, &canonical_path);
     mark_deployment_context(&mut report.findings, &canonical_path);
@@ -7731,6 +7749,9 @@ res.render("tutorial/a1", { page: req.query.page });
             "src/services/auth.test.ts",
             "src/test_auth.py",
             "src/Example.java",
+            "guava-tests/test/HashingTest.java",
+            "benchmark/throughput.go",
+            "features/step_definitions/login_steps.rb",
         ] {
             let expected = path != "src/Example.java";
             assert_eq!(
@@ -7746,6 +7767,9 @@ res.render("tutorial/a1", { page: req.query.page });
             "src/testing.ts",
             "src/production.java",
             "conduit/settings.py",
+            "src/latest.rs",
+            "src/contest-results.js",
+            "src/attest.go",
         ] {
             assert!(!is_test_context_path(&root.join(path), root), "{path}");
         }
@@ -7756,7 +7780,7 @@ res.render("tutorial/a1", { page: req.query.page });
     }
 
     #[tokio::test]
-    async fn review_downgrades_test_credentials_but_not_production() {
+    async fn review_excludes_test_credentials_but_not_production() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -7783,15 +7807,18 @@ res.render("tutorial/a1", { page: req.query.page });
                 })
                 .expect("credential finding")
         };
-        let test = credential(&fixture);
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.file_path.as_deref() != Some(fixture.to_string_lossy().as_ref())),
+            "test-context finding is excluded, not downgraded"
+        );
         let prod = credential(&production);
-        assert_eq!(test.severity, Severity::Low);
-        assert!(test.description.starts_with("Test/fixture context: "));
         assert_eq!(prod.severity, Severity::Critical);
         assert!(!prod.description.starts_with("Test/fixture context: "));
-        assert_eq!(test.confidence, prod.confidence);
         let json = generate_review_json(&report);
-        assert!(json.contains("Test/fixture context:"));
+        assert!(!json.contains("Test/fixture context:"));
         fs::remove_dir_all(&root).expect("cleanup");
     }
 
