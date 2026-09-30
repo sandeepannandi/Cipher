@@ -1008,13 +1008,13 @@ pub fn recovery_message(err: &AgentTurnError) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
 
     /// Serializes tests that touch process-global environment variables so
     /// parallel cargo-test threads cannot interfere with each other.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Run `f` with `key` set to `value`, restoring the previous state after.
     ///
