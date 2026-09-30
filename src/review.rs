@@ -349,6 +349,9 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         // (directory entries, French prose). Keep the Go crypto/des
         // constructor shapes, which are how Go code actually invokes DES.
         r#"(?-i:\bDES\b)|(?i:\bdes_ede3\b|\bTripleDES\b|\b3DES\b)|\bdes\.New(?:TripleDESCipher|Cipher)\s*\("#,
+        // OpenSSL cipher-suite exclusion tokens ('!DES', '!3DES',
+        // '!EDH-DSS-DES-CBC3-SHA') disable DES; they do not use it.
+        Some(r#"['"]\s*!\S*(?:3DES|DES)"#),
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace DES/TripleDES with AES-256-GCM (authenticated encryption)."
     );
@@ -964,6 +967,77 @@ fn pattern_finding(pattern: &VulnPattern, path: &Path, line_number: usize, line:
 
 /// SQL strings with a variable password column are query construction, not a
 /// literal password. Keep actual `password = 'fixed value'` assignments visible.
+/// Reading the debug setting from configuration - Laravel's
+/// config('app.debug') or ->get('app.debug') - inspects the flag; it does
+/// not enable it. Only assignments (= true) are findings.
+fn debug_flag_is_config_read(line: &str) -> bool {
+    line.contains("config('app.debug")
+        || line.contains("config(\"app.debug")
+        || line.contains("->get('app.debug")
+        || line.contains("->get(\"app.debug")
+}
+
+/// "DEBUG=True" inside a quoted sentence (a help or error message telling
+/// users to enable debug for more detail) is prose, not a flag assignment.
+/// Suppress only when at least one character sits between the opening quote
+/// and the flag; a value that starts with DEBUG=True still fires.
+fn debug_flag_in_prose(line: &str) -> bool {
+    for (pos, _) in line.match_indices("DEBUG=True") {
+        let before = &line[..pos];
+        if let Some(q) = before.rfind(['\'', '"']) {
+            if !before[q + 1..].is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// An Algolia DocSearch client configuration keeps app_id, api_key and the
+/// search index together; that api_key is a public search-only key shipped
+/// to browsers by design, not a secret.
+fn is_algolia_docsearch_client_key(line: &str, content: &str) -> bool {
+    if !line.contains("api_key") {
+        return false;
+    }
+    // The key must sit inside the DocSearch client config object: app_id
+    // and the search index within a few lines of it.
+    let lines: Vec<&str> = content.lines().collect();
+    for (i, l) in lines.iter().enumerate() {
+        if l.trim() == line {
+            let lo = i.saturating_sub(6);
+            let hi = (i + 7).min(lines.len());
+            let window = lines[lo..hi].join("\n");
+            return window.contains("app_id") && window.contains("index");
+        }
+    }
+    false
+}
+
+/// True when the line interpolates values into SQL and every interpolation
+/// is a quoting call: `#{quote_table_name(...)}`, `#{quote_column_name(...)}`
+/// or `#{quote(...)}` (Rails ActiveRecord). Any other interpolation - or no
+/// interpolation at all - returns false.
+fn sql_interpolations_all_quoted(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut found = false;
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if (bytes[i] == b'#' || bytes[i] == b'$') && bytes[i + 1] == b'{' {
+            found = true;
+            let inner = line[i + 2..].trim_start();
+            if !(inner.starts_with("quote_table_name(")
+                || inner.starts_with("quote_column_name(")
+                || inner.starts_with("quote("))
+            {
+                return false;
+            }
+        }
+        i += 1;
+    }
+    found
+}
+
 fn is_sql_interpolation_not_credential(line: &str, ext: &str) -> bool {
     if ext != "php" {
         return false;
@@ -1421,6 +1495,34 @@ fn scan_file_for_vulns_with(
             // are served in development; it is not the framework debug mode
             // this rule measures, and it carries no debug-mode exposure.
             if pattern.name == "Debug Mode Enabled" && trimmed.contains("assets.debug") {
+                continue;
+            }
+
+            // Reading the debug flag from configuration
+            // (config('app.debug'), ->get('app.debug')) inspects the
+            // setting; it does not enable it. "DEBUG=True" inside a quoted
+            // help message is prose, not an assignment.
+            if pattern.name == "Debug Mode Enabled"
+                && (debug_flag_is_config_read(trimmed) || debug_flag_in_prose(trimmed))
+            {
+                continue;
+            }
+
+            // An Algolia DocSearch client config (app_id + api_key + index
+            // in one file) ships its search-only API key to browsers by
+            // design; it is not a secret.
+            if pattern.name == "Hardcoded Credentials"
+                && is_algolia_docsearch_client_key(trimmed, &content)
+            {
+                continue;
+            }
+
+            // Rails-style fully quoted interpolation: every #{...}/${...}
+            // in the statement is a quote_table_name/quote_column_name/
+            // quote(...) call, so no user-controlled value reaches the SQL.
+            if pattern.name == "SQL Injection — String Concatenation"
+                && sql_interpolations_all_quoted(trimmed)
+            {
                 continue;
             }
 
@@ -7928,6 +8030,18 @@ res.render("tutorial/a1", { page: req.query.page });
             assert!(!hits(des, line), "des collision should not fire: {line}");
         }
 
+        // OpenSSL exclusion-list tokens ('!DES') disable DES; they must not fire.
+        for line in [
+            r#"'!DES'"#,
+            r#"'!3DES'"#,
+            r#"'ssl' => '!DES:!3DES:!EDH-DSS-DES-CBC3-SHA:!EDH-RSA-DES-CBC3-SHA',"#,
+        ] {
+            assert!(
+                !hits(des, line),
+                "DES exclusion token should not fire: {line}"
+            );
+        }
+
         // Mass assignment: standalone word survives, protection APIs do not.
         let ma = "Mass Assignment / Autobinding";
         assert!(hits(ma, r#"user.update_attributes(params[:user])"#));
@@ -8197,6 +8311,7 @@ def get(self):
             controller,
             "app/controllers/password_resets_controller.rb"
         ));
+
         // A codec-shaped file under an attacker-facing path is still a codec,
         // but an unserialize-only file outside trusted segments reports.
         let reader = "$value = unserialize(file_get_contents($path));";
@@ -8204,6 +8319,52 @@ def get(self):
             reader,
             "src/Service/Import.php"
         ));
+    }
+
+    #[test]
+    fn small_fp_class_suppression_helpers() {
+        // Debug Mode Enabled: configuration reads and prose messages are
+        // suppressed; real flag assignments still fire.
+        for line in [
+            "if (config('app.debug')) {",
+            "return $this->app['config']->get('app.debug', false);",
+            "$this->app['config']->get('app.debug')",
+        ] {
+            assert!(debug_flag_is_config_read(line), "config read: {line}");
+        }
+        assert!(!debug_flag_is_config_read("DEBUG = True"));
+        assert!(!debug_flag_is_config_read("debug: true"));
+        assert!(debug_flag_in_prose(
+            r#""more": _("More information is available with DEBUG=True."),"#
+        ));
+        assert!(!debug_flag_in_prose("DEBUG = True"));
+        assert!(!debug_flag_in_prose("debug=True,"));
+        assert!(!debug_flag_in_prose(r#"DEBUG = "DEBUG=True""#));
+
+        // Hardcoded Credentials: an Algolia DocSearch client key is public
+        // by design; the same key without the DocSearch config still fires.
+        let docsearch = "docsearch({\n  app_id: 'D1BPLZHGYQ',\n  api_key: '6df94e1e5d55d258c56f60d974d10314',\n  index: 'hugodocs',\n});";
+        assert!(is_algolia_docsearch_client_key(
+            "api_key: '6df94e1e5d55d258c56f60d974d10314',",
+            docsearch
+        ));
+        assert!(!is_algolia_docsearch_client_key(
+            "api_key: '6df94e1e5d55d258c56f60d974d10314',",
+            "const x = 1;"
+        ));
+
+        // SQL concat: fully quoted interpolation is suppressed; raw
+        // interpolation and non-interpolated lines still fire.
+        assert!(sql_interpolations_all_quoted(
+            r#"execute("UPDATE #{quote_table_name(table_name)} SET #{quote_column_name(column_name)}=#{quote(value)}")"#
+        ));
+        assert!(!sql_interpolations_all_quoted(
+            r#"execute("UPDATE users SET name=#{params[:name]}")"#
+        ));
+        assert!(!sql_interpolations_all_quoted(
+            r#"$query = "SELECT * FROM users WHERE id = '$id'";"#
+        ));
+        assert!(!sql_interpolations_all_quoted(r#"execute("SELECT 1")"#));
     }
 
     #[test]
