@@ -654,8 +654,13 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Deserializing untrusted data can lead to remote code execution.",
         Severity::Critical, Confidence::Medium, Some(OwaspCategory::A08IntegrityFailures),
         // `yaml.load\b` already excludes `yaml.load_safe` (no word boundary
-        // before `_`), so no look-around is needed here.
-        r#"(?i)(?:pickle\.loads|marshal\.load|yaml\.load\b|from_string|\bunserialize\s*\()"#,
+        // before `_`), so no look-around is needed here. `from_string` was
+        // dropped: its hits are template compilation and config parsing
+        // (documented design), never deserialization.
+        r#"(?i)(?:pickle\.loads|marshal\.load|yaml\.load\b|\bunserialize\s*\()"#,
+        // Safe loader spellings and PHP class allowlists are the mitigations
+        // this rule asks for, not the vulnerability.
+        Some(r#"(?i)SafeLoader|safe_load|SafeYAML|allowed_classes"#),
         &["py", "rb", "php"],
         "Avoid deserializing untrusted data. If necessary, use safe deserialization and validate the result against a schema."
     );
@@ -982,6 +987,47 @@ fn is_embedded_sample_credential(line: &str, ext: &str) -> bool {
 /// production debug flag. Suppress only when the same file also sets
 /// DEBUG = False in another class, which shows the file separates
 /// production from non-production configuration.
+/// Documented-design deserialization: the data being loaded comes from a
+/// store the application itself writes (a bidirectional codec), is integrity
+/// protected (MAC/HMAC verification in the same file), or lives in a
+/// framework trusted-store component (cache, session, queue, credentials,
+/// encryption). A controller doing `Marshal.load(params[:user])` has none of
+/// these signals and still reports.
+fn deserialization_in_trusted_store(content: &str, path: &str) -> bool {
+    if content.contains("hash_equals")
+        || content.contains("hash_hmac")
+        || content.contains("MessageVerifier")
+        || content.contains("MessageEncryptor")
+        || content.contains("OpenSSL::HMAC")
+    {
+        return true;
+    }
+    // `\bserialize` must not match inside `unserialize`: a boundary check
+    // keeps read-only files from looking like bidirectional codecs.
+    let php_pair = regex::Regex::new(r"\bserialize\s*\(")
+        .map(|write| write.is_match(content) && content.contains("unserialize("))
+        .unwrap_or(false);
+    let pairs: [(&str, &str); 3] = [
+        ("Marshal.dump", "Marshal.load"),
+        ("pickle.dumps", "pickle.loads"),
+        ("YAML.dump", "YAML.load"),
+    ];
+    if php_pair
+        || pairs
+            .iter()
+            .any(|(write, read)| content.contains(write) && content.contains(read))
+    {
+        return true;
+    }
+    let lower = path.to_ascii_lowercase();
+    lower.split(['/', '\\', '_', '-', '.']).any(|part| {
+        matches!(
+            part,
+            "cache" | "session" | "queue" | "bus" | "ractor" | "credentials" | "encryption"
+        )
+    })
+}
+
 fn python_debug_in_nonprod_config(content: &str, line_number: usize) -> bool {
     let lines: Vec<&str> = content.lines().collect();
     let Some(index) = line_number.checked_sub(1).filter(|&i| i < lines.len()) else {
@@ -1365,6 +1411,15 @@ fn scan_file_for_vulns_with(
             // are served in development; it is not the framework debug mode
             // this rule measures, and it carries no debug-mode exposure.
             if pattern.name == "Debug Mode Enabled" && trimmed.contains("assets.debug") {
+                continue;
+            }
+
+            // Deserializing a store the application writes itself, a
+            // MAC-verified payload, or a framework trusted-store component is
+            // documented design, not an untrusted-data boundary.
+            if pattern.name == "Insecure Deserialization"
+                && deserialization_in_trusted_store(&content, &path.to_string_lossy())
+            {
                 continue;
             }
 
@@ -8022,6 +8077,72 @@ $data = json_decode($body, true);"#;
         );
         assert!(titles(&scan("user = Marshal.load(params[:user])", "rb"))
             .contains(&"Insecure Deserialization"));
+        // Safe loader spellings and PHP class allowlists are the mitigation,
+        // not the vulnerability.
+        assert!(!titles(&scan(
+            "objects = yaml.load(stream, Loader=SafeLoader)",
+            "py"
+        ))
+        .contains(&"Insecure Deserialization"));
+        assert!(
+            !titles(&scan("data = SafeYAML.load(raw)", "rb")).contains(&"Insecure Deserialization")
+        );
+        assert!(!titles(&scan(
+            "$callable = unserialize($action['uses'], ['allowed_classes' => [self::class]]);",
+            "php"
+        ))
+        .contains(&"Insecure Deserialization"));
+    }
+
+    #[test]
+    fn deserialization_on_trusted_stores_is_documented_design() {
+        // MAC-verified payload (laravel Encrypter shape).
+        let mac = "function decrypt($payload) { return hash_equals($a, $b); }
+$value = unserialize($decrypted);";
+        assert!(deserialization_in_trusted_store(
+            mac,
+            "src/Encryption/Encrypter.php"
+        ));
+        // Bidirectional codec: the application writes what it reads.
+        let codec = "def write(e)
+ Marshal.dump(e)
+ end
+ def read
+ Marshal.load(@raw)
+ end";
+        assert!(deserialization_in_trusted_store(
+            codec,
+            "lib/cache/entry.rb"
+        ));
+        let pycodec = "def set(self, v):
+ return pickle.dumps(v)
+def get(self):
+ return pickle.loads(self.raw)";
+        assert!(deserialization_in_trusted_store(
+            pycodec,
+            "django/core/cache/backends/locmem.py"
+        ));
+        // Trusted-store path alone (queue handler reading broker payloads).
+        let handler = "public function handle($command) { return unserialize($command); }";
+        assert!(deserialization_in_trusted_store(
+            handler,
+            "src/Illuminate/Queue/CallQueuedHandler.php"
+        ));
+        // Request-data deserialization with no trust signals still reports.
+        let controller = "def reset_password
+ user = Marshal.load(Base64.decode64(params[:user]))
+ end";
+        assert!(!deserialization_in_trusted_store(
+            controller,
+            "app/controllers/password_resets_controller.rb"
+        ));
+        // A codec-shaped file under an attacker-facing path is still a codec,
+        // but an unserialize-only file outside trusted segments reports.
+        let reader = "$value = unserialize(file_get_contents($path));";
+        assert!(!deserialization_in_trusted_store(
+            reader,
+            "src/Service/Import.php"
+        ));
     }
 
     #[test]
