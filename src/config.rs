@@ -509,6 +509,7 @@ mod tests {
     #[test]
     fn test_doctor_report_masks_secret_status() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous_provider = std::env::var("CIPHER_AI_PROVIDER").ok();
         std::env::set_var("CIPHER_AI_PROVIDER", "openai");
         std::env::remove_var("GROQ_API_KEY");
         std::env::remove_var("OPENAI_API_KEY");
@@ -520,6 +521,11 @@ mod tests {
         assert_eq!(report.active_key_status.env_var, "OPENAI_API_KEY");
         assert!(!report.active_key_status.configured);
         assert!(report.provider_key_status.iter().all(|s| s.value.is_none()));
+
+        match previous_provider {
+            Some(v) => std::env::set_var("CIPHER_AI_PROVIDER", v),
+            None => std::env::remove_var("CIPHER_AI_PROVIDER"),
+        }
     }
 
     #[test]
