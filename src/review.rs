@@ -79,7 +79,16 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "SQL Injection — ORM Raw Queries",
         "Raw SQL queries bypass ORM protections. Review for potential injection vectors.",
         Severity::High, Confidence::Medium, Some(OwaspCategory::A03Injection),
-        r#"(?i)(raw_sql|execute_sql|rawQuery|nativeQuery|createNativeQuery|\braw\s*\(|\.sql\()"#,
+        // Real sink shapes only: call sites with a SQL string (or any argument
+        // for the dedicated raw-query APIs), not identifier collisions such as
+        // RawQuerySet names, `execute_sql_flush`, `def execute_sql`, comments
+        // mentioning raw(), or config/body-parser `.raw()` methods.
+        r#"(?i:execute_sql)\s*\(|(?i:nativequery)\s*\(|(?i:createnativequery)\s*\(|\brawQuery\s*\(|\braw\s*\(\s*[furbFURB]{0,2}['\"]\s*(?i:select|insert|update|delete|replace|with)\b|(?i:raw_sql)\s*\(\s*['\"]|\.sql\("#,
+        // Arel.sql is Rails' intentional literal-SQL escape API (used
+        // internally on constants and quoted names), `def ...` lines define
+        // rather than call these APIs, and an ALL-CAPS constant argument is
+        // framework-internal result plumbing (compiler.execute_sql(SINGLE)).
+        Some(r#"(?i)\bArel\.sql\s*\(|(?:^|\s)def\s+(?:self\.)?(?:execute_sql|sql|raw)\s*\(|execute_sql\s*\(\s*[A-Z_][A-Z_0-9]*\s*[),]"#),
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Use the ORM's query builder instead of raw SQL. If raw SQL is required, use parameterized queries."
     );
@@ -326,7 +335,10 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "Weak Encryption — DES",
         "DES is a weak encryption algorithm that can be brute-forced. Use AES-256-GCM or ChaCha20-Poly1305.",
         Severity::High, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
-        r#"(?i)\b(DES|des_ede3|TripleDES|3DES)\b"#,
+        // Case-sensitive DES: lowercase `des` is a common identifier
+        // (directory entries, French prose). Keep the Go crypto/des
+        // constructor shapes, which are how Go code actually invokes DES.
+        r#"(?-i:\bDES\b)|(?i:\bdes_ede3\b|\bTripleDES\b|\b3DES\b)|\bdes\.New(?:TripleDESCipher|Cipher)\s*\("#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace DES/TripleDES with AES-256-GCM (authenticated encryption)."
     );
@@ -663,7 +675,10 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         Severity::High,
         Confidence::Medium,
         Some(OwaspCategory::A01BrokenAccessControl),
-        r#"(?i)(?:update_attributes|mass_assignment|fillable\s*=\s*\[\s*\*\s*\]|guard\s*=\s*\[\s*\]|@ModelAttribute)"#,
+        // `mass_assignment` as a standalone word only: protection APIs such
+        // as sanitize_for_mass_assignment and
+        // value_constructed_by_mass_assignment? carry it as a suffix.
+        r#"(?i)(?:update_attributes|(?:^|[^A-Za-z0-9_])mass_assignment\b|fillable\s*=\s*\[\s*\*\s*\]|guard\s*=\s*\[\s*\]|@ModelAttribute)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Use allowlists (fillable/guarded) to restrict which attributes can be mass-assigned."
     );
@@ -7777,6 +7792,87 @@ res.render("tutorial/a1", { page: req.query.page });
             Path::new("/other/tests/auth.test.ts"),
             root
         ));
+    }
+
+    #[test]
+    fn identifier_collision_patterns_match_real_sink_shapes_only() {
+        let patterns = build_vuln_patterns();
+        let by_name = |name: &str| {
+            patterns
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("pattern {name}"))
+        };
+        let hits = |name: &str, line: &str| {
+            let p = by_name(name);
+            p.pattern.is_match(line) && !p.negative.as_ref().is_some_and(|neg| neg.is_match(line))
+        };
+
+        // ORM raw queries: real call shapes survive.
+        let orm = "SQL Injection — ORM Raw Queries";
+        assert!(hits(
+            orm,
+            r#"users = User.objects.raw('SELECT * FROM users WHERE id = %s')"#,
+        ));
+        assert!(hits(orm, r#"DB::raw('select count(*) from logs')"#));
+        assert!(hits(orm, r#"const rows = await client.rawQuery(sql)"#));
+        assert!(hits(
+            orm,
+            r#"em.createNativeQuery("SELECT * FROM t WHERE x = " + x)"#
+        ));
+        assert!(hits(orm, r#"cursor.execute_sql("SELECT " + col)"#));
+        // Identifier collisions and framework plumbing are gone.
+        for line in [
+            r#"def execute_sql(self, result_type):"#,
+            r#"def self.sql(sql_string, *positional_binds)"#,
+            r#"locking = Arel.sql("FOR UPDATE")"#,
+            r#"Arel.sql(expr)"#,
+            r#"return compiler.execute_sql(SINGLE) is not None"#,
+            r#"connection.ops.execute_sql_flush(sql_list)"#,
+            r#"from django.db.models.query import ModelIterable, RawQuerySet"#,
+            r#"isinstance(queryset, RawQuerySet)"#,
+            r#"__all__ = ["Query", "RawQuery"]"#,
+            r#"raw (unescaped) character or not."#,
+            r#""Prefetch querysets cannot use raw(), values(), and values_list().""#,
+            r#"def raw(self, raw_query, params=(), translations=None, using=None):"#,
+            r#"$this->config->raw()"#,
+            r#"app.use(express.raw({ type: 'application/octet-stream' }))"#,
+            r#"qparts = [sql.SQL("SELECT * FROM "), name, sql.SQL("(")]"#,
+            r#"intent = QueryIntent.new(adapter: self, raw_sql: sql, name: name, binds: binds)"#,
+            r#"u.RawQuery = r.URL.RawQuery"#,
+        ] {
+            assert!(
+                !hits(orm, line),
+                "orm-raw collision should not fire: {line}"
+            );
+        }
+
+        // DES: crypto usages survive, lowercase identifiers do not.
+        let des = "Weak Encryption — DES";
+        assert!(hits(des, r#"block, err := des.NewCipher(key)"#));
+        assert!(hits(des, r#"triple, err := des.NewTripleDESCipher(key24)"#));
+        assert!(hits(des, r#"Cipher.getInstance("DES/CBC/PKCS5Padding")"#));
+        assert!(hits(des, r#"cipher = OpenSSL::Cipher.new('DES-EDE3-CBC')"#));
+        for line in [
+            r#"des, err := f.File.(fs.ReadDirFile).ReadDir(n)"#,
+            r#"for _, de := range des {"#,
+            r#"dirs := make([]string, len(des))"#,
+            r#"return des[:i], nil"#,
+            r#"Des produits sont disponibles"#,
+        ] {
+            assert!(!hits(des, line), "des collision should not fire: {line}");
+        }
+
+        // Mass assignment: standalone word survives, protection APIs do not.
+        let ma = "Mass Assignment / Autobinding";
+        assert!(hits(ma, r#"user.update_attributes(params[:user])"#));
+        assert!(hits(ma, r#"mass_assignment = true"#));
+        for line in [
+            r#"def value_constructed_by_mass_assignment?(_value) # :nodoc:"#,
+            r#"_assign_attributes(sanitize_for_mass_assignment(new_attributes))"#,
+        ] {
+            assert!(!hits(ma, line), "protection API should not fire: {line}");
+        }
     }
 
     #[tokio::test]
