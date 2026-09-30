@@ -37,6 +37,14 @@ struct VulnPattern {
 }
 
 /// Build all vulnerability detection patterns
+/// Protocol-mandated and non-security weak-hash contexts: the hash is
+/// dictated by a protocol (HTTP Digest, S3 ETag, repository metadata), is
+/// explicitly flagged non-security (`usedforsecurity=False`), names a cache
+/// key / mutex / throttle / checksum / fingerprint rather than protecting a
+/// secret, is compared inside the framework's own signed-URL design, or is
+/// the definition of a hashing API offered to callers.
+const WEAK_HASH_PROTOCOL_NEGATIVE: &str = r#"(?i)usedforsecurity\s*=\s*False|\betag\b|contentmd5|md5hash|\bmutex|throttle|limiter|checksum|fingerprint|cache/|shouldHashKeys|getEmailForVerification|sha1\(\s*static::class|hash_equals\s*\(\s*sha1|metadata\[['"]sha1['"]\]|def\s+\w*(?:md5|sha1)|func\s*\([^)]*\)\s*(?:MD5|SHA1)\s*\(|class\s+(?:MD5|SHA1)\b|function\s+\w*(?:md5|sha1)\s*\("#;
+
 fn build_vuln_patterns() -> Vec<VulnPattern> {
     let mut patterns = Vec::new();
 
@@ -202,6 +210,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "MD5 is cryptographically broken and unsuitable for security purposes. Use bcrypt, argon2, or SHA-256/512.",
         Severity::High, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
         r#"(?i)(?:\bmd5\s*\(|MessageDigest\.getInstance\(\s*"MD5"\s*\))"#,
+        Some(WEAK_HASH_PROTOCOL_NEGATIVE),
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace MD5 with a secure hash function like SHA-256, SHA-512, or bcrypt/argon2 for passwords."
     );
@@ -327,6 +336,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         "SHA-1 is cryptographically weakened and should not be used for security contexts. Use SHA-256/512 or argon2.",
         Severity::Medium, Confidence::High, Some(OwaspCategory::A02CryptographicFailures),
         r#"(?i)\b(sha1)\s*\("#,
+        Some(WEAK_HASH_PROTOCOL_NEGATIVE),
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Replace SHA-1 with SHA-256 or SHA-512. For password hashing, use bcrypt or argon2."
     );
@@ -8092,6 +8102,57 @@ $data = json_decode($body, true);"#;
             "php"
         ))
         .contains(&"Insecure Deserialization"));
+    }
+
+    #[test]
+    fn weak_hash_protocol_contexts_do_not_fire() {
+        let patterns = build_vuln_patterns();
+        let hits = |name: &str, line: &str| {
+            let p = patterns
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("pattern {name}"));
+            p.pattern.is_match(line) && !p.negative.as_ref().is_some_and(|neg| neg.is_match(line))
+        };
+        let md5 = "Weak Hash Algorithm — MD5";
+        let sha1 = "Weak Hash Algorithm — SHA1";
+        // Security usage still reports.
+        assert!(hits(md5, r#"$pass = md5( $pass );"#));
+        assert!(hits(
+            md5,
+            r#"digest = hashlib.md5(password.encode()).hexdigest()"#
+        ));
+        assert!(hits(
+            sha1,
+            r#"token = hashlib.sha1(secret.encode()).hexdigest()"#
+        ));
+        // Protocol-mandated and non-security contexts do not.
+        for line in [
+            r#"return hashlib.md5(x, usedforsecurity=False).hexdigest()"#,
+            r#"md5(response.content, usedforsecurity=False).hexdigest()"#,
+            r#"Metadata: map[string]string{metaMD5Hash: hex.EncodeToString(upload.Local.MD5())}"#,
+            r#"func (lf *localFile) MD5() []byte {"#,
+            r#"func (ns *Namespace) MD5(v any) (string, error) {"#,
+            r#"public function sha1(string $file)"#,
+            r#"class SHA1(OracleHashMixin, PostgreSQLSHAMixin, Transform):"#,
+        ] {
+            assert!(!hits(md5, line), "md5 protocol context: {line}");
+        }
+        for line in [
+            r#"return hashlib.sha1(x, usedforsecurity=False).hexdigest()"#,
+            r#"'key' => self::$shouldHashKeys ? md5($limiterName.$limit->key) : $limiterName.':'.$limit->key,"#,
+            r#"return self::$shouldHashKeys ? sha1($value) : $value;"#,
+            r#"if (isset($metadata['sha1']) && $this->cache->sha1((string) $include) === $metadata['sha1']) {"#,
+            r#"if ($this->cache !== null && ($checksum === null || $checksum === '' || $checksum === $this->cache->sha1($file))) {"#,
+            r#"if (! hash_equals(sha1($this->user()->getEmailForVerification()), (string) $this->route('hash'))) {"#,
+            r#"'hash' => sha1($notifiable->getEmailForVerification()),"#,
+            r#"return 'login_'.$this->name.'_'.sha1(static::class);"#,
+            r#"$this->sendOutputTo(storage_path('logs/schedule-'.sha1($this->mutexName()).'.log'));"#,
+            r#"if (is_file($path = storage_path('framework/cache/facade-'.sha1($alias).'.php'))) {"#,
+            r#"func (ns *Namespace) SHA1(v any) (string, error) {"#,
+        ] {
+            assert!(!hits(sha1, line), "sha1 protocol context: {line}");
+        }
     }
 
     #[test]
