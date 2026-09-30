@@ -59,10 +59,34 @@ mod tests {
     #[test]
     fn test_groq_client_rejects_missing_key() {
         // No API key in env or config (typical test environment) — must error
-        // cleanly rather than panic.
-        if std::env::var("GROQ_API_KEY").is_ok() || crate::config::stored_api_key().is_some() {
-            return;
+        // cleanly rather than panic. Pin the provider and clear the key under
+        // the shared env lock so concurrent tests that transiently export
+        // CIPHER_AI_PROVIDER or other providers' keys cannot race us.
+        let _guard = crate::llm::tests::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous_provider = std::env::var("CIPHER_AI_PROVIDER").ok();
+        let previous_groq = std::env::var("GROQ_API_KEY").ok();
+        std::env::set_var("CIPHER_AI_PROVIDER", "groq");
+        std::env::remove_var("GROQ_API_KEY");
+
+        let outcome = if crate::config::stored_api_key().is_some() {
+            None // dev machine with a persisted key: nothing to prove here
+        } else {
+            Some(GroqClient::from_env())
+        };
+
+        match previous_provider {
+            Some(v) => std::env::set_var("CIPHER_AI_PROVIDER", v),
+            None => std::env::remove_var("CIPHER_AI_PROVIDER"),
         }
-        assert!(GroqClient::from_env().is_err());
+        match previous_groq {
+            Some(v) => std::env::set_var("GROQ_API_KEY", v),
+            None => std::env::remove_var("GROQ_API_KEY"),
+        }
+
+        if let Some(client) = outcome {
+            assert!(client.is_err());
+        }
     }
 }
