@@ -11944,6 +11944,85 @@ public class UserController extends HttpServlet {
     }
 
     #[test]
+    fn java_package_wildcard_resolves_among_many_same_package_siblings() {
+        // Large packages are where sibling and class lookups used to go
+        // quadratic; the indexed lookup must give the same answer.
+        let controller = r#"package com.example.web;
+
+import java.sql.*;
+import javax.servlet.http.*;
+import com.example.service.*;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        UserService.findByName(name);
+    }
+}
+"#;
+        let mut files: Vec<(String, String)> = vec![
+            (
+                "src/com/example/web/UserController.java".to_string(),
+                controller.to_string(),
+            ),
+            (
+                "src/com/example/service/UserService.java".to_string(),
+                JAVA_SERVICE_PACKAGE.to_string(),
+            ),
+        ];
+        for index in 0..150 {
+            files.push((
+                format!("src/com/example/service/Filler{index}.java"),
+                format!(
+                    "package com.example.service;\n\npublic class Filler{index} {{\n    int value() {{ return {index}; }}\n}}\n"
+                ),
+            ));
+        }
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, content)| (path.as_str(), content.as_str()))
+            .collect();
+        let found = scan_project(&refs);
+        assert_eq!(
+            found,
+            vec![(
+                "src/com/example/service/UserService.java".to_string(),
+                SQLI_FLOW.to_string(),
+                11
+            )]
+        );
+    }
+
+    #[test]
+    fn java_explicit_import_of_class_declared_twice_in_package_resolves_to_neither() {
+        let controller = r#"package com.example.web;
+
+import java.sql.*;
+import javax.servlet.http.*;
+import com.example.service.UserService;
+
+public class UserController extends HttpServlet {
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        String name = request.getParameter("name");
+        UserService.findByName(name);
+    }
+}
+"#;
+        let found = scan_project(&[
+            ("src/com/example/web/UserController.java", controller),
+            (
+                "src/com/example/service/UserService.java",
+                JAVA_SERVICE_PACKAGE,
+            ),
+            (
+                "src/com/example/service/other/UserService.java",
+                JAVA_SERVICE_PACKAGE,
+            ),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn java_import_static_shadowed_by_own_method_is_not_resolved() {
         let controller = r#"package com.example.web;
 
@@ -16384,6 +16463,52 @@ fn cross_file_flow_sinks(
     } else {
         Vec::new()
     };
+    // Java package and class names are parsed once per module here, not once
+    // per (module, sibling) pair or per import below: those lookups ran
+    // inside nested loops and made the pass quadratic in package size.
+    let java_packages: Vec<Option<String>> = modules
+        .iter()
+        .zip(&lines)
+        .map(|(module, lines)| {
+            if module.language == FlowLanguage::Java {
+                java_package_clause(lines)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let java_classes: Vec<Option<String>> = modules
+        .iter()
+        .zip(&lines)
+        .map(|(module, lines)| {
+            if module.language == FlowLanguage::Java {
+                java_class_name(lines, &module.path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let mut java_by_class: std::collections::HashMap<(String, String), Vec<usize>> =
+        std::collections::HashMap::new();
+    let mut java_by_package: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (index, module) in modules.iter().enumerate() {
+        if module.language != FlowLanguage::Java {
+            continue;
+        }
+        if let Some(package) = &java_packages[index] {
+            java_by_package
+                .entry(package.clone())
+                .or_default()
+                .push(index);
+            if let Some(class) = &java_classes[index] {
+                java_by_class
+                    .entry((package.clone(), class.clone()))
+                    .or_default()
+                    .push(index);
+            }
+        }
+    }
     // Same-package siblings need no import statement: Go files in one
     // directory share a namespace, and Java classes in one package refer to
     // each other by class name. Go cross-package imports resolve through the
@@ -16498,7 +16623,7 @@ fn cross_file_flow_sinks(
                 }
             }
             FlowLanguage::Java => {
-                let package = java_package_clause(&lines[index]);
+                let package = java_packages[index].clone();
                 let mut class_counts: std::collections::HashMap<String, usize> =
                     std::collections::HashMap::new();
                 let mut siblings = Vec::new();
@@ -16506,13 +16631,11 @@ fn cross_file_flow_sinks(
                     for &sibling in same_dir {
                         if sibling == index
                             || modules[sibling].language != FlowLanguage::Java
-                            || java_package_clause(&lines[sibling]) != package
+                            || java_packages[sibling] != package
                         {
                             continue;
                         }
-                        if let Some(class) =
-                            java_class_name(&lines[sibling], &modules[sibling].path)
-                        {
+                        if let Some(class) = java_classes[sibling].clone() {
                             *class_counts.entry(class.clone()).or_default() += 1;
                             siblings.push((class, sibling));
                         }
@@ -16530,18 +16653,16 @@ fn cross_file_flow_sinks(
                 // The one other file declaring `class` in `package`; two
                 // files offering the same class resolve to neither.
                 let class_file = |package: &str, class: &str| -> Option<usize> {
-                    let matches: Vec<usize> = modules
-                        .iter()
-                        .enumerate()
-                        .filter(|(other, other_module)| {
-                            *other != index
-                                && other_module.language == FlowLanguage::Java
-                                && java_package_clause(&lines[*other]).as_deref() == Some(package)
-                                && java_class_name(&lines[*other], &other_module.path).as_deref()
-                                    == Some(class)
+                    let matches: Vec<usize> = java_by_class
+                        .get(&(package.to_string(), class.to_string()))
+                        .map(|candidates| {
+                            candidates
+                                .iter()
+                                .copied()
+                                .filter(|other| *other != index)
+                                .collect()
                         })
-                        .map(|(other, _)| other)
-                        .collect();
+                        .unwrap_or_default();
                     // `then`, not `then_some`: the match list is empty for
                     // imports that resolve outside the project (jdk, libraries),
                     // and `then_some` would index it eagerly and panic.
@@ -16568,17 +16689,11 @@ fn cross_file_flow_sinks(
                             // to neither.
                             let mut by_class: std::collections::HashMap<String, Vec<usize>> =
                                 std::collections::HashMap::new();
-                            for (other, other_module) in modules.iter().enumerate() {
-                                if other == index
-                                    || other_module.language != FlowLanguage::Java
-                                    || java_package_clause(&lines[other]).as_deref()
-                                        != Some(package.as_str())
-                                {
+                            for &other in java_by_package.get(&package).into_iter().flatten() {
+                                if other == index {
                                     continue;
                                 }
-                                if let Some(class) =
-                                    java_class_name(&lines[other], &other_module.path)
-                                {
+                                if let Some(class) = java_classes[other].clone() {
                                     by_class.entry(class).or_default().push(other);
                                 }
                             }
@@ -17678,7 +17793,10 @@ fn go_package_clause(lines: &[&str]) -> Option<String> {
 /// The `package` statement of a Java file; `None` for the default package.
 #[allow(clippy::items_after_test_module)]
 fn java_package_clause(lines: &[&str]) -> Option<String> {
-    let package = Regex::new(r#"^\s*package\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;"#).ok()?;
+    static PACKAGE: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+        Regex::new(r#"^\s*package\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;"#).ok()
+    });
+    let package = PACKAGE.as_ref()?;
     lines.iter().find_map(|line| {
         package
             .captures(line.split("//").next().unwrap_or(""))
@@ -17691,8 +17809,10 @@ fn java_package_clause(lines: &[&str]) -> Option<String> {
 /// stem (`UserService.java` conventionally declares `UserService`).
 #[allow(clippy::items_after_test_module)]
 fn java_class_name(lines: &[&str], path: &Path) -> Option<String> {
-    let class =
-        Regex::new(r#"(?:^|\s)(?:class|interface|enum|record)\s+([A-Za-z_][A-Za-z0-9_]*)"#).ok()?;
+    static CLASS: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+        Regex::new(r#"(?:^|\s)(?:class|interface|enum|record)\s+([A-Za-z_][A-Za-z0-9_]*)"#).ok()
+    });
+    let class = CLASS.as_ref()?;
     for line in lines {
         let code = line.split("//").next().unwrap_or("");
         if let Some(name) = class.captures(code).and_then(|captures| captures.get(1)) {
