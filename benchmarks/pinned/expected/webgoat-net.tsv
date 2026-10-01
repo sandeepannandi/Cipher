@@ -1,0 +1,18 @@
+WebGoat/App_Code/DB/MySqlDbProvider.cs	313	Sensitive Data in Logging
+WebGoat/App_Code/DB/MySqlDbProvider.cs	517	SQL Injection — String Concatenation
+WebGoat/App_Code/DB/MySqlDbProvider.cs	539	SQL Injection — String Concatenation
+WebGoat/App_Code/DB/SqliteDbProvider.cs	307	Sensitive Data in Logging
+WebGoat/App_Code/DB/SqliteDbProvider.cs	526	SQL Injection — String Concatenation
+WebGoat/App_Code/DB/SqliteDbProvider.cs	554	SQL Injection — String Concatenation
+WebGoat/App_Code/WeakMessageDigest.cs	42	Custom Weak Message Digest
+WebGoat/App_Code/WeakRandom.cs	23	Predictable Random Generator
+WebGoat/Content/EncryptVSEncode.aspx.cs	28	Hardcoded Credentials
+WebGoat/Content/PathManipulation.aspx.cs	38	Path Traversal
+WebGoat/Content/ReflectedXSS.aspx.cs	26	Reflected XSS
+WebGoat/Content/StoredXSS.aspx.cs	48	Stored XSS
+WebGoat/Content/StoredXSS.aspx.cs	49	Stored XSS
+WebGoat/Content/Unsafe.aspx.cs	26	Unbounded Unsafe Pointer Write
+WebGoat/Content/UploadPathManipulation.aspx.cs	25	Unrestricted File Upload
+WebGoat/Web.config	46	Debug Mode Enabled
+WebGoat/Web.config	53	Verbose Server Errors
+WebGoat/WebGoatCoins/CustomerLogin.aspx.cs	36	Sensitive Data in Logging

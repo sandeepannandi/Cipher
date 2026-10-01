@@ -1,0 +1,65 @@
+{
+ "suite": "cipher-pinned-production-v1",
+ "repos": [
+  {
+   "name": "axios",
+   "url": "https://github.com/axios/axios",
+   "sha": "2426e03ba9020be31ed013873423cea6b7cd2e67"
+  },
+  {
+   "name": "composer",
+   "url": "https://github.com/composer/composer",
+   "sha": "d25ce76a0624857740fe238e0b63ac09e82bbd8f"
+  },
+  {
+   "name": "django",
+   "url": "https://github.com/django/django",
+   "sha": "5a4511adb247a44a1cada11fe4763abba0a42663"
+  },
+  {
+   "name": "express",
+   "url": "https://github.com/expressjs/express",
+   "sha": "7ef98448f8b38099ab1ded55e458538ad47a51e7"
+  },
+  {
+   "name": "gin",
+   "url": "https://github.com/gin-gonic/gin",
+   "sha": "43fe48e8a0f44af783116cdb010725e6bb50255f"
+  },
+  {
+   "name": "guava",
+   "url": "https://github.com/google/guava",
+   "sha": "d860752657047435096cff155fa4c04267014122"
+  },
+  {
+   "name": "hugo",
+   "url": "https://github.com/gohugoio/hugo",
+   "sha": "ec69d0e64931715e490ae411cba2b305636d20e0"
+  },
+  {
+   "name": "jekyll",
+   "url": "https://github.com/jekyll/jekyll",
+   "sha": "541d8b2ee75c8907de4744d4b87a7a6f1f997cae"
+  },
+  {
+   "name": "laravel",
+   "url": "https://github.com/laravel/framework",
+   "sha": "6070a6d7e9804a490b12cb889173fbb926b8e3c8"
+  },
+  {
+   "name": "newtonsoft-json",
+   "url": "https://github.com/JamesNK/Newtonsoft.Json",
+   "sha": "52fa3aef1f2cadcd3a3f874251eddc98d3efbbaa"
+  },
+  {
+   "name": "rails",
+   "url": "https://github.com/rails/rails",
+   "sha": "54f1ea3f2c91079b6bd734082e45890c252c69a1"
+  },
+  {
+   "name": "requests",
+   "url": "https://github.com/psf/requests",
+   "sha": "611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60"
+  }
+ ]
+}

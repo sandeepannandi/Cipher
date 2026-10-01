@@ -1,0 +1,22 @@
+db/db.go	16	Hardcoded Credentials
+handlers/auth.go	12	Hardcoded Credentials
+handlers/auth.go	13	Hardcoded Credentials
+handlers/auth.go	22	Sensitive Data in Logging
+handlers/auth.go	29	Insecure Cookie Configuration
+handlers/crypto.go	28	Weak Encryption — DES
+handlers/crypto.go	44	Predictable Session Token
+handlers/crypto.go	52	Weak RSA Key Size
+handlers/crypto.go	67	Disabled SSL/TLS Verification
+handlers/data.go	19	SQL Injection — String Concatenation
+handlers/data.go	40	Unsafe HTML Response (XSS)
+handlers/data.go	63	XPath Injection
+handlers/email.go	22	Email Header Injection
+handlers/email.go	23	Email Header Injection
+handlers/files.go	16	Path Traversal
+handlers/files.go	36	Server-Side Template Injection (SSTI)
+handlers/jwt.go	13	JWT Secret Hardcoded
+handlers/jwt.go	52	JWT Algorithm Not Pinned
+handlers/network.go	17	Server-Side Request Forgery (SSRF)
+handlers/network.go	34	Open Redirect
+handlers/system.go	14	Command Injection
+main.go	40	Deprecated TLS Minimum Version

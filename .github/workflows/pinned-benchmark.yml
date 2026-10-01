@@ -1,0 +1,33 @@
+name: Pinned benchmark
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "benchmarks/pinned/**"
+      - ".github/workflows/pinned-benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pinned-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  key-gate:
+    name: Ten-repo exact-key gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Build Cipher
+        run: cargo build --release --locked
+      - name: Run gate unit tests
+        run: python3 -m unittest discover -s benchmarks/pinned -p 'test_*.py'
+      - name: Compare pinned repositories against expected keys and the label ledger
+        run: python3 benchmarks/pinned/check.py --cipher ./target/release/cipher-ai --suite benchmark --cache "$RUNNER_TEMP/pinned-cache"

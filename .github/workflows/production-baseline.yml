@@ -1,0 +1,22 @@
+name: Production baseline
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-keys:
+    name: Pinned production repositories
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Build Cipher
+        run: cargo build --release --locked
+      - name: Compare pinned production repositories against expected keys
+        run: python3 benchmarks/pinned/check.py --cipher ./target/release/cipher-ai --suite production --cache "$RUNNER_TEMP/pinned-cache"

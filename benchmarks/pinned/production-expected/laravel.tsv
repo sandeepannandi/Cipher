@@ -1,0 +1,46 @@
+src/Illuminate/Auth/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Broadcasting/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Bus/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Cache/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Cache/FileStore.php	469	Weak Hash Algorithm — SHA1
+src/Illuminate/Cache/StorageStore.php	264	Weak Hash Algorithm — SHA1
+src/Illuminate/Cache/TaggedCache.php	109	Weak Hash Algorithm — SHA1
+src/Illuminate/Collections/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Concurrency/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Conditionable/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Config/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Console/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Console/Scheduling/CallbackEvent.php	188	Weak Hash Algorithm — SHA1
+src/Illuminate/Console/Scheduling/Event.php	868	Weak Hash Algorithm — SHA1
+src/Illuminate/Container/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Contracts/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Cookie/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Database/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Database/DatabaseManager.php	135	Weak Hash Algorithm — MD5
+src/Illuminate/Encryption/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Events/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Events/CallQueuedListener.php	266	Insecure Deserialization
+src/Illuminate/Filesystem/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Hashing/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Http/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Http/Request.php	711	Weak Hash Algorithm — SHA1
+src/Illuminate/Image/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/JsonSchema/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Log/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Macroable/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Mail/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Notifications/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Pagination/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Pipeline/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Process/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Queue/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Redis/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Reflection/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Routing/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Session/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Support/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Testing/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Translation/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Validation/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
+src/Illuminate/Validation/NotPwnedVerifier.php	70	Weak Hash Algorithm — SHA1
+src/Illuminate/View/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action

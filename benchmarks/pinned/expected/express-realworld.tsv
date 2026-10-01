@@ -1,0 +1,3 @@
+src/app/routes/auth/auth.ts	16	JWT Secret Hardcoded
+src/app/routes/auth/auth.ts	21	JWT Secret Hardcoded
+src/app/routes/auth/token.utils.ts	4	JWT Secret Hardcoded
