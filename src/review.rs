@@ -1340,7 +1340,9 @@ fn scan_file_for_vulns_with(
             std::collections::HashSet::new(),
         )
     } else {
-        ruby_php_injection_lines(&content, &ext)
+        let (sql, mut command) = ruby_php_injection_lines(&content, &ext);
+        command.extend(ruby_parameter_open_lines(&content, &ext));
+        (sql, command)
     };
     sql_injection_sinks.extend(language_sql);
     command_injection_sinks.extend(language_command);
@@ -9629,6 +9631,56 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
         // Fixed host connection.
         assert!(!hit(
             "def f(request):\n    u = request.GET['u']\n    conn = HTTPConnection('internal.example')\n    conn.request('GET', u)\n"
+        ));
+    }
+
+    #[test]
+    fn ruby_public_method_parameter_into_kernel_open() {
+        let hit = |src: &str| !ruby_parameter_open_lines(src, "rb").is_empty();
+        // Positives: Kernel.open and bare open on a public method parameter.
+        assert!(hit(
+            "class Image\n  def self.open(path_or_url, ext = nil)\n    Kernel.open(path_or_url, 'rb') do |f|\n      read(f)\n    end\n  end\nend\n"
+        ));
+        assert!(hit(
+            "class Jar\n  def save(output, *options)\n    return open(output, 'w') { |io| save(io) }\n  end\nend\n"
+        ));
+        // Negative controls.
+        // Explicit non-Kernel receivers.
+        assert!(!hit(
+            "class A\n  def f(p)\n    File.open(p, 'rb') { |f| f.read }\n  end\nend\n"
+        ));
+        assert!(!hit("class A\n  def f(p)\n    URI.open(p)\n  end\nend\n"));
+        assert!(!hit("class A\n  def f(p)\n    IO.popen(p)\n  end\nend\n"));
+        // Literal path, or an argument that is not a parameter.
+        assert!(!hit(
+            "class A\n  def f(p)\n    open('data.txt')\n  end\nend\n"
+        ));
+        assert!(!hit(
+            "class A\n  def f(p)\n    q = clean(p)\n    open(q)\n  end\nend\n"
+        ));
+        // Private, protected and underscore methods.
+        assert!(!hit(
+            "class A\n  private\n  def f(p)\n    open(p)\n  end\nend\n"
+        ));
+        assert!(!hit(
+            "class A\n  protected\n  def f(p)\n    open(p)\n  end\nend\n"
+        ));
+        assert!(!hit("class A\n  def _f(p)\n    open(p)\n  end\nend\n"));
+        assert!(!hit(
+            "class A\n  private def f(p)\n    open(p)\n  end\nend\n"
+        ));
+        // Public again after `private`.
+        assert!(hit("class A\n  private\n  def g(x)\n    x\n  end\n  public\n  def f(p)\n    open(p)\n  end\nend\n"));
+        // A leading-pipe check clears it.
+        assert!(!hit(
+            "class A\n  def f(p)\n    raise 'no' if p.start_with?('|')\n    open(p)\n  end\nend\n"
+        ));
+        // A file that defines its own `open`: a bare open is that method.
+        assert!(!hit(
+            "class Bib\n  def self.open(path)\n    parse(open(path))\n  end\nend\n"
+        ));
+        assert!(hit(
+            "class Bib\n  def self.open(path)\n    parse(Kernel.open(path, 'r'))\n  end\nend\n"
         ));
     }
 
@@ -19387,6 +19439,104 @@ fn contains_command_sanitizer(text: &str) -> bool {
 /// Argument-vector process calls without a shell are not sinks.
 /// `shlex.quote` and numeric conversions stop the flow. Same-file and
 /// straight-line only; no interprocedural claim.
+/// Ruby `Kernel.open` / bare `open` whose path is a parameter of a public
+/// method. `Kernel#open` runs a command when the string starts with `|`, so a
+/// library method that opens a caller-supplied path with it is a command
+/// injection sink for any caller that forwards untrusted input. Explicit
+/// receivers other than `Kernel` (`File.open`, `IO.popen`, `URI.open`) are
+/// quiet; a bare `open` in a file that defines its own `open` is quiet; a
+/// private or protected method, an underscore method and a body that tests
+/// for a leading `|` are quiet. Only the first argument counts, and only as a
+/// bare parameter name. Same method body, straight-line only.
+#[allow(clippy::items_after_test_module)]
+fn ruby_parameter_open_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    if extension != "rb" {
+        return found;
+    }
+    let (Ok(def_re), Ok(open_re), Ok(pipe_guard), Ok(scope_re), Ok(own_open)) = (
+        Regex::new(
+            r#"^(\s*)def\s+(?:self\s*\.\s*)?([A-Za-z_][A-Za-z0-9_]*[?!=]?)\s*(?:\(([^)]*)\))?"#,
+        ),
+        Regex::new(
+            r#"(?:^|[^.\w:@$])(Kernel\s*\.\s*)?open\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*[,)]"#,
+        ),
+        Regex::new(r#"start_with\?\s*\(?\s*["']\||=~\s*/\\A\\\||include\?\s*\(?\s*["']\|"#),
+        Regex::new(r#"^\s*(?:class|module)\s"#),
+        Regex::new(r#"(?m)^\s*def\s+(?:self\s*\.\s*)?open\b"#),
+    ) else {
+        return found;
+    };
+    let defines_open = own_open.is_match(content);
+    let lines: Vec<&str> = content.lines().collect();
+    let mut private_scope = false;
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
+        let trimmed = line.trim();
+        if scope_re.is_match(line) {
+            private_scope = false;
+        } else if matches!(trimmed, "private" | "protected") {
+            private_scope = true;
+        } else if trimmed == "public" {
+            private_scope = false;
+        }
+        let Some(captures) = def_re.captures(line) else {
+            index += 1;
+            continue;
+        };
+        let indent = captures.get(1).map_or(0, |m| m.as_str().len());
+        let name = captures.get(2).map_or("", |m| m.as_str());
+        let inline_private = trimmed.starts_with("private ") || trimmed.starts_with("protected ");
+        // End of the method: the next `end` at the same indentation.
+        let mut end = index + 1;
+        while end < lines.len() {
+            let l = lines[end];
+            if l.trim() == "end" && l.len() - l.trim_start().len() == indent {
+                break;
+            }
+            end += 1;
+        }
+        let params: Vec<String> = captures
+            .get(3)
+            .map(|m| {
+                m.as_str()
+                    .split(',')
+                    .filter_map(|part| {
+                        let part = part.trim().trim_start_matches(['*', '&']);
+                        let part = part.split('=').next().unwrap_or("").trim();
+                        let part = part.trim_end_matches(':').trim();
+                        (!part.is_empty()
+                            && part
+                                .chars()
+                                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_'))
+                        .then(|| part.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let body = lines[index + 1..end.min(lines.len())].join("\n");
+        let public = !private_scope && !inline_private && !name.starts_with('_');
+        if public && !params.is_empty() && !pipe_guard.is_match(&body) {
+            for offset in index + 1..end.min(lines.len()) {
+                let code = lines[offset].trim();
+                if code.starts_with('#') {
+                    continue;
+                }
+                for c in open_re.captures_iter(lines[offset]) {
+                    let kernel = c.get(1).is_some();
+                    let arg = c.get(2).map_or("", |m| m.as_str());
+                    if (kernel || !defines_open) && params.iter().any(|p| p == arg) {
+                        found.insert(offset + 1);
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+    found
+}
+
 #[allow(clippy::items_after_test_module)]
 fn command_injection_sink_lines(
     content: &str,
