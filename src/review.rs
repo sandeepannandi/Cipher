@@ -19212,6 +19212,12 @@ fn library_parameter_command_lines(
     let (Ok(sink), Ok(quoted)) = (Regex::new(sink), Regex::new(quoted)) else {
         return found;
     };
+    let (Ok(py_shell_true), Ok(py_shell_call)) = (
+        Regex::new(r#"shell\s*=\s*True"#),
+        Regex::new(r#"\bos\s*\.\s*(?:system|popen)|getoutput|getstatusoutput"#),
+    ) else {
+        return found;
+    };
     for (index, line) in lines.iter().enumerate() {
         if !sink.is_match(line) {
             continue;
@@ -19226,13 +19232,7 @@ fn library_parameter_command_lines(
             continue;
         }
         let call_text = call_arguments_text(&lines, index, &sink);
-        if extension == "py"
-            && Regex::new(r#"shell\s*=\s*True"#)
-                .map(|re| !re.is_match(&call_text))
-                .unwrap_or(true)
-            && !Regex::new(r#"\bos\s*\.\s*(?:system|popen)|getoutput|getstatusoutput"#)
-                .map(|re| re.is_match(line))
-                .unwrap_or(false)
+        if extension == "py" && !py_shell_true.is_match(&call_text) && !py_shell_call.is_match(line)
         {
             continue;
         }
