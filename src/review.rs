@@ -918,7 +918,17 @@ fn signing_secret_sink_lines(
 /// Scan a single file for vulnerability patterns
 #[cfg(test)]
 fn scan_file_for_vulns(path: &Path, patterns: &[VulnPattern]) -> Vec<Finding> {
-    scan_file_for_vulns_with(path, patterns, None)
+    scan_file_for_vulns_with(path, patterns, None, None)
+}
+
+/// Path-based context rules (test directories, trusted-store names) must
+/// look only at the part of the path below the scan root. The directories
+/// above the root are where the user happened to check the project out and
+/// say nothing about the project (a checkout under `.../cache/` or
+/// `.../tests/` must not change which rules fire).
+fn below_scan_root<'a>(path: &'a Path, root: Option<&Path>) -> &'a Path {
+    root.and_then(|root| path.strip_prefix(root).ok())
+        .unwrap_or(path)
 }
 
 /// Build the finding one pattern produces for a matched line.
@@ -1298,9 +1308,11 @@ fn scan_file_for_vulns_with(
     path: &Path,
     patterns: &[VulnPattern],
     cross_file: Option<&CrossFileSinkLines>,
+    root: Option<&Path>,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     let ext = file_extension(path);
+    let context_path = below_scan_root(path, root);
 
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -1316,7 +1328,7 @@ fn scan_file_for_vulns_with(
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
     let mut sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
     let mut command_injection_sinks = command_injection_sink_lines(&content, &ext);
-    let (language_sql, language_command) = if path.components().any(|part| {
+    let (language_sql, language_command) = if context_path.components().any(|part| {
         matches!(
             part.as_os_str().to_str(),
             Some("test" | "tests" | "spec" | "specs" | "fixtures")
@@ -1356,7 +1368,7 @@ fn scan_file_for_vulns_with(
         command_injection_sinks.extend(cross_file.command.iter().copied());
         ssrf_sinks.extend(cross_file.ssrf.iter().copied());
     }
-    let signing_secret_sites = signing_secret_sink_lines(path, &content, &ext);
+    let signing_secret_sites = signing_secret_sink_lines(context_path, &content, &ext);
     let ssti_sinks = ssti_sink_lines(&content, &ext);
     let idor_sinks = idor_sink_lines(&content, &ext);
     let mut code_injection_sinks = code_injection_sink_lines(&content, &ext);
@@ -1530,7 +1542,7 @@ fn scan_file_for_vulns_with(
             // MAC-verified payload, or a framework trusted-store component is
             // documented design, not an untrusted-data boundary.
             if pattern.name == "Insecure Deserialization"
-                && deserialization_in_trusted_store(&content, &path.to_string_lossy())
+                && deserialization_in_trusted_store(&content, &context_path.to_string_lossy())
             {
                 continue;
             }
@@ -4448,7 +4460,8 @@ pub(crate) async fn collect_review_findings(
 
     let cross_file = cross_file_flow_sinks(&files, &canonical_path);
     for path in &files {
-        let findings = scan_file_for_vulns_with(path, &patterns, cross_file.get(path));
+        let findings =
+            scan_file_for_vulns_with(path, &patterns, cross_file.get(path), Some(&canonical_path));
         report.extend(findings);
     }
     // Route and handler context are needed for missing authorization. A bare
@@ -6683,6 +6696,52 @@ def assign(request, project_id):
         assert!(sinks.contains(&2));
         assert_eq!(sinks.len(), 1);
         assert!(django_idor_sink_lines(views, "js").is_empty());
+    }
+
+    /// Directories above the scan root are where the project was checked out,
+    /// not part of the project: a checkout under `.../cache/` must report the
+    /// same findings as one anywhere else, while a `cache` directory inside
+    /// the project still marks a trusted store.
+    #[test]
+    fn path_context_rules_ignore_directories_above_the_scan_root() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("cipher-rootrel-{nonce}"));
+        let source = "def reset_password
+  user = Marshal.load(Base64.decode64(params[:user]))
+end
+";
+        let patterns = build_vuln_patterns();
+        let reports = |root: &Path, relative: &str| {
+            let file = root.join(relative);
+            fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+            fs::write(&file, source).expect("write");
+            scan_file_for_vulns_with(&file, &patterns, None, Some(root))
+                .iter()
+                .any(|f| f.title == "Insecure Deserialization")
+        };
+        // Checkout lives under a directory named `cache`: still reported.
+        let under_cache = base.join("cache").join("project");
+        assert!(reports(
+            &under_cache,
+            "app/controllers/password_resets_controller.rb"
+        ));
+        // Same file in a checkout with a neutral parent: reported.
+        let neutral = base.join("neutral").join("project");
+        assert!(reports(
+            &neutral,
+            "app/controllers/password_resets_controller.rb"
+        ));
+        // Negative control: a cache directory INSIDE the project is a trusted
+        // store and stays suppressed.
+        assert!(!reports(&neutral, "lib/cache/entry_loader.rb"));
+        // Checkout under `tests/`: test-directory exemptions do not apply to
+        // the project, so a real finding is still produced.
+        let under_tests = base.join("tests").join("project");
+        assert!(reports(&under_tests, "app/controllers/other_controller.rb"));
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -10233,7 +10292,9 @@ func handler(w http.ResponseWriter, r *http.Request) {
             ));
         };
         for path in &paths {
-            for finding in scan_file_for_vulns_with(path, &patterns, cross_file.get(path)) {
+            for finding in
+                scan_file_for_vulns_with(path, &patterns, cross_file.get(path), Some(&root))
+            {
                 // Only the flow families; unrelated pattern rules (IDOR on
                 // `id` lookups, etc.) are covered by their own tests.
                 if ![SQLI_FLOW, NOSQL_WHERE_TITLE, CMDI, SSRF, "Code Injection"]
