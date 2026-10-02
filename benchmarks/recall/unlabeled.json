@@ -1,0 +1,146 @@
+[
+ {
+  "ghsa": "GHSA-hg4c-rgvm-964g",
+  "repo": "geopython/pycsw",
+  "fix": "522873e5ce48bb9cbd4e7e8168ca881ce709c222",
+  "pre_fix": "c27c247783dff38679ad4cf297d3500ec842d35c"
+ },
+ {
+  "ghsa": "GHSA-c84h-w6cr-5v8q",
+  "repo": "d0c-s4vage/lookatme",
+  "fix": "72fe36b784b234548d49dae60b840c37f0eb8d84",
+  "pre_fix": "f5d5f8b907ec37e54d49dcc69b35fc009e1760d3"
+ },
+ {
+  "ghsa": "GHSA-9jjr-qqfp-ppwx",
+  "repo": "jupyterhub/binderhub",
+  "fix": "195caac172690456dcdc8cc7a6ca50e05abf8182",
+  "pre_fix": "034430adc8ed379135f3ef46ee6ca650781ef67c"
+ },
+ {
+  "ghsa": "GHSA-h47j-hc6x-h3qq",
+  "repo": "mongo-express/mongo-express",
+  "fix": "7d365141deadbd38fa961cd835ce68eab5731494",
+  "pre_fix": "cae03a0de85d8237283e9cbfd29489e05692ae1e"
+ },
+ {
+  "ghsa": "GHSA-3q32-j57w-q4w7",
+  "repo": "totaljs/framework",
+  "fix": "c37cafbf3e379a98db71c1125533d1e8d5b5aef7",
+  "pre_fix": "e2f38981c2cbd5c8edb540e031626fa1017edef6"
+ },
+ {
+  "ghsa": "GHSA-jh63-28gx-7p26",
+  "repo": "IceWhaleTech/CasaOS",
+  "fix": "d060968b7ab08e7f8cbfe7ca9ccdfa47afe9bb06",
+  "pre_fix": "26e5b18a5d265ec785a507f3e50dea06eb67b5dd"
+ },
+ {
+  "ghsa": "GHSA-67mx-jc2f-jgjm",
+  "repo": "gogs/gogs",
+  "fix": "38aff73251cc46ced96dd608dab6190415032a82",
+  "pre_fix": "69827490e0f0e68b34e082321b4e328df7847d66"
+ },
+ {
+  "ghsa": "GHSA-26hm-r6mg-963c",
+  "repo": "jeecgboot/jeecg-boot",
+  "fix": "baefc1338dd03de36384ce7d5846b08041b488d0",
+  "pre_fix": "bb6ec4cc2f5575f09f22b8ca2e9e6544b1423bed"
+ },
+ {
+  "ghsa": "GHSA-grpf-gg7v-5g5h",
+  "repo": "apache/skywalking",
+  "fix": "fb7912c6bdda06a233f4b3e18e71a87d3e4a8951",
+  "pre_fix": "cc9ea271a720e8def161a583595f75da9bda77a5"
+ },
+ {
+  "ghsa": "GHSA-wf5p-f5xr-c4jj",
+  "repo": "francoisjacquet/rosariosis",
+  "fix": "e001430aa9fb53d2502fb6f036f6c51c578d2016",
+  "pre_fix": "0f5d1f1d193bc6b711d1644f172579d498ec1636"
+ },
+ {
+  "ghsa": "GHSA-q9p4-qfc8-fvpp",
+  "repo": "catfan/Medoo",
+  "fix": "659864b393961bf224bba1efc03b7dcbed7de533",
+  "pre_fix": "b3f05edf256d63ec3cfd31d6a078c564daf9863d"
+ },
+ {
+  "ghsa": "GHSA-jpwx-ffjq-wr4w",
+  "repo": "ezsystems/ezpublish-legacy",
+  "fix": "f8e3a97afd92efb9148134a4bacb35a875777a42",
+  "pre_fix": "b7c2a06f8f8f2081d767fb66cee5811d800ccba3"
+ },
+ {
+  "ghsa": "GHSA-3x49-g6rc-c284",
+  "repo": "mbdavid/LiteDB",
+  "fix": "4382ff4dd0dd8b8b16a4e37dfd29727c5f70f93f",
+  "pre_fix": "d72c6774e6a13de2cfcd7d477d3575efeb75c8f2"
+ },
+ {
+  "ghsa": "GHSA-gcm4-q2pg-xw89",
+  "repo": "rossant/ipycache",
+  "fix": "9cc7cb891ff169b3e8a6f5e84afd8238f566ad8e",
+  "pre_fix": "2c334c5885b9136ade0010770e3c895aa9075e80"
+ },
+ {
+  "ghsa": "GHSA-8p5c-f328-9fvv",
+  "repo": "anthraxx/diffoscope",
+  "fix": "632a40828a54b399787c25e7fa243f732aef7e05",
+  "pre_fix": "b468a2840a097f4b2f7719929d690d5738dbcae4"
+ },
+ {
+  "ghsa": "GHSA-5hjh-c26m-xw8w",
+  "repo": "hoppscotch/proxyscotch",
+  "fix": "de67380f62f907f201d75854b76024ba4885fab7",
+  "pre_fix": "f319207e8597c5e561d74db7d4034bfac6cac4f9"
+ },
+ {
+  "ghsa": "GHSA-gcqq-w6gr-h9j9",
+  "repo": "rubyzip/rubyzip",
+  "fix": "ce4208fdecc2ad079b05d3c49d70fe6ed1d07016",
+  "pre_fix": "df8dfbcff31aaf1bcd97094b02fa352cf04396df"
+ },
+ {
+  "ghsa": "GHSA-pr3h-jjhj-573x",
+  "repo": "rails/sprockets",
+  "fix": "18b8a7f07a50c245e9aee7854ecdbe606bbd8bb5",
+  "pre_fix": "2199a6012cc2b9cdbcbc0049361e5ee02770dff0"
+ },
+ {
+  "ghsa": "GHSA-wmjg-vqhv-q5p5",
+  "repo": "owen2345/camaleon-cms",
+  "fix": "b3b12b1e4a9e3fccaf5bb4330820fa7f8744e6bd",
+  "pre_fix": "a916faedbe5b2db37de225355043b6237e5a9945"
+ },
+ {
+  "ghsa": "GHSA-45x3-mw7q-wf7f",
+  "repo": "Studio-42/elFinder",
+  "fix": "157f471d7e48f190f74e66eb5bc73360b5352fd3",
+  "pre_fix": "82b098ffb21851dae96b4b9452ba6bb52461f5ea"
+ },
+ {
+  "ghsa": "GHSA-8c5p-4362-9333",
+  "repo": "getgrav/grav",
+  "fix": "8f9c417c04b89dc8d2de60b95e7696821b2826ce",
+  "pre_fix": "8bbf7a849b57bc4f943b266ece0572b341d593ea"
+ },
+ {
+  "ghsa": "GHSA-3hwx-c6cp-q972",
+  "repo": "publify/publify",
+  "fix": "0fb6b027fbaf17f6a6551f2148482a03eac12927",
+  "pre_fix": "a35489f7360e7a9a4c93a3d20cc65ec52086dcbf"
+ },
+ {
+  "ghsa": "GHSA-2v5j-q74q-r53f",
+  "repo": "django-helpdesk/django-helpdesk",
+  "fix": "a22eb0673fe0b7784f99c6b5fd343b64a6700f06",
+  "pre_fix": "7097c9c4c0b255ec1f10f3ea14fa2b9c47f6c706"
+ },
+ {
+  "ghsa": "GHSA-pc6f-259w-w3j6",
+  "repo": "heartexlabs/label-studio",
+  "fix": "501142cb815ac964b0c600c491885b67386870c2",
+  "pre_fix": "ad298047312123e2fb781cd6d7b9668ed1b51edc"
+ }
+]
