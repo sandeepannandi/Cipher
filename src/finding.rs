@@ -802,7 +802,10 @@ impl FindingEnvelope {
 pub fn cwe_for_title(title: &str, finding_type: FindingType) -> Option<String> {
     let t = title.to_lowercase();
 
-    let cwe = if t.contains("sql injection") {
+    // NoSQL is checked first: "nosql injection" also contains "sql injection".
+    let cwe = if t.contains("nosql") {
+        "CWE-943"
+    } else if t.contains("sql injection") {
         "CWE-89"
     } else if t.contains("command injection") {
         "CWE-78"
@@ -810,8 +813,6 @@ pub fn cwe_for_title(title: &str, finding_type: FindingType) -> Option<String> {
         "CWE-22"
     } else if t.contains("template injection") {
         "CWE-1336"
-    } else if t.contains("nosql") {
-        "CWE-943"
     } else if t.contains("xxe") || t.contains("xml external entity") {
         "CWE-611"
     } else if t.contains("xss") {
@@ -991,6 +992,24 @@ pub fn dedup_findings(findings: Vec<Finding>) -> Vec<Finding> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nosql_titles_map_to_cwe_943_not_cwe_89() {
+        assert_eq!(
+            cwe_for_title(
+                "NoSQL Injection — $where Operator",
+                FindingType::Vulnerability
+            ),
+            Some("CWE-943".to_string())
+        );
+        assert_eq!(
+            cwe_for_title(
+                "SQL Injection — String Concatenation",
+                FindingType::Vulnerability
+            ),
+            Some("CWE-89".to_string())
+        );
+    }
+
     use super::*;
 
     fn mk(title: &str, path: &str, line: usize) -> Finding {
