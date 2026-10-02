@@ -9727,6 +9727,13 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
         assert!(!hit(
             "class A\n  def _run(name)\n    `ls #{name}`\n  end\nend\n"
         ));
+        // A splatted argument list is an argument vector (Jekyll's Exec.run).
+        assert!(!hit(
+            "module Exec\n  def run(*args)\n    stdin, stdout = Open3.popen3(*args)\n  end\nend\n"
+        ));
+        assert!(!hit(
+            "class A\n  def run(*args)\n    system(*args)\n  end\nend\n"
+        ));
         // Interpolated value unrelated to any parameter.
         assert!(!hit(
             "class A\n  def run(name)\n    dir = Dir.pwd\n    `ls #{dir}`\n  end\nend\n"
@@ -19679,7 +19686,8 @@ fn ruby_parameter_shell_lines(content: &str, extension: &str) -> std::collection
             }
             if let Some(m) = call_re.find(&statement) {
                 let args = ruby_call_arguments(&statement, m.end() - 1);
-                if args.len() == 1 {
+                // A splat (`popen3(*args)`) is an argument vector, not a string.
+                if args.len() == 1 && !args[0].trim().starts_with('*') {
                     let arg = args[0].trim();
                     let composed = (arg.contains("#{")
                         && interpolations(arg).iter().any(|e| uses(e)))
