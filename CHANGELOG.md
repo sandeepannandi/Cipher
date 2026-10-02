@@ -30,6 +30,7 @@
 
 ### Fixed
 
+- **MongoDB `$where` injection reported as NoSQL, not SQL** — a request value reaching a JS/TS `$where` expression was titled "SQL Injection — String Concatenation" (CWE-89). It is now "NoSQL Injection — $where Operator" with CWE-943, its own description and remediation. Same line, same detection; only the class changes. SQL text such as `db.query("SELECT ... WHERE ...")` keeps the SQL title. `cwe_for_title` now checks NoSQL before SQL so a NoSQL title can no longer map to CWE-89.
 - **Quadratic scan time on large Java packages (#149)** — the cross-file flow pass re-read and re-parsed the package clause and class name of every sibling file for each file and each import, recompiling its regexes every time. Package and class names are now computed once per file and indexed, and the two regexes are compiled once. Whole-repo guava (3,275 Java files) now scans in about 5.5 minutes instead of exceeding 33; results are unchanged on all ten pinned benchmark repositories.
 - **`.github/` was never scanned** — the `.git` exclusion matched by substring, so `.github/workflows` (and `.gitlab-ci.yml`) were silently skipped. `.git` is now matched as a whole path component. `src/scan.rs`
 - **`pentest --blackbox` never checkpointed `session.json`** — black-box runs opened a workspace but never saved the session, so `--point-retest` and `--resume` could not find black-box/browser-fuzz findings. The black-box path now persists the full session (stage, guided proofs incl. browser-fuzz specs, findings, summary) before writing the report

@@ -1577,11 +1577,36 @@ fn scan_file_for_vulns_with(
                 continue;
             }
 
-            findings.push(pattern_finding(pattern, path, line_number, line));
+            let mut finding = pattern_finding(pattern, path, line_number, line);
+            retitle_mongo_where(&mut finding, &ext);
+            findings.push(finding);
         }
     }
 
     findings
+}
+
+/// Title of a JS/TS MongoDB `$where` injection. The sink is JavaScript run by
+/// the database, not SQL, so it is reported as NoSQL injection (CWE-943).
+const NOSQL_WHERE_TITLE: &str = "NoSQL Injection — $where Operator";
+
+/// The flow engine treats a request value reaching a MongoDB `$where`
+/// expression as an injection sink and reports it through the SQL pattern.
+/// Correct the class on that one shape: a JS/TS line containing `$where`.
+fn retitle_mongo_where(finding: &mut Finding, ext: &str) {
+    if finding.title != "SQL Injection — String Concatenation"
+        || !matches!(ext, "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs")
+        || !finding
+            .code_snippet
+            .as_deref()
+            .is_some_and(|code| code.contains("$where"))
+    {
+        return;
+    }
+    finding.title = NOSQL_WHERE_TITLE.to_string();
+    finding.description = "A request-controlled value reaches a MongoDB $where expression, which the database evaluates as JavaScript. Use structured query operators instead of $where, or validate and cast the value first.".to_string();
+    finding.remediation = Some("Replace $where with structured query operators ($gt, $eq, ...) and cast request values to their expected type before they reach the query.".to_string());
+    finding.cwe_id = Some("CWE-943".to_string());
 }
 
 /// Emit only cross-file flow findings for a file outside the scanned set (a
@@ -4520,10 +4545,9 @@ fn attach_verified_paths(findings: &mut [Finding], root: &Path) {
                         sink.contains("exec") || sink.contains("system") || sink.contains("popen")
                     }
                     "SQL Injection — String Concatenation" => {
-                        sink.contains("query")
-                            || sink.contains("execute")
-                            || sink.contains("$where")
+                        sink.contains("query") || sink.contains("execute")
                     }
+                    NOSQL_WHERE_TITLE => sink.contains("$where"),
                     _ => false,
                 };
                 compatible
@@ -9637,7 +9661,8 @@ exports.AllocationsDAO = AllocationsDAO;"#,
             .findings
             .iter()
             .find(|f| {
-                f.title == SQLI_FLOW
+                f.title == NOSQL_WHERE_TITLE
+                    && f.cwe_id.as_deref() == Some("CWE-943")
                     && f.file_path
                         .as_deref()
                         .is_some_and(|p| p.ends_with("allocations-dao.js"))
@@ -9698,7 +9723,7 @@ exports.AllocationsDAO = AllocationsDAO;"#;
         assert!(
             found.contains(&(
                 "app/data/allocations-dao.js".to_string(),
-                SQLI_FLOW.to_string(),
+                NOSQL_WHERE_TITLE.to_string(),
                 7
             )),
             "{found:?}"
@@ -9756,12 +9781,25 @@ exports.Repo = Repo;"#;
     }
 
     #[test]
-    fn js_where_is_only_an_sql_sink() {
+    fn js_where_is_reported_as_nosql_injection() {
         let findings = scan(
             "const threshold = req.query.threshold;\nreturn {$where: `${threshold}`};",
             "js",
         );
+        assert_eq!(titles(&findings), vec![NOSQL_WHERE_TITLE]);
+        assert_eq!(findings[0].cwe_id.as_deref(), Some("CWE-943"));
+    }
+
+    #[test]
+    fn real_sql_injection_keeps_its_title_next_to_a_where_clause_word() {
+        // Negative control: SQL text and a JS line that merely mention a
+        // WHERE clause stay SQL injection; only a `$where` operator moves.
+        let findings = scan(
+            "const name = req.query.name;\ndb.query(`SELECT * FROM users WHERE name = '${name}'`);",
+            "js",
+        );
         assert_eq!(titles(&findings), vec![SQLI_FLOW]);
+        assert_eq!(findings[0].cwe_id.as_deref(), Some("CWE-89"));
     }
 
     const SQLI_FLOW: &str = "SQL Injection — String Concatenation";
@@ -10116,7 +10154,9 @@ func handler(w http.ResponseWriter, r *http.Request) {
             for finding in scan_file_for_vulns_with(path, &patterns, cross_file.get(path)) {
                 // Only the flow families; unrelated pattern rules (IDOR on
                 // `id` lookups, etc.) are covered by their own tests.
-                if ![SQLI_FLOW, CMDI, SSRF, "Code Injection"].contains(&finding.title.as_str()) {
+                if ![SQLI_FLOW, NOSQL_WHERE_TITLE, CMDI, SSRF, "Code Injection"]
+                    .contains(&finding.title.as_str())
+                {
                     continue;
                 }
                 collect(path, &finding);
