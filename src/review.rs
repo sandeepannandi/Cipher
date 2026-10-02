@@ -6725,6 +6725,11 @@ def assign(request, project_id):
             "func HasImage(path string) bool {\n\tcmd := \"pdffonts %s\"\n\tout, _ := exec.Command(\"bash\", \"-c\", fmt.Sprintf(cmd, path)).Output()\n\treturn len(out) > 0\n}\n"
         ));
         // Negative controls.
+        // Build-tool task scripts are not a library boundary.
+        assert!(!hit(
+            "js",
+            "module.exports = function (grunt) {\n  grunt.registerTask('x', function (arg) {\n    exec('node ' + arg);\n  });\n};\n"
+        ));
         // Fixed command, no parameter.
         assert!(!hit(
             "js",
@@ -19193,6 +19198,16 @@ fn library_parameter_command_lines(
     extension: &str,
 ) -> std::collections::HashSet<usize> {
     let mut found = std::collections::HashSet::new();
+    // Build-tool scripts (Grunt/Gulp) take their arguments from the developer's
+    // own command line, not from an untrusted caller.
+    if matches!(extension, "js" | "mjs" | "cjs" | "ts")
+        && (content.contains("grunt.registerTask")
+            || content.contains("grunt.initConfig")
+            || content.contains("gulp.task(")
+            || content.contains("gulp.series("))
+    {
+        return found;
+    }
     let lines: Vec<&str> = content.lines().collect();
     let (sink, quoted): (&str, &str) = match extension {
         "js" | "mjs" | "cjs" | "ts" => (
