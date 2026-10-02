@@ -9605,6 +9605,34 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
     }
 
     #[test]
+    fn python_tuple_unpack_of_a_call_carries_request_taint() {
+        let hit = |src: &str| !ssrf_sink_lines(src, "py").is_empty();
+        assert!(hit(
+            "def f(request):\n    url = request.GET['url']\n    proto, server, path, query, frag = urlsplit(url)\n    conn = HTTPConnection(server)\n"
+        ));
+        assert!(hit(
+            "def f(request):\n    u = request.GET['u']\n    (a, b) = parse(u)\n    requests.get(b)\n"
+        ));
+        // Negative controls.
+        // Pairwise assignment is not an unpack: the second name is a constant.
+        assert!(!hit(
+            "def f(request):\n    u = request.GET['u']\n    a, b = u, 'https://example.com/'\n    requests.get(b)\n"
+        ));
+        // Unpacking a call that does not involve the request value.
+        assert!(!hit(
+            "def f(request):\n    u = request.GET['u']\n    host, port = get_config()\n    HTTPConnection(host)\n"
+        ));
+        // A later reassignment clears the unpacked name.
+        assert!(!hit(
+            "def f(request):\n    u = request.GET['u']\n    a, b = split(u)\n    b, c = get_config()\n    requests.get(b)\n"
+        ));
+        // Fixed host connection.
+        assert!(!hit(
+            "def f(request):\n    u = request.GET['u']\n    conn = HTTPConnection('internal.example')\n    conn.request('GET', u)\n"
+        ));
+    }
+
+    #[test]
     fn go_argument_vector_command_is_clean() {
         let findings = scan(
             r#"host := r.URL.Query().Get("host")
@@ -15505,6 +15533,54 @@ fn go_email_header_sink_lines(content: &str, extension: &str) -> std::collection
     found
 }
 
+/// Python `a, b, c = f(...)`: two or more plain names unpacked from one call.
+/// A right side with a top-level comma (`a, b = x, y`) is a pairwise
+/// assignment, not an unpack, and is left to the single-name binding rule.
+fn python_call_tuple_unpack(line: &str) -> Option<(Vec<String>, &str)> {
+    let (left, right) = line.split_once('=')?;
+    if right.starts_with('=') || left.ends_with(['!', '<', '>', '=', '+', '-', '*', '/', '%']) {
+        return None;
+    }
+    let left = left.trim().trim_start_matches('(').trim_end_matches(')');
+    let names: Vec<&str> = left.split(',').map(str::trim).collect();
+    if names.len() < 2
+        || !names.iter().all(|name| {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                && !name.starts_with(|ch: char| ch.is_ascii_digit())
+        })
+    {
+        return None;
+    }
+    let right = right.trim();
+    let open = right.find('(')?;
+    let callee = &right[..open];
+    if callee.is_empty()
+        || !callee
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
+        || !right.ends_with(')')
+    {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (index, ch) in right.char_indices() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth == 0 && index + 1 != right.len() {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some((names.into_iter().map(str::to_string).collect(), right))
+}
+
 /// One flow pass over `range`. Returns the sink lines reached directly, the
 /// callee sink lines reached through same-file calls, and `(file index, sink
 /// line)` pairs reached through calls into imported functions.
@@ -15641,7 +15717,23 @@ fn flow_pass(
         }
 
         let visible = blank_plain_strings(code, language);
-        if let Some(captures) = binding.captures(&visible) {
+        let tuple_unpack = if language == FlowLanguage::Python {
+            python_call_tuple_unpack(&visible)
+        } else {
+            None
+        };
+        if let Some((names, rhs)) = tuple_unpack {
+            // `a, b = f(tainted)`: every unpacked name carries the call's taint.
+            let derives = tainted.iter().any(|name| identifier_in(rhs, name))
+                || inline_read.as_ref().is_some_and(|re| re.is_match(rhs));
+            for name in names {
+                if derives && !sanitized(rhs) {
+                    tainted.insert(name);
+                } else {
+                    tainted.remove(&name);
+                }
+            }
+        } else if let Some(captures) = binding.captures(&visible) {
             if let (Some(lhs), Some(rhs)) = (captures.get(1), captures.get(2)) {
                 let rhs = rhs.as_str();
                 let derives = tainted.iter().any(|name| identifier_in(rhs, name))
@@ -19967,6 +20059,7 @@ fn ssrf_flow_sinks(language: FlowLanguage) -> Vec<FlowSink> {
         FlowLanguage::Python => &[
             r#"\b(?:requests|httpx|session|client)\s*\.\s*(get|post|put|delete|head|patch|options|request)\s*\("#,
             r#"\b(?:urllib\s*\.\s*request\s*\.\s*)?(urlopen)\s*\("#,
+            r#"\b(?:http\s*\.\s*client\s*\.\s*|httplib\s*\.\s*)?(HTTPS?Connection)\s*\("#,
         ],
         FlowLanguage::JavaScript => &[
             r#"(?:^|[^.\w$])(fetch|got|axios)\s*\("#,
