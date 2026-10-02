@@ -1553,6 +1553,18 @@ fn scan_file_for_vulns_with(
             // ZAP daemon driven by the app's own security test suite. It is
             // a development-tool credential in non-production environment
             // config, not an application credential.
+            // A logging call whose only argument is a fixed string reports
+            // a status; no secret value can reach the log.
+            if pattern.name == "Sensitive Data in Logging" && is_literal_only_log_call(trimmed) {
+                continue;
+            }
+
+            // A value that is itself a command-line flag name ("--password")
+            // is an option map entry, not a credential.
+            if pattern.name == "Hardcoded Credentials" && credential_value_is_cli_flag(trimmed) {
+                continue;
+            }
+
             if pattern.name == "Hardcoded Credentials" && trimmed.contains("zapApiKey") {
                 continue;
             }
@@ -1584,6 +1596,34 @@ fn scan_file_for_vulns_with(
     }
 
     findings
+}
+
+/// A log statement whose single argument is a quoted string with no
+/// interpolation, concatenation or format arguments, such as
+/// `console.log(`[TOKEN OK]`);`. Calls with a second argument, `+`, `${`,
+/// `#{` or `{}` placeholders still count as logging a value.
+fn is_literal_only_log_call(line: &str) -> bool {
+    static LITERAL_LOG: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+        Regex::new(
+            r#"(?i)^(?:log\.(?:info|debug|warn|error|Printf|Println|Print|Fatalf|Fatal|Panicf)|console\.log)\s*\(\s*(?:'[^'\\$#{}%]*'|"[^"\\$#{}%]*"|`[^`\\$#{}%]*`)\s*\)\s*;?\s*$"#,
+        )
+        .ok()
+    });
+    LITERAL_LOG
+        .as_ref()
+        .is_some_and(|re| re.is_match(line.trim()))
+}
+
+/// `password: "--password"` style entries: the quoted value is a lowercase
+/// long-option name (letters and dashes only), not a secret.
+fn credential_value_is_cli_flag(line: &str) -> bool {
+    static CLI_FLAG: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+        Regex::new(
+            r#"(?i)\b(?:password|passwd|pwd|secret|token|api_?key)\w*["']?\s*(?::|=>|=)\s*["']--[a-z]+(?:-[a-z]+)*["']\s*,?\s*$"#,
+        )
+        .ok()
+    });
+    CLI_FLAG.as_ref().is_some_and(|re| re.is_match(line.trim()))
 }
 
 /// Title of a JS/TS MongoDB `$where` injection. The sink is JavaScript run by
@@ -9768,6 +9808,48 @@ exports.Repo = Repo;"#;
         assert_eq!(
             found,
             vec![("src/services/repo.js".to_string(), SQLI_FLOW.to_string(), 4)]
+        );
+    }
+
+    #[test]
+    fn literal_only_log_and_cli_flag_credential_are_not_findings() {
+        // Suppressed: fixed-string log, and an option-name map entry.
+        let findings = scan(
+            "if (GITHUB_TOKEN) {\n  console.log(`[GITHUB_TOKEN OK]`);\n}",
+            "js",
+        );
+        assert!(findings.is_empty(), "{findings:?}");
+        let findings = scan("cli_arg_map = {\n  password: \"--password\",\n}", "rb");
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn logging_a_secret_value_and_real_credentials_still_fire() {
+        // Negative controls: interpolation, concatenation and a second
+        // argument all log the value; a real password literal still fires.
+        for code in [
+            "console.log(`token ${token}`);",
+            "console.log('token ' + token);",
+            "console.log('token', token);",
+            "console.log(token);",
+        ] {
+            let findings = scan(code, "js");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.title == "Sensitive Data in Logging"),
+                "{code}: {findings:?}"
+            );
+        }
+        let findings = scan("config = {\n  password: \"hunter2hunter2\",\n}", "rb");
+        assert!(
+            findings.iter().any(|f| f.title == "Hardcoded Credentials"),
+            "{findings:?}"
+        );
+        let findings = scan("config = {\n  password: \"--hunter2\",\n}", "rb");
+        assert!(
+            findings.iter().any(|f| f.title == "Hardcoded Credentials"),
+            "{findings:?}"
         );
     }
 
