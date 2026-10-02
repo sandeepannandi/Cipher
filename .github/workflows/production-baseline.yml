@@ -19,4 +19,4 @@ jobs:
       - name: Build Cipher
         run: cargo build --release --locked
       - name: Compare pinned production repositories against expected keys
-        run: python3 benchmarks/pinned/check.py --cipher ./target/release/cipher-ai --suite production --cache "$RUNNER_TEMP/pinned-cache"
+        run: python3 benchmarks/pinned/check.py --cipher ./target/release/cipher-ai --suite production --cache "$HOME/pinned-cache"

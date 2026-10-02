@@ -30,4 +30,4 @@ jobs:
       - name: Run gate unit tests
         run: python3 -m unittest discover -s benchmarks/pinned -p 'test_*.py'
       - name: Compare pinned repositories against expected keys and the label ledger
-        run: python3 benchmarks/pinned/check.py --cipher ./target/release/cipher-ai --suite benchmark --cache "$RUNNER_TEMP/pinned-cache"
+        run: python3 benchmarks/pinned/check.py --cipher ./target/release/cipher-ai --suite benchmark --cache "$HOME/pinned-cache"
