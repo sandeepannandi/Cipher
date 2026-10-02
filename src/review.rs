@@ -6703,6 +6703,78 @@ def assign(request, project_id):
     /// same findings as one anywhere else, while a `cache` directory inside
     /// the project still marks a trusted store.
     #[test]
+    fn library_parameter_shell_sinks_fire_only_when_composed_and_public() {
+        let hit = |ext: &str, src: &str| !library_parameter_command_lines(src, ext).is_empty();
+        // Positive: public JS function composes its parameter into exec.
+        assert!(hit(
+            "js",
+            "module.exports = function (iface, callback) {\n  exec(\"ifconfig \" + iface, function (e, out) {});\n};\n"
+        ));
+        assert!(hit(
+            "js",
+            "export function ping(host) {\n  const cmd = `ping -c1 ${host}`;\n  execSync(cmd);\n}\n"
+        ));
+        // Positive: public Python function, os.system with a formatted string.
+        assert!(hit(
+            "py",
+            "def run(path):\n    os.system('cat %s' % path)\n"
+        ));
+        // Positive: exported Go function, bash -c with Sprintf of the parameter.
+        assert!(hit(
+            "go",
+            "func HasImage(path string) bool {\n\tcmd := \"pdffonts %s\"\n\tout, _ := exec.Command(\"bash\", \"-c\", fmt.Sprintf(cmd, path)).Output()\n\treturn len(out) > 0\n}\n"
+        ));
+        // Negative controls.
+        // Build-tool task scripts are not a library boundary.
+        assert!(!hit(
+            "js",
+            "module.exports = function (grunt) {\n  grunt.registerTask('x', function (arg) {\n    exec('node ' + arg);\n  });\n};\n"
+        ));
+        // Fixed command, no parameter.
+        assert!(!hit(
+            "js",
+            "module.exports = function (cb) {\n  exec('uptime', cb);\n};\n"
+        ));
+        // Parameter is not part of the command text.
+        assert!(!hit(
+            "js",
+            "module.exports = function (iface, cb) {\n  exec('uptime', function () { cb(iface); });\n};\n"
+        ));
+        // Shell-quoted parameter.
+        assert!(!hit(
+            "py",
+            "def run(path):\n    os.system('cat ' + shlex.quote(path))\n"
+        ));
+        assert!(!hit(
+            "js",
+            "module.exports = function (p) {\n  exec('ls ' + shellQuote(p));\n};\n"
+        ));
+        // Not public: underscore Python helper, lower-case Go func, unexported JS function.
+        assert!(!hit(
+            "py",
+            "def _run(path):\n    os.system('cat ' + path)\n"
+        ));
+        assert!(!hit(
+            "go",
+            "func run(path string) {\n\texec.Command(\"bash\", \"-c\", \"cat \"+path).Run()\n}\n"
+        ));
+        assert!(!hit("js", "function helper(p) {\n  exec('ls ' + p);\n}\n"));
+        // Fixed argv call is safe even with a parameter.
+        assert!(!hit(
+            "py",
+            "def run(path):\n    subprocess.run(['cat', path])\n"
+        ));
+        assert!(hit(
+            "py",
+            "def run(path):\n    subprocess.run('cat ' + path, shell=True)\n"
+        ));
+        assert!(!hit(
+            "py",
+            "def run(path):\n    subprocess.run('cat ' + path)\n"
+        ));
+    }
+
+    #[test]
     fn path_context_rules_ignore_directories_above_the_scan_root() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -19103,13 +19175,308 @@ fn command_injection_sink_lines(
     let Some(language) = flow_language(extension) else {
         return std::collections::HashSet::new();
     };
-    request_flow_sink_lines(
+    let mut lines = request_flow_sink_lines(
         content,
         language,
         &command_flow_sinks(language),
         contains_command_sanitizer,
         false,
-    )
+    );
+    lines.extend(library_parameter_command_lines(content, extension));
+    lines
+}
+
+/// Command injection in library code: a public function builds a shell
+/// command string out of one of its own parameters. There is no web request
+/// source in a library, so the caller-supplied parameter is the attacker
+/// boundary. Only shell-string sinks count (a call that hands one string to a
+/// shell), the parameter must be composed into the string, and a shell-quote
+/// helper applied in the function body clears it. A fixed argv call, or a
+/// parameter that is not part of the command text, never fires.
+fn library_parameter_command_lines(
+    content: &str,
+    extension: &str,
+) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    // Build-tool scripts (Grunt/Gulp) take their arguments from the developer's
+    // own command line, not from an untrusted caller.
+    if matches!(extension, "js" | "mjs" | "cjs" | "ts")
+        && (content.contains("grunt.registerTask")
+            || content.contains("grunt.initConfig")
+            || content.contains("gulp.task(")
+            || content.contains("gulp.series("))
+    {
+        return found;
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    let (sink, quoted): (&str, &str) = match extension {
+        "js" | "mjs" | "cjs" | "ts" => (
+            r#"(?:^|[^.\w$])(?:exec|execSync)\s*\(|\b(?:child_process|childProcess|cp)\s*\.\s*(?:exec|execSync)\s*\("#,
+            r#"(?i)shell-?quote|shell-?escape|escapeshellarg|\bquote\s*\(|execFile"#,
+        ),
+        "py" => (
+            r#"\bos\s*\.\s*(?:system|popen)\s*\(|\b(?:subprocess|commands)\s*\.\s*(?:getoutput|getstatusoutput)\s*\(|\bsubprocess\s*\.\s*(?:run|call|check_call|check_output|Popen)\s*\("#,
+            r#"shlex\s*\.\s*quote|pipes\s*\.\s*quote|\bquote\s*\("#,
+        ),
+        "go" => (
+            r#"\bexec\s*\.\s*Command(?:Context)?\s*\(\s*(?:[A-Za-z_.]+\s*,\s*)?"(?:/bin/)?(?:sh|bash|zsh)"\s*,\s*"-c"\s*,"#,
+            r#"shellescape|shellquote|\bQuote\s*\("#,
+        ),
+        _ => return found,
+    };
+    let (Ok(sink), Ok(quoted)) = (Regex::new(sink), Regex::new(quoted)) else {
+        return found;
+    };
+    let (Ok(py_shell_true), Ok(py_shell_call)) = (
+        Regex::new(r#"shell\s*=\s*True"#),
+        Regex::new(r#"\bos\s*\.\s*(?:system|popen)|getoutput|getstatusoutput"#),
+    ) else {
+        return found;
+    };
+    for (index, line) in lines.iter().enumerate() {
+        if !sink.is_match(line) {
+            continue;
+        }
+        let Some((params, body_start, body_end)) =
+            enclosing_public_function(&lines, index, extension)
+        else {
+            continue;
+        };
+        let body = lines[body_start..body_end].join("\n");
+        if quoted.is_match(&body) {
+            continue;
+        }
+        let call_text = call_arguments_text(&lines, index, &sink);
+        if extension == "py" && !py_shell_true.is_match(&call_text) && !py_shell_call.is_match(line)
+        {
+            continue;
+        }
+        if composes_parameter(&call_text, &params, &lines[body_start..=index]) {
+            found.insert(index + 1);
+        }
+    }
+    found
+}
+
+/// Text of the sink call's argument list, up to its closing parenthesis.
+fn call_arguments_text(lines: &[&str], index: usize, sink: &Regex) -> String {
+    let first = lines[index];
+    let start = sink.find(first).map_or(0, |m| m.end());
+    let mut text = String::new();
+    let mut depth = 1i64;
+    let mut current = &first[start..];
+    let mut line_index = index;
+    loop {
+        for ch in current.chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return text;
+                    }
+                }
+                _ => {}
+            }
+            text.push(ch);
+        }
+        text.push('\n');
+        line_index += 1;
+        if line_index >= lines.len() || line_index > index + 6 {
+            return text;
+        }
+        current = lines[line_index];
+    }
+}
+
+/// True when the call text composes a parameter into the command string:
+/// concatenation, interpolation, formatting, or a local variable assigned
+/// from one of those earlier in the function.
+fn composes_parameter(call_text: &str, params: &[String], earlier: &[&str]) -> bool {
+    let mut names: Vec<String> = params.to_vec();
+    // One hop: `cmd = "..." + param` earlier in the body taints `cmd`.
+    for line in earlier {
+        let Some((lhs, rhs)) = line.split_once('=') else {
+            continue;
+        };
+        let lhs = lhs
+            .trim()
+            .trim_start_matches("var ")
+            .trim_start_matches("let ")
+            .trim_start_matches("const ")
+            .trim_start_matches("local ")
+            .trim_end_matches(':')
+            .trim();
+        let first = lhs.split([':', ' ']).next().unwrap_or("");
+        if first.is_empty()
+            || !first
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+            || rhs.starts_with('=')
+        {
+            continue;
+        }
+        if params.iter().any(|p| contains_identifier(rhs, p))
+            && (rhs.contains('+')
+                || rhs.contains("${")
+                || rhs.contains("f\"")
+                || rhs.contains("f'")
+                || rhs.contains('%')
+                || rhs.contains(".format(")
+                || rhs.contains("Sprintf")
+                || rhs.contains(".join("))
+        {
+            names.push(first.to_string());
+        }
+    }
+    let trimmed = call_text.trim();
+    // A bare identifier or literal alone is not composition unless it names
+    // a tainted local.
+    let composed = trimmed.contains('+')
+        || trimmed.contains("${")
+        || trimmed.contains(".format(")
+        || trimmed.contains("Sprintf")
+        || trimmed.contains('%')
+        || trimmed.contains("f\"")
+        || trimmed.contains("f'")
+        || trimmed.contains(".join(");
+    names
+        .iter()
+        .enumerate()
+        .any(|(i, name)| contains_identifier(call_text, name) && (composed || i >= params.len()))
+}
+
+fn contains_identifier(text: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(pos) = text[from..].find(name) {
+        let start = from + pos;
+        let end = start + name.len();
+        let before_ok = start == 0
+            || !(bytes[start - 1].is_ascii_alphanumeric()
+                || bytes[start - 1] == b'_'
+                || bytes[start - 1] == b'$'
+                || bytes[start - 1] == b'.');
+        let after_ok = end >= bytes.len()
+            || !(bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] == b'$');
+        if before_ok && after_ok {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+/// The public function containing `index`: its parameters and body line
+/// range. Public means exported (`module.exports`, `exports.x`, `export`),
+/// a module-level Python `def` without a leading underscore, or a Go
+/// function with an upper-case name.
+fn enclosing_public_function(
+    lines: &[&str],
+    index: usize,
+    extension: &str,
+) -> Option<(Vec<String>, usize, usize)> {
+    let header = match extension {
+        "js" | "mjs" | "cjs" | "ts" => Regex::new(
+            r#"^\s*(?:module\s*\.\s*exports(?:\s*\.\s*[A-Za-z_$][\w$]*)?|exports\s*\.\s*[A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*[\w$]*\s*\(([^()]*)\)\s*\{|^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*[\w$]*\s*\(([^()]*)\)[^{]*\{"#,
+        ),
+        "py" => Regex::new(r#"^(?:async\s+)?def\s+([A-Za-z][A-Za-z0-9_]*)\s*\(([^()]*)\)\s*(?:->\s*[^:]+)?:\s*$"#),
+        "go" => Regex::new(r#"^func\s+[A-Z][A-Za-z0-9_]*\s*\(([^()]*)\)[^{]*\{\s*$"#),
+        _ => return None,
+    }
+    .ok()?;
+    let mut start = index;
+    loop {
+        let line = lines[start];
+        if let Some(captures) = header.captures(line) {
+            let raw = captures
+                .iter()
+                .skip(1)
+                .flatten()
+                .map(|m| m.as_str())
+                .last()
+                .unwrap_or("");
+            let params = library_param_names(raw, extension);
+            // The body must reach the sink line.
+            let end = function_end(lines, start, extension);
+            if end > index {
+                return Some((params, start + 1, end));
+            }
+            return None;
+        }
+        if start == 0 {
+            return None;
+        }
+        start -= 1;
+    }
+}
+
+fn library_param_names(raw: &str, extension: &str) -> Vec<String> {
+    raw.split(',')
+        .filter_map(|part| {
+            let part = part.trim();
+            let part = part.split('=').next().unwrap_or("").trim();
+            let name = match extension {
+                "go" => part.split_whitespace().next().unwrap_or(""),
+                "py" => part
+                    .trim_start_matches('*')
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .trim(),
+                _ => part
+                    .trim_start_matches("...")
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .trim(),
+            };
+            (!name.is_empty()
+                && name != "self"
+                && name != "cls"
+                && name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '$'))
+            .then(|| name.to_string())
+        })
+        .collect()
+}
+
+fn function_end(lines: &[&str], start: usize, extension: &str) -> usize {
+    if extension == "py" {
+        let mut end = start + 1;
+        for (offset, next) in lines.iter().enumerate().skip(start + 1) {
+            if next.trim().is_empty() || next.trim_start().starts_with('#') {
+                continue;
+            }
+            if !next.starts_with([' ', '\t']) {
+                break;
+            }
+            end = offset + 1;
+        }
+        return end;
+    }
+    let mut depth = 0i64;
+    let mut opened = false;
+    for (offset, next) in lines.iter().enumerate().skip(start) {
+        for ch in next.chars() {
+            match ch {
+                '{' => {
+                    depth += 1;
+                    opened = true;
+                }
+                '}' => depth -= 1,
+                _ => {}
+            }
+        }
+        if opened && depth <= 0 {
+            return offset + 1;
+        }
+    }
+    lines.len()
 }
 
 #[allow(clippy::items_after_test_module)]
