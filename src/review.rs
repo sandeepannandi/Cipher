@@ -670,7 +670,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         // before `_`), so no look-around is needed here. `from_string` was
         // dropped: its hits are template compilation and config parsing
         // (documented design), never deserialization.
-        r#"(?i)(?:pickle\.loads|marshal\.load|yaml\.load\b|\bunserialize\s*\()"#,
+        r#"(?i)(?:pickle\.loads?\b|marshal\.load|yaml\.load\b|\bunserialize\s*\()"#,
         // Safe loader spellings and PHP class allowlists are the mitigations
         // this rule asks for, not the vulnerability.
         Some(r#"(?i)SafeLoader|safe_load|SafeYAML|allowed_classes"#),
@@ -8382,6 +8382,19 @@ res.render("tutorial/a1", { page: req.query.page });
         assert!(findings[1]
             .description
             .starts_with("Development-only setting: "));
+    }
+
+    #[test]
+    fn python_file_based_pickle_load_is_deserialization() {
+        let flagged = |src: &str| titles(&scan(src, "py")).contains(&"Insecure Deserialization");
+        assert!(flagged(
+            "f = request.files.get('file')\ndata = pickle.load(f)\n"
+        ));
+        assert!(flagged("data = pickle.loads(blob)\n"));
+        // Writing and lookalike names are not deserialization.
+        assert!(!flagged("pickle.dump(obj, fh)\n"));
+        assert!(!flagged("pickle.dumps(obj)\n"));
+        assert!(!flagged("x = pickle.loader_name\n"));
     }
 
     #[test]

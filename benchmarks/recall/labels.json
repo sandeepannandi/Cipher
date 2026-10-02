@@ -113,7 +113,7 @@
  },
  {
   "ghsa": "GHSA-vxp9-wv2f-wqmw",
-  "file": "superset/models/core.py",
+  "file": "superset/views/core.py",
   "line": 1121,
   "cwe": "CWE-502",
   "sink": "pickle.load(f)"

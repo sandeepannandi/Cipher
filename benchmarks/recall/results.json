@@ -97,9 +97,9 @@
  },
  {
   "ghsa": "GHSA-vxp9-wv2f-wqmw",
-  "file": "superset/models/core.py",
+  "file": "superset/views/core.py",
   "line": 1121,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-vfj6-275q-4pvm",
