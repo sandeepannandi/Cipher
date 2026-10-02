@@ -105,7 +105,7 @@
   "ghsa": "GHSA-vfj6-275q-4pvm",
   "file": "webapp/graphite/composer/views.py",
   "line": 102,
-  "status": "MISS"
+  "status": "NEAR"
  },
  {
   "ghsa": "GHSA-h65g-jfqg-2w6m",
