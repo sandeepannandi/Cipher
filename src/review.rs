@@ -1324,7 +1324,8 @@ fn scan_file_for_vulns_with(
     let js_path_traversal_sinks = js_path_traversal_sink_lines(&content, &ext);
     let python_path_traversal_sinks = python_path_traversal_sink_lines(&content, &ext);
     let java_path_traversal_sinks = java_path_traversal_sink_lines(&content, &ext);
-    let go_path_traversal_sinks = go_path_traversal_sink_lines(&content, &ext);
+    let mut go_path_traversal_sinks = go_path_traversal_sink_lines(&content, &ext);
+    go_path_traversal_sinks.extend(go_archive_entry_join_lines(&content, &ext));
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
     let mut sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
     let mut command_injection_sinks = command_injection_sink_lines(&content, &ext);
@@ -9568,6 +9569,42 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
     }
 
     #[test]
+    fn go_archive_entry_names_joined_without_containment_check() {
+        let hit = |src: &str| !go_archive_entry_join_lines(src, "go").is_empty();
+        // cpio, tar and zip iterators joined straight onto the destination.
+        assert!(hit(
+            "func Extract(rs io.Reader, dest string) error {\n\tfor {\n\t\tentry, err := stream.ReadNextEntry()\n\t\ttarget := path.Join(dest, path.Clean(entry.Header.filename))\n\t}\n}\n"
+        ));
+        assert!(hit(
+            "func untar(r io.Reader, dir string) error {\n\ttr := tar.NewReader(r)\n\tfor {\n\t\thdr, err := tr.Next()\n\t\tp := filepath.Join(dir, hdr.Name)\n\t}\n}\n"
+        ));
+        assert!(hit(
+            "func unzip(z *zip.Reader, dir string) {\n\tfor _, f := range z.File {\n\t\tname := f.Name\n\t\tp := filepath.Join(dir, name)\n\t}\n}\n"
+        ));
+        // Negative controls: containment check, Base, IsLocal, ".." test.
+        assert!(!hit(
+            "func untar(r io.Reader, dir string) error {\n\tfor {\n\t\thdr, err := tr.Next()\n\t\tp := filepath.Join(dir, hdr.Name)\n\t\tif !strings.HasPrefix(p, filepath.Clean(dir)+string(os.PathSeparator)) {\n\t\t\treturn errBad\n\t\t}\n\t}\n}\n"
+        ));
+        assert!(!hit(
+            "func untar(r io.Reader, dir string) error {\n\tfor {\n\t\thdr, err := tr.Next()\n\t\tp := filepath.Join(dir, filepath.Base(hdr.Name))\n\t}\n}\n"
+        ));
+        assert!(!hit(
+            "func untar(r io.Reader, dir string) error {\n\tfor {\n\t\thdr, err := tr.Next()\n\t\tif !filepath.IsLocal(hdr.Name) {\n\t\t\tcontinue\n\t\t}\n\t\tp := filepath.Join(dir, hdr.Name)\n\t}\n}\n"
+        ));
+        assert!(!hit(
+            "func untar(r io.Reader, dir string) error {\n\tfor {\n\t\thdr, err := tr.Next()\n\t\tif strings.Contains(hdr.Name, \"..\") {\n\t\t\tcontinue\n\t\t}\n\t\tp := filepath.Join(dir, hdr.Name)\n\t}\n}\n"
+        ));
+        // Join of unrelated values in a function without an archive iterator.
+        assert!(!hit(
+            "func cfg(dir, name string) string {\n\treturn filepath.Join(dir, name)\n}\n"
+        ));
+        // A fixed name from an iterator that is not joined.
+        assert!(!hit(
+            "func count(tr *tar.Reader) int {\n\tn := 0\n\tfor {\n\t\t_, err := tr.Next()\n\t\tif err != nil {\n\t\t\tbreak\n\t\t}\n\t\tn++\n\t}\n\treturn n\n}\n"
+        ));
+    }
+
+    #[test]
     fn go_argument_vector_command_is_clean() {
         let findings = scan(
             r#"host := r.URL.Query().Get("host")
@@ -14376,6 +14413,84 @@ fn contains_java_path_sanitizer(text: &str) -> bool {
 /// `filepath.Join`/`path.Join`, but stops at `filepath.Base`/`path.Base`.
 /// `filepath.Clean` is not treated as a sanitizer because it keeps leading
 /// `../` segments. The narrow model does not claim interprocedural coverage.
+/// Go archive extraction that joins an entry's own name onto a destination
+/// directory ("zip slip"): inside one function, a value read from an archive
+/// iterator (`tar`/`zip` `Next`, `ReadNextEntry`, `range ...File`) is used in
+/// `filepath.Join`/`path.Join`, and the function has no containment check
+/// (`HasPrefix`, `IsLocal`, `Rel`, `SecureJoin`, a `".."` test) and does not
+/// reduce the name with `Base`. `path.Clean` alone does not count: it keeps a
+/// leading `..`. Same function and straight-line only.
+#[allow(clippy::items_after_test_module)]
+fn go_archive_entry_join_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    if extension != "go" {
+        return found;
+    }
+    let (Ok(entry_re), Ok(range_re), Ok(join_re), Ok(guard_re), Ok(alias_re)) = (
+        Regex::new(
+            r#"\b([A-Za-z_][A-Za-z0-9_]*)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\s*:?=\s*[A-Za-z0-9_.()]*\.\s*(?:Next|ReadNextEntry)\s*\("#,
+        ),
+        Regex::new(
+            r#"\bfor\s+_\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*range\s+[A-Za-z0-9_.]+\.File\b"#,
+        ),
+        Regex::new(r#"\b(?:filepath|path)\s*\.\s*Join\s*\("#),
+        Regex::new(
+            r#"HasPrefix\s*\(|IsLocal\s*\(|filepath\s*\.\s*Rel\s*\(|[Ss]ecure[Jj]oin|"\.\.""#,
+        ),
+        Regex::new(
+            r#"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:?=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*[A-Za-z_]"#,
+        ),
+    ) else {
+        return found;
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let mut start = 0;
+    while start < lines.len() {
+        if !lines[start].starts_with("func ") {
+            start += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < lines.len() && !lines[end].starts_with("func ") {
+            end += 1;
+        }
+        let body = &lines[start..end];
+        let text = body.join("\n");
+        if !guard_re.is_match(&text) {
+            let mut names: Vec<String> = Vec::new();
+            for (offset, line) in body.iter().enumerate() {
+                let code = line.trim();
+                if code.starts_with("//") {
+                    continue;
+                }
+                for re in [&entry_re, &range_re] {
+                    if let Some(name) = re.captures(code).and_then(|c| c.get(1)) {
+                        names.push(name.as_str().to_string());
+                    }
+                }
+                if let Some(c) = alias_re.captures(code) {
+                    if let (Some(alias), Some(from)) = (c.get(1), c.get(2)) {
+                        if names.iter().any(|n| n == from.as_str()) {
+                            names.push(alias.as_str().to_string());
+                        }
+                    }
+                }
+                if let Some(m) = join_re.find(code) {
+                    let args = &code[m.end()..];
+                    if args.contains("Base(") {
+                        continue;
+                    }
+                    if names.iter().any(|n| contains_identifier(args, n)) {
+                        found.insert(start + offset + 1);
+                    }
+                }
+            }
+        }
+        start = end;
+    }
+    found
+}
+
 #[allow(clippy::items_after_test_module)]
 fn go_path_traversal_sink_lines(
     content: &str,
