@@ -45,7 +45,7 @@
   "ghsa": "GHSA-7vxr-6cxg-j3x8",
   "file": "lib/ftpd/disk_file_system.rb",
   "line": 221,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-5j3g-jfq3-7jwx",
