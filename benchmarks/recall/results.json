@@ -63,25 +63,25 @@
   "ghsa": "GHSA-c5r5-7pfh-6qg6",
   "file": "lib/bibtex/bibliography.rb",
   "line": 50,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-r7j3-vvh2-xrpj",
   "file": "lib/mini_magick/image.rb",
   "line": 94,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-qrqm-fpv6-6r8g",
   "file": "lib/mechanize/cookie_jar.rb",
   "line": 68,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-qrqm-fpv6-6r8g",
   "file": "lib/mechanize/cookie_jar.rb",
   "line": 122,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-ccmq-qvcp-5mrm",
