@@ -1342,6 +1342,7 @@ fn scan_file_for_vulns_with(
     } else {
         let (sql, mut command) = ruby_php_injection_lines(&content, &ext);
         command.extend(ruby_parameter_open_lines(&content, &ext));
+        command.extend(ruby_parameter_shell_lines(&content, &ext));
         (sql, command)
     };
     sql_injection_sinks.extend(language_sql);
@@ -9681,6 +9682,54 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
         ));
         assert!(hit(
             "class Bib\n  def self.open(path)\n    parse(Kernel.open(path, 'r'))\n  end\nend\n"
+        ));
+    }
+
+    #[test]
+    fn ruby_public_method_parameter_into_shell_string() {
+        let hit = |src: &str| !ruby_parameter_shell_lines(src, "rb").is_empty();
+        // Positives: backtick through a local, system with interpolation, %x.
+        assert!(hit(
+            "class Fs\n  def ls(ftp_path, option)\n    path = expand(ftp_path)\n    filename = File.basename(path)\n    command = [\n      'ls',\n      option,\n      filename,\n    ].compact.join(' ')\n    `#{command}`\n  end\nend\n"
+        ));
+        assert!(hit(
+            "class A\n  def run(name)\n    system(\"convert #{name} out.png\")\n  end\nend\n"
+        ));
+        assert!(hit(
+            "class A\n  def run(name)\n    %x(identify #{name})\n  end\nend\n"
+        ));
+        assert!(hit(
+            "class A\n  def run(name)\n    cmd = 'ls ' + name\n    system(cmd)\n  end\nend\n"
+        ));
+        // Negative controls.
+        // Fixed command, no parameter.
+        assert!(!hit("class A\n  def run(name)\n    `uptime`\n  end\nend\n"));
+        // Argument-vector system is not a shell string.
+        assert!(!hit(
+            "class A\n  def run(name)\n    system('convert', name, 'out.png')\n  end\nend\n"
+        ));
+        // Shell-escaped, numeric and Shellwords handling.
+        assert!(!hit(
+            "class A\n  def run(name)\n    `ls #{name.shellescape}`\n  end\nend\n"
+        ));
+        assert!(!hit(
+            "class A\n  def run(name)\n    `ls #{Shellwords.escape(name)}`\n  end\nend\n"
+        ));
+        assert!(!hit(
+            "class A\n  def run(count)\n    `head -n #{count.to_i} log`\n  end\nend\n"
+        ));
+        // Local reassigned to a constant before the sink.
+        assert!(!hit("class A\n  def run(name)\n    arg = name\n    arg = 'safe'\n    `ls #{arg}`\n  end\nend\n"));
+        // Private, protected and underscore methods.
+        assert!(!hit(
+            "class A\n  private\n  def run(name)\n    `ls #{name}`\n  end\nend\n"
+        ));
+        assert!(!hit(
+            "class A\n  def _run(name)\n    `ls #{name}`\n  end\nend\n"
+        ));
+        // Interpolated value unrelated to any parameter.
+        assert!(!hit(
+            "class A\n  def run(name)\n    dir = Dir.pwd\n    `ls #{dir}`\n  end\nend\n"
         ));
     }
 
@@ -19427,40 +19476,30 @@ fn contains_command_sanitizer(text: &str) -> bool {
         || contains_numeric_conversion(text)
 }
 
-/// Ruby `Kernel.open` / bare `open` whose path is a parameter of a public
-/// method. `Kernel#open` runs a command when the string starts with `|`, so a
-/// library method that opens a caller-supplied path with it is a command
-/// injection sink for any caller that forwards untrusted input. Explicit
-/// receivers other than `Kernel` (`File.open`, `IO.popen`, `URI.open`) are
-/// quiet; a bare `open` in a file that defines its own `open` is quiet; a
-/// private or protected method, an underscore method and a body that tests
-/// for a leading `|` are quiet. Only the first argument counts, and only as a
-/// bare parameter name. Same method body, straight-line only.
-#[allow(clippy::items_after_test_module)]
-fn ruby_parameter_open_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
-    let mut found = std::collections::HashSet::new();
-    if extension != "rb" {
-        return found;
-    }
-    let (Ok(def_re), Ok(open_re), Ok(pipe_guard), Ok(scope_re), Ok(own_open)) = (
+/// A public Ruby method that takes parameters: parameter names, the index of
+/// the `def` line, and the exclusive end index of the body.
+struct RubyMethod {
+    params: Vec<String>,
+    def_index: usize,
+    end: usize,
+}
+
+/// Public Ruby methods with at least one parameter. Not public: after a bare
+/// `private`/`protected` in the class or module scope, `private def`, or an
+/// underscore name. The end of a method is the next `end` at the same
+/// indentation as its `def`.
+fn ruby_public_methods(lines: &[&str]) -> Vec<RubyMethod> {
+    let mut methods = Vec::new();
+    let (Ok(def_re), Ok(scope_re)) = (
         Regex::new(
             r#"^(\s*)def\s+(?:self\s*\.\s*)?([A-Za-z_][A-Za-z0-9_]*[?!=]?)\s*(?:\(([^)]*)\))?"#,
         ),
-        Regex::new(
-            r#"(?:^|[^.\w:@$])(Kernel\s*\.\s*)?open\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*[,)]"#,
-        ),
-        Regex::new(r#"start_with\?\s*\(?\s*["']\||=~\s*/\\A\\\||include\?\s*\(?\s*["']\|"#),
         Regex::new(r#"^\s*(?:class|module)\s"#),
-        Regex::new(r#"(?m)^\s*def\s+(?:self\s*\.\s*)?open\b"#),
     ) else {
-        return found;
+        return methods;
     };
-    let defines_open = own_open.is_match(content);
-    let lines: Vec<&str> = content.lines().collect();
     let mut private_scope = false;
-    let mut index = 0;
-    while index < lines.len() {
-        let line = lines[index];
+    for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if scope_re.is_match(line) {
             private_scope = false;
@@ -19470,13 +19509,14 @@ fn ruby_parameter_open_lines(content: &str, extension: &str) -> std::collections
             private_scope = false;
         }
         let Some(captures) = def_re.captures(line) else {
-            index += 1;
             continue;
         };
         let indent = captures.get(1).map_or(0, |m| m.as_str().len());
         let name = captures.get(2).map_or("", |m| m.as_str());
         let inline_private = trimmed.starts_with("private ") || trimmed.starts_with("protected ");
-        // End of the method: the next `end` at the same indentation.
+        if private_scope || inline_private || name.starts_with('_') {
+            continue;
+        }
         let mut end = index + 1;
         while end < lines.len() {
             let l = lines[end];
@@ -19503,27 +19543,241 @@ fn ruby_parameter_open_lines(content: &str, extension: &str) -> std::collections
                     .collect()
             })
             .unwrap_or_default();
-        let body = lines[index + 1..end.min(lines.len())].join("\n");
-        let public = !private_scope && !inline_private && !name.starts_with('_');
-        if public && !params.is_empty() && !pipe_guard.is_match(&body) {
-            let stop = end.min(lines.len());
-            for (offset, text) in lines.iter().enumerate().take(stop).skip(index + 1) {
-                let code = text.trim();
-                if code.starts_with('#') {
-                    continue;
-                }
-                for c in open_re.captures_iter(text) {
-                    let kernel = c.get(1).is_some();
-                    let arg = c.get(2).map_or("", |m| m.as_str());
-                    if (kernel || !defines_open) && params.iter().any(|p| p == arg) {
-                        found.insert(offset + 1);
-                    }
+        if !params.is_empty() {
+            methods.push(RubyMethod {
+                params,
+                def_index: index,
+                end: end.min(lines.len()),
+            });
+        }
+    }
+    methods
+}
+
+/// Ruby `Kernel.open` / bare `open` whose path is a parameter of a public
+/// method. `Kernel#open` runs a command when the string starts with `|`, so a
+/// library method that opens a caller-supplied path with it is a command
+/// injection sink for any caller that forwards untrusted input. Explicit
+/// receivers other than `Kernel` (`File.open`, `IO.popen`, `URI.open`) are
+/// quiet; a bare `open` in a file that defines its own `open` is quiet; a
+/// private or protected method, an underscore method and a body that tests
+/// for a leading `|` are quiet. Only the first argument counts, and only as a
+/// bare parameter name. Same method body, straight-line only.
+#[allow(clippy::items_after_test_module)]
+fn ruby_parameter_open_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    if extension != "rb" {
+        return found;
+    }
+    let (Ok(open_re), Ok(pipe_guard), Ok(own_open)) = (
+        Regex::new(
+            r#"(?:^|[^.\w:@$])(Kernel\s*\.\s*)?open\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*[,)]"#,
+        ),
+        Regex::new(r#"start_with\?\s*\(?\s*["']\||=~\s*/\\A\\\||include\?\s*\(?\s*["']\|"#),
+        Regex::new(r#"(?m)^\s*def\s+(?:self\s*\.\s*)?open\b"#),
+    ) else {
+        return found;
+    };
+    let defines_open = own_open.is_match(content);
+    let lines: Vec<&str> = content.lines().collect();
+    for method in ruby_public_methods(&lines) {
+        let body = lines[method.def_index + 1..method.end].join("\n");
+        if pipe_guard.is_match(&body) {
+            continue;
+        }
+        for (offset, text) in lines
+            .iter()
+            .enumerate()
+            .take(method.end)
+            .skip(method.def_index + 1)
+        {
+            if text.trim().starts_with('#') {
+                continue;
+            }
+            for c in open_re.captures_iter(text) {
+                let kernel = c.get(1).is_some();
+                let arg = c.get(2).map_or("", |m| m.as_str());
+                if (kernel || !defines_open) && method.params.iter().any(|p| p == arg) {
+                    found.insert(offset + 1);
                 }
             }
         }
-        index += 1;
     }
     found
+}
+
+/// Ruby shell-string sinks built from a public method parameter: a backtick
+/// string, `%x(...)`, or a single-string `system`/`exec`/`IO.popen`/`Open3`
+/// call whose text interpolates or concatenates a value derived from a
+/// parameter. Taint follows local assignments in order, through calls and
+/// array literals joined into a string (`File.basename(path)` is not a shell
+/// quote); a multi-line assignment is read as one statement. A method that
+/// mentions `shellescape`, `Shellwords` or a numeric conversion of the value
+/// is quiet, argument-vector calls (`system("ls", path)`) are not sinks, and
+/// private, protected and underscore methods are not the caller boundary.
+/// Same method body, straight-line only.
+#[allow(clippy::items_after_test_module)]
+fn ruby_parameter_shell_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    if extension != "rb" {
+        return found;
+    }
+    let (Ok(assign_re), Ok(call_re), Ok(clear_re)) = (
+        Regex::new(r#"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^=~>].*)$"#),
+        Regex::new(
+            r#"(?:^|[^.\w:@$])(?:Kernel\s*\.\s*)?(?:system|exec|spawn)\s*\(|\bIO\s*\.\s*popen\s*\(|\bOpen3\s*\.\s*\w+\s*\("#,
+        ),
+        Regex::new(r#"shellescape|Shellwords|shelljoin|\.to_i\b|Integer\s*\("#),
+    ) else {
+        return found;
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    for method in ruby_public_methods(&lines) {
+        let body = lines[method.def_index + 1..method.end].join("\n");
+        if clear_re.is_match(&body) {
+            continue;
+        }
+        let mut tainted: Vec<String> = method.params.clone();
+        let mut index = method.def_index + 1;
+        while index < method.end {
+            let line = lines[index];
+            if line.trim().starts_with('#') {
+                index += 1;
+                continue;
+            }
+            // Join a statement that spans lines (open brackets or a trailing
+            // operator or comma) into one text.
+            let mut statement = line.to_string();
+            let mut last = index;
+            while last + 1 < method.end
+                && (statement.matches(['[', '(', '{']).count()
+                    > statement.matches([']', ')', '}']).count()
+                    || statement.trim_end().ends_with([',', '+', '\\']))
+            {
+                last += 1;
+                statement.push(' ');
+                statement.push_str(lines[last].trim());
+            }
+            let uses = |text: &str| tainted.iter().any(|name| contains_identifier(text, name));
+            let mut sink = false;
+            // Backtick strings and %x: the interpolation must carry taint.
+            for (open, _) in statement.match_indices('`') {
+                let rest = &statement[open + 1..];
+                if let Some(close) = rest.find('`') {
+                    let inner = &rest[..close];
+                    if inner.contains("#{") && interpolations(inner).iter().any(|e| uses(e)) {
+                        sink = true;
+                    }
+                }
+                break;
+            }
+            if let Some(start) = statement.find("%x") {
+                let rest = &statement[start + 2..];
+                if rest.starts_with(['(', '{', '[']) && interpolations(rest).iter().any(|e| uses(e))
+                {
+                    sink = true;
+                }
+            }
+            if let Some(m) = call_re.find(&statement) {
+                let args = ruby_call_arguments(&statement, m.end() - 1);
+                if args.len() == 1 {
+                    let arg = args[0].trim();
+                    let composed = (arg.contains("#{")
+                        && interpolations(arg).iter().any(|e| uses(e)))
+                        || (arg.contains('+') && uses(arg))
+                        || (!arg.starts_with(['"', '\'', '[']) && uses(arg));
+                    if composed {
+                        sink = true;
+                    }
+                }
+            }
+            if sink {
+                found.extend(index + 1..=last + 1);
+            }
+            if let Some(c) = assign_re.captures(&statement) {
+                let name = c.get(1).map_or("", |m| m.as_str()).to_string();
+                let rhs = c.get(2).map_or("", |m| m.as_str());
+                if uses(rhs) {
+                    if !tainted.contains(&name) {
+                        tainted.push(name);
+                    }
+                } else {
+                    tainted.retain(|t| *t != name);
+                }
+            }
+            index = last + 1;
+        }
+    }
+    found
+}
+
+/// The expressions inside every `#{...}` of a Ruby string.
+fn interpolations(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("#{") {
+        let after = &rest[start + 2..];
+        let mut depth = 1;
+        let mut end = after.len();
+        for (i, ch) in after.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push(after[..end].to_string());
+        rest = &after[(end + 1).min(after.len())..];
+    }
+    out
+}
+
+/// Top-level arguments of the Ruby call whose `(` is at byte `open`.
+fn ruby_call_arguments(text: &str, open: usize) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in text[open..].chars() {
+        if let Some(q) = quote {
+            current.push(ch);
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                current.push(ch);
+            }
+            '(' | '[' | '{' => {
+                depth += 1;
+                if depth > 1 {
+                    current.push(ch);
+                }
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    args.push(current.clone());
+                    return args.into_iter().filter(|a| !a.trim().is_empty()).collect();
+                }
+                current.push(ch);
+            }
+            ',' if depth == 1 => {
+                args.push(std::mem::take(&mut current));
+            }
+            _ => current.push(ch),
+        }
+    }
+    args.into_iter().filter(|a| !a.trim().is_empty()).collect()
 }
 
 /// Find OS command sinks whose command text is built from request input in
