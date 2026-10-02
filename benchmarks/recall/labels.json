@@ -1,0 +1,149 @@
+[
+ {
+  "ghsa": "GHSA-qh2h-chj9-jffq",
+  "file": "lib/growl.js",
+  "line": 289,
+  "cwe": "CWE-78",
+  "sink": "exec(args.join(' '), fn)"
+ },
+ {
+  "ghsa": "GHSA-pp57-mqmh-44h7",
+  "file": "lib/linux.js",
+  "line": 4,
+  "cwe": "CWE-78",
+  "sink": "exec(\"cat /sys/class/net/\" + iface ...)"
+ },
+ {
+  "ghsa": "GHSA-pp57-mqmh-44h7",
+  "file": "lib/macosx.js",
+  "line": 4,
+  "cwe": "CWE-78",
+  "sink": "exec(\"networksetup -getmacaddress \" + iface ...)"
+ },
+ {
+  "ghsa": "GHSA-pp57-mqmh-44h7",
+  "file": "lib/unix.js",
+  "line": 4,
+  "cwe": "CWE-78",
+  "sink": "exec(\"ifconfig \" + iface ...)"
+ },
+ {
+  "ghsa": "GHSA-gm9x-q798-hmr4",
+  "file": "src/index.ts",
+  "line": 6,
+  "cwe": "CWE-78",
+  "sink": "exec(`git ls-remote --tags ${repo}`)"
+ },
+ {
+  "ghsa": "GHSA-5gwh-g79j-vh4q",
+  "file": "index.js",
+  "line": 44,
+  "cwe": "CWE-78",
+  "sink": "exec(getInfoCommand ...)"
+ },
+ {
+  "ghsa": "GHSA-6m4h-hfpp-x8cx",
+  "file": "pdf_ocr.go",
+  "line": 114,
+  "cwe": "CWE-78",
+  "sink": "exec.Command(\"bash\",\"-c\",fmt.Sprintf(cmd,path))"
+ },
+ {
+  "ghsa": "GHSA-7vxr-6cxg-j3x8",
+  "file": "lib/ftpd/disk_file_system.rb",
+  "line": 221,
+  "cwe": "CWE-78",
+  "sink": "backtick command"
+ },
+ {
+  "ghsa": "GHSA-5j3g-jfq3-7jwx",
+  "file": "lib/batch.js",
+  "line": 152,
+  "cwe": "CWE-94",
+  "sink": "eval('value = ref.' + ...)"
+ },
+ {
+  "ghsa": "GHSA-rc77-xxq6-4mff",
+  "file": "src/grammar-parser/grammar-parser.js",
+  "line": 226,
+  "cwe": "CWE-94",
+  "sink": "eval(\"[\" + yytext + \"]\")"
+ },
+ {
+  "ghsa": "GHSA-c5r5-7pfh-6qg6",
+  "file": "lib/bibtex/bibliography.rb",
+  "line": 50,
+  "cwe": "CWE-78",
+  "sink": "Kernel.open(path)"
+ },
+ {
+  "ghsa": "GHSA-r7j3-vvh2-xrpj",
+  "file": "lib/mini_magick/image.rb",
+  "line": 94,
+  "cwe": "CWE-78",
+  "sink": "Kernel.open(path_or_url)"
+ },
+ {
+  "ghsa": "GHSA-qrqm-fpv6-6r8g",
+  "file": "lib/mechanize/cookie_jar.rb",
+  "line": 68,
+  "cwe": "CWE-78",
+  "sink": "open(output,'w')"
+ },
+ {
+  "ghsa": "GHSA-qrqm-fpv6-6r8g",
+  "file": "lib/mechanize/cookie_jar.rb",
+  "line": 122,
+  "cwe": "CWE-78",
+  "sink": "open(input,'r')"
+ },
+ {
+  "ghsa": "GHSA-ccmq-qvcp-5mrm",
+  "file": "owlmixin/util.py",
+  "line": 96,
+  "cwe": "CWE-502",
+  "sink": "yaml.load(yaml_str)"
+ },
+ {
+  "ghsa": "GHSA-ccmq-qvcp-5mrm",
+  "file": "owlmixin/util.py",
+  "line": 106,
+  "cwe": "CWE-502",
+  "sink": "yaml.load(f)"
+ },
+ {
+  "ghsa": "GHSA-vxp9-wv2f-wqmw",
+  "file": "superset/models/core.py",
+  "line": 1121,
+  "cwe": "CWE-502",
+  "sink": "pickle.load(f)"
+ },
+ {
+  "ghsa": "GHSA-vfj6-275q-4pvm",
+  "file": "webapp/graphite/composer/views.py",
+  "line": 102,
+  "cwe": "CWE-918",
+  "sink": "conn.request('GET',path)"
+ },
+ {
+  "ghsa": "GHSA-h65g-jfqg-2w6m",
+  "file": "cps/helper.py",
+  "line": 740,
+  "cwe": "CWE-918",
+  "sink": "requests.get(url)"
+ },
+ {
+  "ghsa": "GHSA-9423-6c93-gpp8",
+  "file": "cpio/extract.go",
+  "line": 57,
+  "cwe": "CWE-22",
+  "sink": "path.Join(dest, path.Clean(entry filename))"
+ },
+ {
+  "ghsa": "GHSA-mq5p-2mcr-m52j",
+  "file": "nbgitpuller/pull.py",
+  "line": 121,
+  "cwe": "CWE-88",
+  "sink": "git ls-remote with self.git_url"
+ }
+]

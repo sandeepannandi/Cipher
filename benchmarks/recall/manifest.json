@@ -1,0 +1,121 @@
+[
+ {
+  "ghsa": "GHSA-mq5p-2mcr-m52j",
+  "repo": "jupyterhub/nbgitpuller",
+  "fix": "07690644f29a566011dd0d7ba14cae3eb0490481",
+  "pre_fix": "2cad6147f1769a962f8d0733045967663add53cb",
+  "advisory": "https://github.com/advisories/GHSA-mq5p-2mcr-m52j"
+ },
+ {
+  "ghsa": "GHSA-qh2h-chj9-jffq",
+  "repo": "tj/node-growl",
+  "fix": "d71177d5331c9de4658aca62e0ac921f178b0669",
+  "pre_fix": "dc8aae046df328edd32dd69f3cd2d6b114d7018e",
+  "advisory": "https://github.com/advisories/GHSA-qh2h-chj9-jffq"
+ },
+ {
+  "ghsa": "GHSA-pp57-mqmh-44h7",
+  "repo": "scravy/node-macaddress",
+  "fix": "358fd594adb196a86b94ac9c691f69fe5dad2332",
+  "pre_fix": "dd079620d11c91957ac897e88d539dfceec41d56",
+  "advisory": "https://github.com/advisories/GHSA-pp57-mqmh-44h7"
+ },
+ {
+  "ghsa": "GHSA-gm9x-q798-hmr4",
+  "repo": "sh0ji/git-tags-remote",
+  "fix": "a20488960cbd2c98455386108253094897ebfc1c",
+  "pre_fix": "c43558b77312a13f69ca25ed965cf4792c239458",
+  "advisory": "https://github.com/advisories/GHSA-gm9x-q798-hmr4"
+ },
+ {
+  "ghsa": "GHSA-5gwh-g79j-vh4q",
+  "repo": "roest01/node-pdf-image",
+  "fix": "54679496a89738443917608c2bbe2f6e5dd20e83",
+  "pre_fix": "d8c0dcadd93985dbefe80b84060f5f572bfbb6ff",
+  "advisory": "https://github.com/advisories/GHSA-5gwh-g79j-vh4q"
+ },
+ {
+  "ghsa": "GHSA-r7j3-vvh2-xrpj",
+  "repo": "minimagick/minimagick",
+  "fix": "4cd5081e58810d3394d27a67219e8e4e0445d851",
+  "pre_fix": "152d33ac824ecce993134735d1aefc092567d661",
+  "advisory": "https://github.com/advisories/GHSA-r7j3-vvh2-xrpj"
+ },
+ {
+  "ghsa": "GHSA-c5r5-7pfh-6qg6",
+  "repo": "inukshuk/bibtex-ruby",
+  "fix": "14406f4460f4e1ecabd25ca94f809b3ea7c5fb11",
+  "pre_fix": "707b9303e4ed9a7e136dd1268e21d73d5faab817",
+  "advisory": "https://github.com/advisories/GHSA-c5r5-7pfh-6qg6"
+ },
+ {
+  "ghsa": "GHSA-qrqm-fpv6-6r8g",
+  "repo": "sparklemotion/mechanize",
+  "fix": "66a6a1bfa653a5f13274a396a5e5441238656aa0",
+  "pre_fix": "687c53835e324716811512b7ee01c1bb834d1473",
+  "advisory": "https://github.com/advisories/GHSA-qrqm-fpv6-6r8g"
+ },
+ {
+  "ghsa": "GHSA-7vxr-6cxg-j3x8",
+  "repo": "wconrad/ftpd",
+  "fix": "828064f1a0ab69b2642c59cab8292a67bb44182c",
+  "pre_fix": "21016c1f3ce9cb5907e3e6e1cc1f997e88faf962",
+  "advisory": "https://github.com/advisories/GHSA-7vxr-6cxg-j3x8"
+ },
+ {
+  "ghsa": "GHSA-6m4h-hfpp-x8cx",
+  "repo": "sajari/docconv",
+  "fix": "b19021ade3d0b71c89d35cb00eb9e589a121faa5",
+  "pre_fix": "44d673994791482c8aec902e0f949c354ce8dc0f",
+  "advisory": "https://github.com/advisories/GHSA-6m4h-hfpp-x8cx"
+ },
+ {
+  "ghsa": "GHSA-9423-6c93-gpp8",
+  "repo": "sassoftware/go-rpmutils",
+  "fix": "a64058cf21b8aada501bba923c9aab66fb6febf0",
+  "pre_fix": "e314ffa6ce5480db09abd0bb2d51e974fd6a9a3f",
+  "advisory": "https://github.com/advisories/GHSA-9423-6c93-gpp8"
+ },
+ {
+  "ghsa": "GHSA-ccmq-qvcp-5mrm",
+  "repo": "tadashi-aikawa/owlmixin",
+  "fix": "5d0575303f6df869a515ced4285f24ba721e0d4e",
+  "pre_fix": "409c30c0d2d357f3fbc3abd7a80d5c111a738aa2",
+  "advisory": "https://github.com/advisories/GHSA-ccmq-qvcp-5mrm"
+ },
+ {
+  "ghsa": "GHSA-vxp9-wv2f-wqmw",
+  "repo": "apache/superset",
+  "fix": "2c72a7ae4fc0a8bac1f037a79efa90e1c5549710",
+  "pre_fix": "4b11f45f72dc3d1957d6db4e0147fcd6cb6c59af",
+  "advisory": "https://github.com/advisories/GHSA-vxp9-wv2f-wqmw"
+ },
+ {
+  "ghsa": "GHSA-5j3g-jfq3-7jwx",
+  "repo": "hapijs/bassmaster",
+  "fix": "b751602d8cb7194ee62a61e085069679525138c4",
+  "pre_fix": "83f02417beab924ce2fe6ee7d6fcfab11d2dafd5",
+  "advisory": "https://github.com/advisories/GHSA-5j3g-jfq3-7jwx"
+ },
+ {
+  "ghsa": "GHSA-rc77-xxq6-4mff",
+  "repo": "handsontable/formula-parser",
+  "fix": "396b089738d4bf30eb570a4fe6a188affa95cd5e",
+  "pre_fix": "944136096f44ff4ffd4ba0bcef30970ca4702fce",
+  "advisory": "https://github.com/advisories/GHSA-rc77-xxq6-4mff"
+ },
+ {
+  "ghsa": "GHSA-vfj6-275q-4pvm",
+  "repo": "graphite-project/graphite-web",
+  "fix": "71726a0e41a5263f49b973a7b856505a5b931c1f",
+  "pre_fix": "021cfe62c836ec952e170e9cc7813efd34e02403",
+  "advisory": "https://github.com/advisories/GHSA-vfj6-275q-4pvm"
+ },
+ {
+  "ghsa": "GHSA-h65g-jfqg-2w6m",
+  "repo": "janeczku/calibre-web",
+  "fix": "965352c8d96c9eae7a6867ff76b0db137d04b0b8",
+  "pre_fix": "8007e450b3178f517b83b0989744c6df38867932",
+  "advisory": "https://github.com/advisories/GHSA-h65g-jfqg-2w6m"
+ }
+]
