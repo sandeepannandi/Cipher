@@ -19427,18 +19427,6 @@ fn contains_command_sanitizer(text: &str) -> bool {
         || contains_numeric_conversion(text)
 }
 
-/// Find OS command sinks whose command text is built from request input in
-/// the same file.
-///
-/// Sources and propagation match the SQL injection model. Sinks are calls that
-/// hand a command string to a shell: Python `os.system`/`os.popen`,
-/// `subprocess.getoutput`, and `subprocess` calls with `shell=True`; Node
-/// `child_process` `exec`/`execSync`; Java `Runtime.exec` and
-/// `ProcessBuilder("sh", "-c", ...)`; Go `exec.Command("sh", "-c", ...)`;
-/// Rust `Command::new("sh").arg("-c").arg(cmd)` single-line chains.
-/// Argument-vector process calls without a shell are not sinks.
-/// `shlex.quote` and numeric conversions stop the flow. Same-file and
-/// straight-line only; no interprocedural claim.
 /// Ruby `Kernel.open` / bare `open` whose path is a parameter of a public
 /// method. `Kernel#open` runs a command when the string starts with `|`, so a
 /// library method that opens a caller-supplied path with it is a command
@@ -19518,12 +19506,13 @@ fn ruby_parameter_open_lines(content: &str, extension: &str) -> std::collections
         let body = lines[index + 1..end.min(lines.len())].join("\n");
         let public = !private_scope && !inline_private && !name.starts_with('_');
         if public && !params.is_empty() && !pipe_guard.is_match(&body) {
-            for offset in index + 1..end.min(lines.len()) {
-                let code = lines[offset].trim();
+            let stop = end.min(lines.len());
+            for (offset, text) in lines.iter().enumerate().take(stop).skip(index + 1) {
+                let code = text.trim();
                 if code.starts_with('#') {
                     continue;
                 }
-                for c in open_re.captures_iter(lines[offset]) {
+                for c in open_re.captures_iter(text) {
                     let kernel = c.get(1).is_some();
                     let arg = c.get(2).map_or("", |m| m.as_str());
                     if (kernel || !defines_open) && params.iter().any(|p| p == arg) {
@@ -19537,6 +19526,18 @@ fn ruby_parameter_open_lines(content: &str, extension: &str) -> std::collections
     found
 }
 
+/// Find OS command sinks whose command text is built from request input in
+/// the same file.
+///
+/// Sources and propagation match the SQL injection model. Sinks are calls that
+/// hand a command string to a shell: Python `os.system`/`os.popen`,
+/// `subprocess.getoutput`, and `subprocess` calls with `shell=True`; Node
+/// `child_process` `exec`/`execSync`; Java `Runtime.exec` and
+/// `ProcessBuilder("sh", "-c", ...)`; Go `exec.Command("sh", "-c", ...)`;
+/// Rust `Command::new("sh").arg("-c").arg(cmd)` single-line chains.
+/// Argument-vector process calls without a shell are not sinks.
+/// `shlex.quote` and numeric conversions stop the flow. Same-file and
+/// straight-line only; no interprocedural claim.
 #[allow(clippy::items_after_test_module)]
 fn command_injection_sink_lines(
     content: &str,
