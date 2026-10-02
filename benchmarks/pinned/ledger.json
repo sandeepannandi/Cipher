@@ -1,0 +1,364 @@
+{
+ "railsgoat": [
+  {
+   "file": "app/controllers/password_resets_controller.rb",
+   "line": 6
+  },
+  {
+   "file": "app/controllers/users_controller.rb",
+   "line": 29
+  },
+  {
+   "file": "app/models/benefits.rb",
+   "line": 15
+  },
+  {
+   "file": "app/controllers/benefit_forms_controller.rb",
+   "line": 13
+  },
+  {
+   "file": "app/controllers/work_info_controller.rb",
+   "line": 4
+  },
+  {
+   "file": "app/controllers/users_controller.rb",
+   "line": 11
+  },
+  {
+   "file": "app/controllers/users_controller.rb",
+   "line": 55
+  },
+  {
+   "file": "app/views/layouts/shared/_header.html.erb",
+   "line": 47
+  },
+  {
+   "file": "app/controllers/sessions_controller.rb",
+   "line": 26
+  },
+  {
+   "file": "app/models/user.rb",
+   "line": 44
+  },
+  {
+   "file": "app/controllers/application_controller.rb",
+   "line": 9
+  },
+  {
+   "file": "app/models/user.rb",
+   "line": 55
+  },
+  {
+   "file": "app/controllers/admin_controller.rb",
+   "line": 76
+  },
+  {
+   "file": "app/views/work_info/index.html.erb",
+   "line": 30
+  }
+ ],
+ "dvwa": [
+  {
+   "file": "vulnerabilities/sqli/source/low.php",
+   "line": 10
+  },
+  {
+   "file": "vulnerabilities/sqli_blind/source/low.php",
+   "line": 11
+  },
+  {
+   "file": "vulnerabilities/exec/source/low.php",
+   "line": 14
+  },
+  {
+   "file": "vulnerabilities/fi/index.php",
+   "line": 36
+  },
+  {
+   "file": "vulnerabilities/upload/source/low.php",
+   "line": 9
+  },
+  {
+   "file": "vulnerabilities/xss_r/source/low.php",
+   "line": 8
+  },
+  {
+   "file": "vulnerabilities/csrf/source/low.php",
+   "line": 16
+  },
+  {
+   "file": "vulnerabilities/open_redirect/source/low.php",
+   "line": 4
+  },
+  {
+   "file": "vulnerabilities/weak_id/source/low.php",
+   "line": 10
+  },
+  {
+   "file": "vulnerabilities/csrf/source/low.php",
+   "line": 12
+  },
+  {
+   "file": "dvwa/includes/dvwaPage.inc.php",
+   "line": 622
+  }
+ ],
+ "weak-go-app": [
+  {
+   "file": "db/db.go",
+   "line": 16
+  },
+  {
+   "file": "handlers/auth.go",
+   "line": 13
+  },
+  {
+   "file": "handlers/data.go",
+   "line": 19
+  },
+  {
+   "file": "handlers/system.go",
+   "line": 14
+  },
+  {
+   "file": "handlers/crypto.go",
+   "line": 28
+  },
+  {
+   "file": "handlers/files.go",
+   "line": 16
+  },
+  {
+   "file": "handlers/data.go",
+   "line": 40
+  },
+  {
+   "file": "handlers/data.go",
+   "line": 63
+  },
+  {
+   "file": "handlers/email.go",
+   "line": 22
+  },
+  {
+   "file": "handlers/files.go",
+   "line": 36
+  },
+  {
+   "file": "handlers/network.go",
+   "line": 17
+  },
+  {
+   "file": "handlers/network.go",
+   "line": 34
+  },
+  {
+   "file": "handlers/crypto.go",
+   "line": 44
+  },
+  {
+   "file": "handlers/crypto.go",
+   "line": 52
+  },
+  {
+   "file": "handlers/crypto.go",
+   "line": 67
+  },
+  {
+   "file": "handlers/auth.go",
+   "line": 29
+  },
+  {
+   "file": "handlers/auth.go",
+   "line": 22
+  },
+  {
+   "file": "handlers/jwt.go",
+   "line": 13
+  },
+  {
+   "file": "main.go",
+   "line": 40
+  },
+  {
+   "file": "handlers/jwt.go",
+   "line": 52
+  }
+ ],
+ "nodegoat": [
+  {
+   "file": "app/routes/research.js",
+   "line": 16
+  },
+  {
+   "file": "app/routes/research.js",
+   "line": 25
+  },
+  {
+   "file": "app/views/layout.html",
+   "line": 75
+  },
+  {
+   "file": "app/routes/index.js",
+   "line": 48
+  },
+  {
+   "file": "app/routes/index.js",
+   "line": 55
+  },
+  {
+   "file": "app/routes/index.js",
+   "line": 56
+  },
+  {
+   "file": "app/routes/index.js",
+   "line": 72
+  },
+  {
+   "file": "app/routes/allocations.js",
+   "line": 17
+  },
+  {
+   "file": "app/data/user-dao.js",
+   "line": 25
+  },
+  {
+   "file": "app/data/user-dao.js",
+   "line": 61
+  },
+  {
+   "file": "app/data/profile-dao.js",
+   "line": 62
+  },
+  {
+   "file": "app/routes/profile.js",
+   "line": 59
+  },
+  {
+   "file": "app/routes/session.js",
+   "line": 64
+  },
+  {
+   "file": "app/routes/session.js",
+   "line": 85
+  },
+  {
+   "file": "app/routes/session.js",
+   "line": 116
+  }
+ ],
+ "flask-realworld": [
+  {
+   "file": "conduit/settings.py",
+   "line": 10
+  }
+ ],
+ "express-realworld": [
+  {
+   "file": "src/app/routes/auth/auth.ts",
+   "line": 16
+  },
+  {
+   "file": "src/app/routes/auth/auth.ts",
+   "line": 21
+  },
+  {
+   "file": "src/app/routes/auth/token.utils.ts",
+   "line": 4
+  }
+ ],
+ "spring-realworld": [
+  {
+   "file": "src/main/resources/application.properties",
+   "line": 9
+  }
+ ],
+ "dvga": [
+  {
+   "file": "core/views.py",
+   "line": 345
+  },
+  {
+   "file": "core/views.py",
+   "line": 352
+  },
+  {
+   "file": "core/views.py",
+   "line": 211
+  },
+  {
+   "file": "core/views.py",
+   "line": 320
+  },
+  {
+   "file": "core/helpers.py",
+   "line": 25
+  },
+  {
+   "file": "core/helpers.py",
+   "line": 21
+  },
+  {
+   "file": "templates/paste.html",
+   "line": 70
+  }
+ ],
+ "webgoat-net": [
+  {
+   "file": "WebGoat/App_Code/DB/SqliteDbProvider.cs",
+   "line": 526
+  },
+  {
+   "file": "WebGoat/App_Code/DB/SqliteDbProvider.cs",
+   "line": 554
+  },
+  {
+   "file": "WebGoat/App_Code/DB/MySqlDbProvider.cs",
+   "line": 517
+  },
+  {
+   "file": "WebGoat/App_Code/DB/MySqlDbProvider.cs",
+   "line": 539
+  },
+  {
+   "file": "WebGoat/Content/PathManipulation.aspx.cs",
+   "line": 38
+  },
+  {
+   "file": "WebGoat/Content/ReflectedXSS.aspx.cs",
+   "line": 26
+  },
+  {
+   "file": "WebGoat/Content/StoredXSS.aspx.cs",
+   "line": 48
+  },
+  {
+   "file": "WebGoat/Content/StoredXSS.aspx.cs",
+   "line": 49
+  },
+  {
+   "file": "WebGoat/Content/UploadPathManipulation.aspx.cs",
+   "line": 25
+  },
+  {
+   "file": "WebGoat/Web.config",
+   "line": 46
+  },
+  {
+   "file": "WebGoat/Web.config",
+   "line": 53
+  },
+  {
+   "file": "WebGoat/App_Code/WeakMessageDigest.cs",
+   "line": 42
+  },
+  {
+   "file": "WebGoat/App_Code/WeakRandom.cs",
+   "line": 23
+  },
+  {
+   "file": "WebGoat/Content/Unsafe.aspx.cs",
+   "line": 26
+  }
+ ]
+}

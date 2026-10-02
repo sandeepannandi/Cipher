@@ -1,0 +1,9 @@
+core/helpers.py	21	JWT Signature Verification Disabled
+core/helpers.py	25	Path Traversal
+core/views.py	211	Command Injection
+core/views.py	320	SQL Injection — String Concatenation
+core/views.py	345	Command Injection
+core/views.py	352	Command Injection
+setup.py	64	Hardcoded Credentials
+static/bootstrap/js/bootstrap.js	241	Hardcoded Credentials
+templates/paste.html	70	Stored XSS

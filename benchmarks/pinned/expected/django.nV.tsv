@@ -1,0 +1,42 @@
+taskManager/forms.py	75	Django ModelForm Mass Assignment
+taskManager/misc.py	33	Command Injection
+taskManager/settings.py	28	Debug Mode Enabled
+taskManager/settings.py	29	Debug Mode Enabled
+taskManager/settings.py	101	Fast Password Hash (MD5)
+taskManager/settings.py	104	Client-Side Session Storage
+taskManager/settings.py	109	Pickle Session Serializer
+taskManager/templates/taskManager/base_backend.html	58	Unescaped Django Output (XSS)
+taskManager/templates/taskManager/search.html	14	Unescaped Django Output (XSS)
+taskManager/templates/taskManager/settings.html	28	Unescaped Django Output (XSS)
+taskManager/templates/taskManager/task_details.html	12	Unescaped Django Output (XSS)
+taskManager/templates/taskManager/task_details.html	48	Unescaped Django Output (XSS)
+taskManager/templates/taskManager/tutorials/base.html	54	Unescaped Django Output (XSS)
+taskManager/views.py	42	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	137	Missing Function Level Access Control
+taskManager/views.py	174	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	183	SQL Injection — String Concatenation
+taskManager/views.py	208	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	222	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	244	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	275	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	276	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	300	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	301	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	312	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	313	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	352	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	378	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	387	Open Redirect
+taskManager/views.py	493	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	533	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	556	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	557	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	558	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	582	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	583	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	584	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	710	CSRF Protection Disabled
+taskManager/views.py	712	Insecure Direct Object Reference (IDOR)
+taskManager/views.py	739	CSRF Protection Disabled
+taskManager/views.py	779	CSRF Protection Disabled
+taskManager/views.py	813	CSRF Protection Disabled

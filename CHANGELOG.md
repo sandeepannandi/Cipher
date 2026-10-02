@@ -26,6 +26,7 @@
 
 ### Changed
 
+- **Pinned-repository exact-key gate in CI** — `benchmarks/pinned` commits the ten benchmark repositories (by SHA), their expected findings (`path`, `line`, `title`) and an 86-pair labeled ledger. A new `Pinned benchmark` workflow scans them on pull requests touching `src/` and fails on any finding-set change or lost labeled pair, so key changes must appear as a reviewed data diff. A weekly `Production baseline` workflow does the same for 12 pinned production repositories (82 findings today: 60 CI-hygiene Low and 22 named residuals, guava included). Tooling and CI only, no scanner change.
 - **Position-independent policy fingerprints** — `stable_fingerprint` now keys on rule, file, finding type and the whitespace-normalized flagged line instead of the line number, so unrelated edits no longer re-key accepted baseline findings. Repeated identical findings in one file get ordinal-salted fingerprints so a baseline entry cannot cover a new copy; snippet-less findings keep the line-based key. The committed `.cipher-ai-policy.yml` baseline was regenerated, dropping stale entries. One-time effect: existing baselines, suppressions and GitHub Code Scanning alerts re-key once. `src/finding.rs`, `src/policy.rs`, `src/review.rs`
 
 ### Fixed

@@ -1,0 +1,70 @@
+.github/workflows/docker-image.yml	16	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/docker-image.yml	19	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/docker-image.yml	22	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/shiftleft-analysis.yml	24	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/vulnerable.yml	36	GitHub Actions — All Secrets Exposed
+dvwa/includes/DBMS/MySQL.php	55	Weak Hash Algorithm — MD5
+dvwa/includes/DBMS/MySQL.php	56	Weak Hash Algorithm — MD5
+dvwa/includes/DBMS/MySQL.php	57	Weak Hash Algorithm — MD5
+dvwa/includes/DBMS/MySQL.php	58	Weak Hash Algorithm — MD5
+dvwa/includes/DBMS/MySQL.php	59	Weak Hash Algorithm — MD5
+dvwa/includes/DBMS/PGSQL.php	61	Weak Hash Algorithm — MD5
+dvwa/includes/DBMS/PGSQL.php	62	Weak Hash Algorithm — MD5
+dvwa/includes/DBMS/PGSQL.php	63	Weak Hash Algorithm — MD5
+dvwa/includes/DBMS/PGSQL.php	64	Weak Hash Algorithm — MD5
+dvwa/includes/DBMS/PGSQL.php	65	Weak Hash Algorithm — MD5
+dvwa/includes/dvwaPage.inc.php	622	Stored XSS
+dvwa/includes/dvwaPage.inc.php	651	Weak Hash Algorithm — MD5
+login.php	27	Weak Hash Algorithm — MD5
+vulnerabilities/api/gen_openapi.php	6	CORS Misconfiguration
+vulnerabilities/api/public/index.php	11	CORS Misconfiguration
+vulnerabilities/api/src/Login.php	10	Hardcoded Credentials
+vulnerabilities/api/src/Login.php	12	Hardcoded Credentials
+vulnerabilities/authbypass/change_user_details.php	47	Level-Conditional Authorization Check
+vulnerabilities/authbypass/get_user_data.php	15	Level-Conditional Authorization Check
+vulnerabilities/bac/source/low.php	94	Insecure Cookie Configuration
+vulnerabilities/brute/source/high.php	16	Weak Hash Algorithm — MD5
+vulnerabilities/brute/source/impossible.php	16	Weak Hash Algorithm — MD5
+vulnerabilities/brute/source/low.php	9	Weak Hash Algorithm — MD5
+vulnerabilities/brute/source/low.php	12	SQL Injection — String Concatenation
+vulnerabilities/brute/source/medium.php	11	Weak Hash Algorithm — MD5
+vulnerabilities/captcha/source/high.php	27	Weak Hash Algorithm — MD5
+vulnerabilities/captcha/source/impossible.php	14	Weak Hash Algorithm — MD5
+vulnerabilities/captcha/source/impossible.php	19	Weak Hash Algorithm — MD5
+vulnerabilities/captcha/source/impossible.php	24	Weak Hash Algorithm — MD5
+vulnerabilities/captcha/source/low.php	57	Weak Hash Algorithm — MD5
+vulnerabilities/captcha/source/medium.php	65	Weak Hash Algorithm — MD5
+vulnerabilities/cryptography/source/medium.php	10	JWT Secret Hardcoded
+vulnerabilities/csrf/source/high.php	39	Weak Hash Algorithm — MD5
+vulnerabilities/csrf/source/impossible.php	15	Weak Hash Algorithm — MD5
+vulnerabilities/csrf/source/impossible.php	29	Weak Hash Algorithm — MD5
+vulnerabilities/csrf/source/low.php	12	Weak Hash Algorithm — MD5
+vulnerabilities/csrf/source/low.php	16	CSRF on Password Change
+vulnerabilities/csrf/source/medium.php	14	Weak Hash Algorithm — MD5
+vulnerabilities/exec/source/high.php	26	Command Injection
+vulnerabilities/exec/source/high.php	30	Command Injection
+vulnerabilities/exec/source/low.php	10	Command Injection
+vulnerabilities/exec/source/low.php	14	Command Injection
+vulnerabilities/exec/source/medium.php	19	Command Injection
+vulnerabilities/exec/source/medium.php	23	Command Injection
+vulnerabilities/fi/index.php	36	File Inclusion
+vulnerabilities/fi/source/medium.php	8	Single-Pass Path Traversal Filter
+vulnerabilities/javascript/index.php	43	Weak Hash Algorithm — MD5
+vulnerabilities/javascript/source/low.php	18	Weak Hash Algorithm — MD5
+vulnerabilities/open_redirect/source/low.php	4	Open Redirect
+vulnerabilities/sqli/source/low.php	10	SQL Injection — String Concatenation
+vulnerabilities/sqli/source/low.php	31	SQL Injection — String Concatenation
+vulnerabilities/sqli/source/medium.php	11	SQL Injection — String Concatenation
+vulnerabilities/sqli/source/medium.php	27	SQL Injection — String Concatenation
+vulnerabilities/sqli/test.php	4	Hardcoded Credentials
+vulnerabilities/sqli_blind/source/low.php	11	SQL Injection — String Concatenation
+vulnerabilities/sqli_blind/source/low.php	32	SQL Injection — String Concatenation
+vulnerabilities/sqli_blind/source/medium.php	13	SQL Injection — String Concatenation
+vulnerabilities/sqli_blind/source/medium.php	34	SQL Injection — String Concatenation
+vulnerabilities/upload/source/low.php	9	Unrestricted File Upload
+vulnerabilities/upload/source/medium.php	18	Unrestricted File Upload
+vulnerabilities/weak_id/source/high.php	10	Weak Hash Algorithm — MD5
+vulnerabilities/weak_id/source/low.php	10	Predictable Session Token
+vulnerabilities/xss_r/source/high.php	11	Reflected XSS
+vulnerabilities/xss_r/source/low.php	8	Reflected XSS
+vulnerabilities/xss_r/source/medium.php	11	Reflected XSS

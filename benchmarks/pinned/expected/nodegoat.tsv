@@ -1,0 +1,24 @@
+app/data/allocations-dao.js	78	NoSQL Injection — $where Operator
+app/data/profile-dao.js	62	Raw Sensitive Profile Storage
+app/data/user-dao.js	25	Plaintext Password Storage
+app/data/user-dao.js	61	Plaintext Password Comparison
+app/routes/allocations.js	17	Insecure Direct Object Reference (IDOR)
+app/routes/contributions.js	32	Code Injection
+app/routes/contributions.js	33	Code Injection
+app/routes/contributions.js	34	Code Injection
+app/routes/index.js	48	Missing CSRF Protection
+app/routes/index.js	55	Missing Privileged Route Authorization
+app/routes/index.js	56	Missing CSRF Protection
+app/routes/index.js	56	Missing Privileged Route Authorization
+app/routes/index.js	72	Open Redirect
+app/routes/profile.js	59	Regular Expression Denial of Service (ReDoS)
+app/routes/research.js	16	Server-Side Request Forgery (SSRF)
+app/routes/research.js	25	Unsafe HTML Response (XSS)
+app/routes/session.js	64	Log Forging from Login Input
+app/routes/session.js	85	Login Username Enumeration
+app/routes/session.js	116	Session Fixation on Login
+app/views/layout.html	75	Unescaped Template Output (XSS)
+app/views/profile.html	41	Unescaped Template Output (XSS)
+app/views/profile.html	45	Unescaped Template Output (XSS)
+app/views/profile.html	78	Unescaped Template Output (XSS)
+config/env/all.js	8	Hardcoded Credentials

@@ -1,0 +1,55 @@
+{
+ "suite": "cipher-pinned-benchmark-v1",
+ "repos": [
+  {
+   "name": "railsgoat",
+   "url": "https://github.com/OWASP/railsgoat",
+   "sha": "f5951f13089d85c979de09e7da3c8c0fb982f94a"
+  },
+  {
+   "name": "dvwa",
+   "url": "https://github.com/digininja/DVWA",
+   "sha": "b496a5d3de6b967410155e1b7d3e51e9d035eb22"
+  },
+  {
+   "name": "weak-go-app",
+   "url": "https://github.com/atiradonet/weak-go-app",
+   "sha": "4b8ac74f2a876f435f8f91a345e8a35cbc72f601"
+  },
+  {
+   "name": "nodegoat",
+   "url": "https://github.com/OWASP/NodeGoat",
+   "sha": "c5cb68a7084e4ae7dcc60e6a98768720a81841e8"
+  },
+  {
+   "name": "flask-realworld",
+   "url": "https://github.com/gothinkster/flask-realworld-example-app",
+   "sha": "4b95fb2227dfeb5dd1a45d89b2bf48630b93fd28"
+  },
+  {
+   "name": "express-realworld",
+   "url": "https://github.com/gothinkster/node-express-realworld-example-app",
+   "sha": "30b68e1e881462b2f4164ea09ab4c4f5699c7b0b"
+  },
+  {
+   "name": "spring-realworld",
+   "url": "https://github.com/gothinkster/spring-boot-realworld-example-app",
+   "sha": "ee17e31aafe733d98c4853c8b9a74d7f2f6c924a"
+  },
+  {
+   "name": "django.nV",
+   "url": "https://github.com/nVisium/django.nV",
+   "sha": "a48901f106da4888417339b7b44b8ed56b64c63f"
+  },
+  {
+   "name": "dvga",
+   "url": "https://github.com/dolevf/Damn-Vulnerable-GraphQL-Application",
+   "sha": "a961308c02d1fb462b192681c336b0739e432da7"
+  },
+  {
+   "name": "webgoat-net",
+   "url": "https://github.com/jerryhoff/WebGoat.NET",
+   "sha": "1c6cab19f9029673cd98ba8624bf9cc91d04bae9"
+  }
+ ]
+}

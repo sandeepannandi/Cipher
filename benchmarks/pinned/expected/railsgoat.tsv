@@ -1,0 +1,23 @@
+.github/workflows/ci.yml	21	GitHub Actions — Unpinned Third-Party Action
+app/controllers/admin_controller.rb	45	Unsafe Rails Parameter Assignment
+app/controllers/admin_controller.rb	76	Conditional Admin Gate Bypass
+app/controllers/application_controller.rb	9	Missing CSRF Protection
+app/controllers/benefit_forms_controller.rb	13	Path Traversal
+app/controllers/password_resets_controller.rb	6	Insecure Deserialization
+app/controllers/sessions_controller.rb	26	Open Redirect
+app/controllers/users_controller.rb	11	Unsafe Rails Parameter Assignment
+app/controllers/users_controller.rb	29	SQL Injection — String Concatenation
+app/controllers/users_controller.rb	55	Unsafe Rails Parameter Assignment
+app/controllers/work_info_controller.rb	4	Insecure Direct Object Reference (IDOR)
+app/models/benefits.rb	15	Command Injection
+app/models/user.rb	44	Login Username Enumeration
+app/models/user.rb	55	Fast Password Hash (MD5)
+app/views/layouts/shared/_header.html.erb	47	Unescaped Rails Output (XSS)
+app/views/work_info/index.html.erb	30	SSN Rendered Before Client Masking
+db/seeds.rb	10	Hardcoded Credentials
+db/seeds.rb	19	Hardcoded Credentials
+db/seeds.rb	28	Hardcoded Credentials
+db/seeds.rb	37	Hardcoded Credentials
+db/seeds.rb	46	Hardcoded Credentials
+db/seeds.rb	55	Hardcoded Credentials
+db/seeds.rb	64	Hardcoded Credentials

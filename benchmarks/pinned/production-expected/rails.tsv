@@ -1,0 +1,9 @@
+.github/workflows/check-markdown-api.yml	19	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/devcontainer-smoke-test.yml	28	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/rail_inspector.yml	23	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/rails-new-docker.yml	21	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/rails_releaser_tests.yml	22	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/release.yml	20	GitHub Actions — Unpinned Third-Party Action
+.github/workflows/release.yml	28	GitHub Actions — Unpinned Third-Party Action
+activesupport/lib/active_support/xml_mini.rb	91	Insecure Deserialization
+railties/lib/rails/commands/query/query_command.rb	102	SQL Injection — ORM Raw Queries
