@@ -9,19 +9,19 @@
   "ghsa": "GHSA-pp57-mqmh-44h7",
   "file": "lib/linux.js",
   "line": 4,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-pp57-mqmh-44h7",
   "file": "lib/macosx.js",
   "line": 4,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-pp57-mqmh-44h7",
   "file": "lib/unix.js",
   "line": 4,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-gm9x-q798-hmr4",
@@ -39,7 +39,7 @@
   "ghsa": "GHSA-6m4h-hfpp-x8cx",
   "file": "pdf_ocr.go",
   "line": 114,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-7vxr-6cxg-j3x8",
