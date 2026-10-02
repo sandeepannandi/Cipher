@@ -19661,7 +19661,7 @@ fn ruby_parameter_shell_lines(content: &str, extension: &str) -> std::collection
             let uses = |text: &str| tainted.iter().any(|name| contains_identifier(text, name));
             let mut sink = false;
             // Backtick strings and %x: the interpolation must carry taint.
-            for (open, _) in statement.match_indices('`') {
+            if let Some(open) = statement.find('`') {
                 let rest = &statement[open + 1..];
                 if let Some(close) = rest.find('`') {
                     let inner = &rest[..close];
@@ -19669,7 +19669,6 @@ fn ruby_parameter_shell_lines(content: &str, extension: &str) -> std::collection
                         sink = true;
                     }
                 }
-                break;
             }
             if let Some(start) = statement.find("%x") {
                 let rest = &statement[start + 2..];
