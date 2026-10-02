@@ -117,7 +117,7 @@
   "ghsa": "GHSA-9423-6c93-gpp8",
   "file": "cpio/extract.go",
   "line": 57,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-mq5p-2mcr-m52j",
