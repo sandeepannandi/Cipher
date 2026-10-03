@@ -117,5 +117,40 @@
   "fix": "965352c8d96c9eae7a6867ff76b0db137d04b0b8",
   "pre_fix": "8007e450b3178f517b83b0989744c6df38867932",
   "advisory": "https://github.com/advisories/GHSA-h65g-jfqg-2w6m"
+ },
+ {
+  "ghsa": "GHSA-9jjr-qqfp-ppwx",
+  "repo": "jupyterhub/binderhub",
+  "fix": "195caac172690456dcdc8cc7a6ca50e05abf8182",
+  "pre_fix": "034430adc8ed379135f3ef46ee6ca650781ef67c",
+  "advisory": "https://github.com/advisories/GHSA-9jjr-qqfp-ppwx"
+ },
+ {
+  "ghsa": "GHSA-gcqq-w6gr-h9j9",
+  "repo": "rubyzip/rubyzip",
+  "fix": "ce4208fdecc2ad079b05d3c49d70fe6ed1d07016",
+  "pre_fix": "df8dfbcff31aaf1bcd97094b02fa352cf04396df",
+  "advisory": "https://github.com/advisories/GHSA-gcqq-w6gr-h9j9"
+ },
+ {
+  "ghsa": "GHSA-45x3-mw7q-wf7f",
+  "repo": "Studio-42/elFinder",
+  "fix": "157f471d7e48f190f74e66eb5bc73360b5352fd3",
+  "pre_fix": "82b098ffb21851dae96b4b9452ba6bb52461f5ea",
+  "advisory": "https://github.com/advisories/GHSA-45x3-mw7q-wf7f"
+ },
+ {
+  "ghsa": "GHSA-gcm4-q2pg-xw89",
+  "repo": "rossant/ipycache",
+  "fix": "9cc7cb891ff169b3e8a6f5e84afd8238f566ad8e",
+  "pre_fix": "2c334c5885b9136ade0010770e3c895aa9075e80",
+  "advisory": "https://github.com/advisories/GHSA-gcm4-q2pg-xw89"
+ },
+ {
+  "ghsa": "GHSA-grpf-gg7v-5g5h",
+  "repo": "apache/skywalking",
+  "fix": "fb7912c6bdda06a233f4b3e18e71a87d3e4a8951",
+  "pre_fix": "cc9ea271a720e8def161a583595f75da9bda77a5",
+  "advisory": "https://github.com/advisories/GHSA-grpf-gg7v-5g5h"
  }
 ]

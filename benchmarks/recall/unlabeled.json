@@ -12,12 +12,6 @@
   "pre_fix": "f5d5f8b907ec37e54d49dcc69b35fc009e1760d3"
  },
  {
-  "ghsa": "GHSA-9jjr-qqfp-ppwx",
-  "repo": "jupyterhub/binderhub",
-  "fix": "195caac172690456dcdc8cc7a6ca50e05abf8182",
-  "pre_fix": "034430adc8ed379135f3ef46ee6ca650781ef67c"
- },
- {
   "ghsa": "GHSA-h47j-hc6x-h3qq",
   "repo": "mongo-express/mongo-express",
   "fix": "7d365141deadbd38fa961cd835ce68eab5731494",
@@ -48,12 +42,6 @@
   "pre_fix": "bb6ec4cc2f5575f09f22b8ca2e9e6544b1423bed"
  },
  {
-  "ghsa": "GHSA-grpf-gg7v-5g5h",
-  "repo": "apache/skywalking",
-  "fix": "fb7912c6bdda06a233f4b3e18e71a87d3e4a8951",
-  "pre_fix": "cc9ea271a720e8def161a583595f75da9bda77a5"
- },
- {
   "ghsa": "GHSA-wf5p-f5xr-c4jj",
   "repo": "francoisjacquet/rosariosis",
   "fix": "e001430aa9fb53d2502fb6f036f6c51c578d2016",
@@ -78,12 +66,6 @@
   "pre_fix": "d72c6774e6a13de2cfcd7d477d3575efeb75c8f2"
  },
  {
-  "ghsa": "GHSA-gcm4-q2pg-xw89",
-  "repo": "rossant/ipycache",
-  "fix": "9cc7cb891ff169b3e8a6f5e84afd8238f566ad8e",
-  "pre_fix": "2c334c5885b9136ade0010770e3c895aa9075e80"
- },
- {
   "ghsa": "GHSA-8p5c-f328-9fvv",
   "repo": "anthraxx/diffoscope",
   "fix": "632a40828a54b399787c25e7fa243f732aef7e05",
@@ -96,12 +78,6 @@
   "pre_fix": "f319207e8597c5e561d74db7d4034bfac6cac4f9"
  },
  {
-  "ghsa": "GHSA-gcqq-w6gr-h9j9",
-  "repo": "rubyzip/rubyzip",
-  "fix": "ce4208fdecc2ad079b05d3c49d70fe6ed1d07016",
-  "pre_fix": "df8dfbcff31aaf1bcd97094b02fa352cf04396df"
- },
- {
   "ghsa": "GHSA-pr3h-jjhj-573x",
   "repo": "rails/sprockets",
   "fix": "18b8a7f07a50c245e9aee7854ecdbe606bbd8bb5",
@@ -112,12 +88,6 @@
   "repo": "owen2345/camaleon-cms",
   "fix": "b3b12b1e4a9e3fccaf5bb4330820fa7f8744e6bd",
   "pre_fix": "a916faedbe5b2db37de225355043b6237e5a9945"
- },
- {
-  "ghsa": "GHSA-45x3-mw7q-wf7f",
-  "repo": "Studio-42/elFinder",
-  "fix": "157f471d7e48f190f74e66eb5bc73360b5352fd3",
-  "pre_fix": "82b098ffb21851dae96b4b9452ba6bb52461f5ea"
  },
  {
   "ghsa": "GHSA-8c5p-4362-9333",
