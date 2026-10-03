@@ -16,3 +16,4 @@ Regenerate after an intended change (review the diff before committing):
     python3 benchmarks/pinned/check.py --cipher ./target/release/cipher-ai --suite benchmark --update
 
 Do not edit `ledger.json` to make a failing gate pass. Changing a label needs the ground-truth evidence (the app's own tutorial, README or source comment) in the pull request description.
+- `production-triage.json`: a verdict (TP, FP, JUDGMENT) and a reason for each key in `production-expected/`, from reading the pinned source. `test_triage.py` keeps it in step with the expected files. It records precision; it does not change what the gate compares.

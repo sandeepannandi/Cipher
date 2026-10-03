@@ -1,0 +1,690 @@
+[
+ {
+  "repo": "django",
+  "file": ".github/workflows/linters.yml",
+  "line": 71,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "psf/black is referenced by the mutable ref 'stable', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "django",
+  "file": "django/contrib/auth/hashers.py",
+  "line": 665,
+  "title": "Weak Hash Algorithm \u2014 MD5",
+  "verdict": "TP",
+  "reason": "MD5PasswordHasher stores passwords as salted MD5. A legacy hasher kept so old hashes verify, but MD5 is not acceptable for password storage."
+ },
+ {
+  "repo": "django",
+  "file": "django/contrib/contenttypes/views.py",
+  "line": 15,
+  "title": "Insecure Direct Object Reference (IDOR)",
+  "verdict": "FP",
+  "reason": "ContentType lookup by primary key in the admin \"view on site\" shortcut; content types are site metadata, not per-user objects, so there is no owner to bypass."
+ },
+ {
+  "repo": "django",
+  "file": "django/db/backends/sqlite3/_functions.py",
+  "line": 414,
+  "title": "Weak Hash Algorithm \u2014 MD5",
+  "verdict": "FP",
+  "reason": "Registers MD5 as a SQLite function behind the ORM MD5() database function. Exposes a hash to queries; not a security use."
+ },
+ {
+  "repo": "django",
+  "file": "django/db/backends/sqlite3/_functions.py",
+  "line": 460,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "Registers SHA1 as a SQLite function behind the ORM SHA1() database function. Not a security use."
+ },
+ {
+  "repo": "django",
+  "file": "django/db/models/query.py",
+  "line": 141,
+  "title": "SQL Injection \u2014 ORM Raw Queries",
+  "verdict": "FP",
+  "reason": "compiler.execute_sql(...) in the ORM iterator: the framework running its own compiled query, no raw string from a caller."
+ },
+ {
+  "repo": "django",
+  "file": "django/db/models/query.py",
+  "line": 472,
+  "title": "SQL Injection \u2014 ORM Raw Queries",
+  "verdict": "FP",
+  "reason": "The flagged line is inside the __iter__ docstring (prose mentioning execute_sql). A comment, not code."
+ },
+ {
+  "repo": "django",
+  "file": "django/db/models/sql/compiler.py",
+  "line": 1598,
+  "title": "SQL Injection \u2014 ORM Raw Queries",
+  "verdict": "FP",
+  "reason": "results_iter calling self.execute_sql(MULTI, ...) inside the ORM compiler: internal call, no raw input."
+ },
+ {
+  "repo": "django",
+  "file": "django/db/models/sql/compiler.py",
+  "line": 1694,
+  "title": "SQL Injection \u2014 ORM Raw Queries",
+  "verdict": "FP",
+  "reason": "explain_query calling self.execute_sql() inside the ORM compiler: internal call, no raw input."
+ },
+ {
+  "repo": "django",
+  "file": "django/template/loaders/cached.py",
+  "line": 96,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "SHA1 of template names to build a cache key. Not a security use."
+ },
+ {
+  "repo": "django",
+  "file": "django/views/debug.py",
+  "line": 29,
+  "title": "Debug Mode Enabled",
+  "verdict": "FP",
+  "reason": "Engine(debug=True) for the technical 500 page template engine. Not the DEBUG setting."
+ },
+ {
+  "repo": "gin",
+  "file": ".github/workflows/gin.yml",
+  "line": 27,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "golangci/golangci-lint-action is referenced by the mutable ref 'v9', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "gin",
+  "file": ".github/workflows/gin.yml",
+  "line": 84,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "codecov/codecov-action is referenced by the mutable ref 'v7', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "gin",
+  "file": ".github/workflows/goreleaser.yml",
+  "line": 24,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "goreleaser/goreleaser-action is referenced by the mutable ref 'v7', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "gin",
+  "file": ".github/workflows/trivy-scan.yml",
+  "line": 30,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "aquasecurity/trivy-action is referenced by the mutable ref 'v0.36.0', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "gin",
+  "file": ".github/workflows/trivy-scan.yml",
+  "line": 47,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "aquasecurity/trivy-action is referenced by the mutable ref 'v0.36.0', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "guava",
+  "file": "android/guava/src/com/google/common/hash/Hashing.java",
+  "line": 237,
+  "title": "Weak Hash Algorithm \u2014 MD5",
+  "verdict": "FP",
+  "reason": "Hashing.md5() is the library API for MD5 checksums; documented as not for security. A hash library must offer it."
+ },
+ {
+  "repo": "guava",
+  "file": "android/guava/src/com/google/common/hash/Hashing.java",
+  "line": 258,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "Hashing.sha1() is the library API for SHA-1 checksums; documented as not for security."
+ },
+ {
+  "repo": "guava",
+  "file": "guava/src/com/google/common/hash/Hashing.java",
+  "line": 239,
+  "title": "Weak Hash Algorithm \u2014 MD5",
+  "verdict": "FP",
+  "reason": "Same as the android flavor: Hashing.md5() library API."
+ },
+ {
+  "repo": "guava",
+  "file": "guava/src/com/google/common/hash/Hashing.java",
+  "line": 260,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "Same as the android flavor: Hashing.sha1() library API."
+ },
+ {
+  "repo": "hugo",
+  "file": "deploy/deploy.go",
+  "line": 706,
+  "title": "Weak Hash Algorithm \u2014 MD5",
+  "verdict": "FP",
+  "reason": "Compares a local file MD5 with the remote object MD5 to decide whether to upload. Change detection against the cloud provider checksum, not security."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/benchmark.yml",
+  "line": 25,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/ci.yml",
+  "line": 36,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/ci.yml",
+  "line": 78,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/conventional-commits.yml",
+  "line": 24,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "amannn/action-semantic-pull-request is referenced by the mutable ref 'v5.5.3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/docs.yml",
+  "line": 23,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/release-please.yml",
+  "line": 22,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "googleapis/release-please-action is referenced by the mutable ref 'v4', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/release-please.yml",
+  "line": 39,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/release-please.yml",
+  "line": 44,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "rubygems/release-gem is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/spelling.yml",
+  "line": 68,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "check-spelling/check-spelling is referenced by the mutable ref 'v0.0.26', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "jekyll",
+  "file": ".github/workflows/third-party.yml",
+  "line": 26,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Auth/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Broadcasting/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Bus/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Cache/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Cache/FileStore.php",
+  "line": 469,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "sha1($key) names the cache file and its two-level directory. Not a security use."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Cache/StorageStore.php",
+  "line": 264,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "sha1(prefix.key) names the cache file. Not a security use."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Cache/TaggedCache.php",
+  "line": 109,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "sha1 of the tag namespace builds a cache key prefix. Not a security use."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Collections/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Concurrency/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Conditionable/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Config/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Console/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Console/Scheduling/CallbackEvent.php",
+  "line": 188,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "sha1(description) names the scheduler mutex. Not a security use."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Console/Scheduling/Event.php",
+  "line": 868,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "sha1(expression+command) names the scheduler mutex. Not a security use."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Container/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Contracts/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Cookie/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Database/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Database/DatabaseManager.php",
+  "line": 135,
+  "title": "Weak Hash Algorithm \u2014 MD5",
+  "verdict": "FP",
+  "reason": "md5 of the connection config names a dynamic connection. Not a security use."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Encryption/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Events/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Events/CallQueuedListener.php",
+  "line": 266,
+  "title": "Insecure Deserialization",
+  "verdict": "JUDGMENT",
+  "reason": "unserialize() of the queued job payload. Real PHP object-injection primitive, but the payload is written by the framework itself and is only attacker-reachable if the queue store is compromised."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Filesystem/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Hashing/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Http/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Http/Request.php",
+  "line": 711,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "sha1 of route, domain, uri and ip builds the throttle fingerprint. Identifier, not a security-sensitive hash."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Image/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/JsonSchema/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Log/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Macroable/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Mail/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Notifications/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Pagination/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Pipeline/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Process/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Queue/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Redis/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Reflection/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Routing/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Session/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Support/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Testing/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Translation/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Validation/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/Validation/NotPwnedVerifier.php",
+  "line": 70,
+  "title": "Weak Hash Algorithm \u2014 SHA1",
+  "verdict": "FP",
+  "reason": "The Have I Been Pwned range API is defined over SHA-1 prefixes, so SHA-1 is required by the protocol."
+ },
+ {
+  "repo": "laravel",
+  "file": "src/Illuminate/View/.github/workflows/close-pull-request.yml",
+  "line": 11,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "rails",
+  "file": ".github/workflows/check-markdown-api.yml",
+  "line": 19,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "rails",
+  "file": ".github/workflows/devcontainer-smoke-test.yml",
+  "line": 28,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "rails",
+  "file": ".github/workflows/rail_inspector.yml",
+  "line": 23,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "rails",
+  "file": ".github/workflows/rails-new-docker.yml",
+  "line": 21,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "rails",
+  "file": ".github/workflows/rails_releaser_tests.yml",
+  "line": 22,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "rails",
+  "file": ".github/workflows/release.yml",
+  "line": 20,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "ruby/setup-ruby is referenced by the mutable ref 'v1', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "rails",
+  "file": ".github/workflows/release.yml",
+  "line": 28,
+  "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
+  "verdict": "TP",
+  "reason": "rubygems/configure-rubygems-credentials is referenced by the mutable ref 'v1.0.0', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
+ },
+ {
+  "repo": "rails",
+  "file": "activesupport/lib/active_support/xml_mini.rb",
+  "line": 91,
+  "title": "Insecure Deserialization",
+  "verdict": "JUDGMENT",
+  "reason": "YAML.load for the XML \"yaml\" type. Real unsafe-load sink, but ActiveSupport::XMLConverter refuses it by default (DISALLOWED_TYPES = %w(symbol yaml)), so it only runs if an app opts in."
+ },
+ {
+  "repo": "rails",
+  "file": "railties/lib/rails/commands/query/query_command.rb",
+  "line": 102,
+  "title": "SQL Injection \u2014 ORM Raw Queries",
+  "verdict": "FP",
+  "reason": "The \"rails query --sql\" command exists to run a SQL string the developer types, on a read-only connection. Intended feature, not an injection path."
+ }
+]
