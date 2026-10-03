@@ -1344,6 +1344,8 @@ fn scan_file_for_vulns_with(
         command.extend(ruby_parameter_open_lines(&content, &ext));
         command.extend(ruby_parameter_shell_lines(&content, &ext));
         command.extend(python_git_option_injection_lines(&content, &ext));
+        let mut sql = sql;
+        sql.extend(java_sql_append_lines(&content, &ext));
         (sql, command)
     };
     sql_injection_sinks.extend(language_sql);
@@ -9684,6 +9686,46 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
         assert!(hit(
             "class Bib\n  def self.open(path)\n    parse(Kernel.open(path, 'r'))\n  end\nend\n"
         ));
+    }
+
+    #[test]
+    fn java_public_method_string_parameter_appended_into_sql_builder() {
+        let hit = |src: &str| !java_sql_append_lines(src, "java").is_empty();
+        let method = |vis: &str, ty: &str, body: &str| {
+            format!(
+                "class Dao {{\n    {vis} List<Row> find(long from, {ty} keyword) throws IOException {{\n        StringBuilder sql = new StringBuilder();\n        List<Object> parameters = new ArrayList<>();\n        sql.append(\"select * from t where 1=1 \");\n{body}\n        try (Connection c = client.getConnection()) {{\n            return client.executeQuery(c, sql.toString(), parameters.toArray());\n        }}\n    }}\n}}\n"
+            )
+        };
+        let concat = "        sql.append(\" and name like '%\").append(keyword).append(\"%' \");";
+        let plus = "        sql.append(\" and name like '%\" + keyword + \"%'\");";
+        assert!(hit(&method("public", "String", concat)));
+        assert!(hit(&method("public", "String", plus)));
+        // Multi-line statement.
+        assert!(hit(&method(
+            "public",
+            "String",
+            "        sql.append(\" and name = '\")\n            .append(keyword).append(\"'\");"
+        )));
+        // Bound parameter (the SkyWalking fix): never appended.
+        assert!(!hit(&method("public", "String", "        sql.append(\" and name like concat('%',?,'%') \");\n        parameters.add(keyword);")));
+        // Private method, numeric parameter, escaped value.
+        assert!(!hit(&method("private", "String", concat)));
+        assert!(!hit(&method("public", "int", concat)));
+        assert!(!hit(&method("public", "Long", concat)));
+        assert!(!hit(&method(
+            "public",
+            "String",
+            &format!("        keyword = escape(keyword);\n{concat}")
+        )));
+        // Appended text is not a parameter, or the builder is not SQL.
+        assert!(!hit(&method(
+            "public",
+            "String",
+            "        sql.append(\" and name = 'x' \");"
+        )));
+        assert!(!hit("class A {\n    public String join(String name) {\n        StringBuilder sb = new StringBuilder();\n        sb.append(\"hello \").append(name);\n        return sb.toString();\n    }\n}\n"));
+        // No database call in the method.
+        assert!(!hit("class A {\n    public String label(String name) {\n        StringBuilder sb = new StringBuilder();\n        sb.append(\"select from where \").append(name);\n        return sb.toString();\n    }\n}\n"));
     }
 
     #[test]
@@ -19942,6 +19984,141 @@ fn command_injection_sink_lines(
     );
     lines.extend(library_parameter_command_lines(content, extension));
     lines
+}
+
+/// SQL injection in Java library code: a public method appends one of its own
+/// `String` parameters straight into a `StringBuilder` that holds SQL text, as
+/// in `sql.append(" like '%").append(keyword).append("%'")`. There is no web
+/// request in the file, so the parameter is the caller boundary. The builder
+/// must carry SQL (a `select`/`from`/`where` literal) and the method must reach
+/// a database call. A parameter bound with `?` and `parameters.add(...)` is
+/// never appended, so it never fires; numeric parameters, private methods and
+/// methods that escape or sanitize the value stay quiet.
+fn java_sql_append_lines(content: &str, extension: &str) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    if extension != "java"
+        || !content.contains("StringBuilder") && !content.contains("StringBuffer")
+    {
+        return found;
+    }
+    let (Ok(header_re), Ok(builder_re), Ok(sql_literal_re), Ok(db_re), Ok(clean_re)) = (
+        Regex::new(
+            r#"^\s*public\s+(?:static\s+|final\s+|synchronized\s+)*[\w<>\[\],.? ]+?\s+\w+\s*\("#,
+        ),
+        Regex::new(r#"\b(?:StringBuilder|StringBuffer)\s+(\w+)\s*="#),
+        Regex::new(r#"(?i)\.append\(\s*"[^"]*\b(?:select|from|where)\b"#),
+        Regex::new(
+            r#"\b(?:executeQuery|executeUpdate|executeLargeUpdate|prepareStatement|prepareCall|createQuery|createNativeQuery|createSQLQuery|queryForList|queryForObject|queryForRowSet)\s*\(|\bexecute\s*\(|\bquery\s*\(|\bgetConnection\s*\("#,
+        ),
+        Regex::new(r#"(?i)escape|sanitiz|\bquote\s*\(|replaceAll|\.replace\("#),
+    ) else {
+        return found;
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let mut index = 0;
+    while index < lines.len() {
+        if !header_re.is_match(lines[index]) {
+            index += 1;
+            continue;
+        }
+        let end = function_end(&lines, index, extension);
+        // Header text up to the opening brace, then its parameter list.
+        let mut header = String::new();
+        let mut body_start = index;
+        for (offset, line) in lines.iter().enumerate().take(end).skip(index) {
+            header.push_str(line);
+            header.push(' ');
+            body_start = offset + 1;
+            if line.contains('{') || line.trim_end().ends_with(';') {
+                break;
+            }
+        }
+        let (Some(open), Some(close)) = (header.find('('), header.rfind(')')) else {
+            index = end.max(index + 1);
+            continue;
+        };
+        if close <= open || header.trim_end().ends_with(';') {
+            index = end.max(index + 1);
+            continue;
+        }
+        let mut params: Vec<String> = Vec::new();
+        let mut depth = 0i32;
+        let mut current = String::new();
+        let mut pieces: Vec<String> = Vec::new();
+        for ch in header[open + 1..close].chars() {
+            match ch {
+                '<' => depth += 1,
+                '>' => depth -= 1,
+                ',' if depth == 0 => {
+                    pieces.push(std::mem::take(&mut current));
+                    continue;
+                }
+                _ => {}
+            }
+            current.push(ch);
+        }
+        pieces.push(current);
+        for piece in pieces {
+            let words: Vec<&str> = piece
+                .split_whitespace()
+                .filter(|w| !w.starts_with('@') && *w != "final")
+                .collect();
+            if words.len() >= 2 {
+                let ty = words[..words.len() - 1].join(" ");
+                let name =
+                    words[words.len() - 1].trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+                if matches!(ty.as_str(), "String" | "CharSequence" | "java.lang.String") {
+                    params.push(name.to_string());
+                }
+            }
+        }
+        let body = &lines[body_start.min(end)..end];
+        let body_text = body.join("\n");
+        let builders: Vec<String> = builder_re
+            .captures_iter(&body_text)
+            .map(|c| c[1].to_string())
+            .collect();
+        if params.is_empty()
+            || builders.is_empty()
+            || !sql_literal_re.is_match(&body_text)
+            || !db_re.is_match(&body_text)
+            || clean_re.is_match(&body_text)
+        {
+            index = end.max(index + 1);
+            continue;
+        }
+        for (offset, line) in body.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if !builders
+                .iter()
+                .any(|b| trimmed.starts_with(&format!("{b}.append(")))
+            {
+                continue;
+            }
+            // The whole statement (it may continue on later lines).
+            let mut statement = String::new();
+            for next in body.iter().skip(offset) {
+                statement.push_str(next);
+                statement.push(' ');
+                if next.trim_end().ends_with(';') {
+                    break;
+                }
+            }
+            let masked = ruby_mask_strings(&statement);
+            let appended = params.iter().any(|p| {
+                let name = regex::escape(p);
+                Regex::new(&format!(r#"\.append\(\s*{name}\s*\)"#))
+                    .is_ok_and(|re| re.is_match(&masked))
+                    || Regex::new(&format!(r#"\+\s*{name}\s*[+)]"#))
+                        .is_ok_and(|re| re.is_match(&masked))
+            });
+            if appended {
+                found.insert(body_start + offset + 1);
+            }
+        }
+        index = end.max(index + 1);
+    }
+    found
 }
 
 /// Argument injection into `git` from a constructor or public-method
