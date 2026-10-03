@@ -8,10 +8,12 @@ holds the vulnerable sink. A label is a HIT when the scan reports any finding on
 that exact file:line, NEAR when within 3 lines, MISS otherwise. Misses are kept
 and reported; nothing here is tuned to make them disappear.
 
-  recall.py --cipher BIN [--cache DIR] [--only OWNER/REPO] [--check]
+  recall.py --cipher BIN [--cache DIR] [--only OWNER/REPO] [--check] [--write]
 
 --check exits 1 if a label recorded as HIT in results.json is no longer a HIT
-(recall regression). Misses never fail the check.
+(recall regression), or if any recorded status differs from the computed one
+(stale record, e.g. a newly gained HIT that was not written down). Misses that
+stay misses never fail the check.
 """
 import argparse, json, os, subprocess, sys
 
@@ -47,12 +49,42 @@ def status(findings, line):
     return "MISS"
 
 
+def compare(recorded, computed):
+    """Split computed statuses against results.json.
+
+    Returns (lost, stale): `lost` are recorded HITs that are no longer HITs;
+    `stale` are every other label whose recorded status is missing or differs
+    from the computed one, in either direction.
+    """
+    lost, stale = [], []
+    for key, st in computed.items():
+        was = recorded.get(key)
+        if was == st:
+            continue
+        label = "{} {}:{}".format(*key)
+        if was == "HIT":
+            lost.append(f"{label} (HIT -> {st})")
+        else:
+            stale.append(f"{label} (recorded {was}, now {st})")
+    return lost, stale
+
+
+def updated_results(results, computed_by_label):
+    """results.json rows with statuses replaced by the computed ones.
+
+    `computed_by_label` maps (ghsa, file, line) to a status. Rows keep their
+    order and keys; a label that was not scanned keeps its recorded status.
+    """
+    return [dict(r, status=computed_by_label.get((r["ghsa"], r["file"], r["line"]), r["status"])) for r in results]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cipher", required=True)
     ap.add_argument("--cache", default="/tmp/cipher-recall-clones")
     ap.add_argument("--only")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--write", action="store_true", help="record the computed statuses in results.json")
     a = ap.parse_args()
     manifest = {m["ghsa"]: m for m in load("manifest.json")}
     labels = load("labels.json")
@@ -61,7 +93,8 @@ def main():
     for l in labels:
         by_adv.setdefault(l["ghsa"], []).append(l)
     counts = {"HIT": 0, "NEAR": 0, "MISS": 0}
-    regress = []
+    computed = {}
+    names = {}
     out = []
     for ghsa, ls in by_adv.items():
         m = manifest[ghsa]
@@ -79,13 +112,25 @@ def main():
             counts[st] += 1
             out.append({"ghsa": ghsa, "repo": m["repo"], "cwe": l["cwe"], "file": l["file"], "line": l["line"], "status": st})
             print(f"{st:4} {m['repo']} {l['file']}:{l['line']} ({l['cwe']})")
-            if recorded.get((ghsa, l["file"], l["line"])) == "HIT" and st != "HIT":
-                regress.append(f"{m['repo']} {l['file']}:{l['line']}")
+            computed[(m["repo"], l["file"], l["line"])] = st
+            names[(m["repo"], l["file"], l["line"])] = (ghsa, l["file"], l["line"])
     total = sum(counts.values())
     print(f"recall: {counts['HIT']}/{total} exact, {counts['NEAR']} near, {counts['MISS']} miss")
-    if a.check and regress:
-        print("REGRESSION: recorded hits lost:", *regress, sep="\n  ")
-        return 1
+    if a.write:
+        by_label = {names[k]: st for k, st in computed.items()}
+        text = json.dumps(updated_results(load("results.json"), by_label), indent=1) + "\n"
+        with open(os.path.join(HERE, "results.json"), "w") as f:
+            f.write(text)
+        print("results.json updated")
+    if a.check:
+        lost, stale = compare({k: recorded.get(v) for k, v in names.items()}, computed)
+        if lost:
+            print("REGRESSION: recorded hits lost:", *lost, sep="\n  ")
+        if stale:
+            print("STALE results.json: update it from this run (python3 benchmarks/recall/recall.py "
+                  "--cipher BIN --write), and the recall numbers in CHANGELOG.md:", *stale, sep="\n  ")
+        if lost or stale:
+            return 1
     return 0
 
 
