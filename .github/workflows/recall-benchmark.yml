@@ -1,0 +1,34 @@
+name: Recall benchmark
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "benchmarks/recall/**"
+      - "benchmarks/pinned/check.py"
+      - ".github/workflows/recall-benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recall-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recall-gate:
+    name: Advisory recall gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Build Cipher
+        run: cargo build --release --locked
+      - name: Run recall script unit tests
+        run: python3 -m unittest discover -s benchmarks/recall -p 'test_*.py'
+      - name: Fail if a recorded advisory hit is lost
+        run: python3 benchmarks/recall/recall.py --cipher ./target/release/cipher-ai --cache "$HOME/recall-clones" --check
