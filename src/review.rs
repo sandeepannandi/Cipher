@@ -1343,6 +1343,7 @@ fn scan_file_for_vulns_with(
         let (sql, mut command) = ruby_php_injection_lines(&content, &ext);
         command.extend(ruby_parameter_open_lines(&content, &ext));
         command.extend(ruby_parameter_shell_lines(&content, &ext));
+        command.extend(python_git_option_injection_lines(&content, &ext));
         (sql, command)
     };
     sql_injection_sinks.extend(language_sql);
@@ -9683,6 +9684,41 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
         assert!(hit(
             "class Bib\n  def self.open(path)\n    parse(Kernel.open(path, 'r'))\n  end\nend\n"
         ));
+    }
+
+    #[test]
+    fn python_git_argv_value_from_parameter_without_separator() {
+        let hit = |src: &str| !python_git_option_injection_lines(src, "py").is_empty();
+        let class = |call: &str| {
+            format!(
+                "import subprocess\n\nclass Puller:\n    def __init__(self, git_url, repo_dir):\n        self.git_url = git_url\n        self.repo_dir = repo_dir\n\n    def resolve(self):\n        return subprocess.run(\n            {call},\n            capture_output=True,\n        )\n"
+            )
+        };
+        assert!(hit(&class(
+            r#"["git", "ls-remote", "--symref", self.git_url, "HEAD"]"#
+        )));
+        assert!(hit(&class(
+            r#"["git", "clone", self.git_url, self.repo_dir]"#
+        )));
+        // `--` ends option parsing.
+        assert!(!hit(&class(r#"["git", "ls-remote", "--", self.git_url]"#)));
+        // Field not taken from a parameter, or a fixed URL.
+        assert!(!hit(&class(r#"["git", "ls-remote", self.other]"#)));
+        assert!(!hit(&class(
+            r#"["git", "ls-remote", "https://example.com/r.git"]"#
+        )));
+        assert!(!hit(&class(r#"["git", "status", self.git_url]"#)));
+        // Private method and explicit leading-dash check stay quiet.
+        assert!(!hit(
+            &class(r#"["git", "ls-remote", self.git_url]"#).replace("def resolve", "def _resolve")
+        ));
+        assert!(!hit(&format!(
+            "{}\n# if url.startswith('-'): raise\nx = url.startswith(\"-\")\n",
+            class(r#"["git", "ls-remote", self.git_url]"#)
+        )));
+        // Direct parameter of a public function.
+        assert!(hit("import subprocess\n\ndef remote_heads(url):\n    return subprocess.run([\"git\", \"ls-remote\", url])\n"));
+        assert!(!hit("import subprocess\n\ndef remote_heads(url):\n    return subprocess.run([\"git\", \"ls-remote\", \"--\", url])\n"));
     }
 
     #[test]
@@ -19906,6 +19942,110 @@ fn command_injection_sink_lines(
     );
     lines.extend(library_parameter_command_lines(content, extension));
     lines
+}
+
+/// Argument injection into `git` from a constructor or public-method
+/// parameter (Python). `subprocess.run(["git", "ls-remote", self.url])` has no
+/// shell, but a URL that starts with `-` is read as an option, e.g.
+/// `--upload-pack=...`, which runs a command. The value must be a bare list
+/// element taken from a parameter of a public method, or from a field that
+/// `__init__` stores straight from one of its parameters. A `--` separator
+/// before the value, or any check that the value does not start with `-`,
+/// keeps it quiet. Private methods and literal-only argv lists never fire.
+fn python_git_option_injection_lines(
+    content: &str,
+    extension: &str,
+) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    if extension != "py" || !content.contains("\"git\"") && !content.contains("'git'") {
+        return found;
+    }
+    let (Ok(def_re), Ok(field_re), Ok(list_re), Ok(guard_re)) = (
+        Regex::new(r#"^(\s*)(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)"#),
+        Regex::new(r#"^\s*self\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*$"#),
+        Regex::new(
+            r#"\[\s*["']git["']\s*,\s*["'](?:ls-remote|clone|fetch|pull)["']\s*,([^\]]*)\]"#,
+        ),
+        Regex::new(r#"startswith\(\s*["']-|["']--end-of-options["']|\bis_safe_git|\bvalidate_url"#),
+    ) else {
+        return found;
+    };
+    if guard_re.is_match(content) {
+        return found;
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    // (indent, name, params, start, end) for every def.
+    let mut defs: Vec<(usize, String, Vec<String>, usize, usize)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(c) = def_re.captures(line) {
+            let indent = c[1].len();
+            let params: Vec<String> = c[3]
+                .split(',')
+                .filter_map(|p| {
+                    let p = p.trim().trim_start_matches('*');
+                    let p = p.split([':', '=']).next().unwrap_or("").trim();
+                    (!p.is_empty() && p != "self" && p != "cls").then(|| p.to_string())
+                })
+                .collect();
+            let mut end = lines.len();
+            for (j, later) in lines.iter().enumerate().skip(i + 1) {
+                if !later.trim().is_empty() && later.len() - later.trim_start().len() <= indent {
+                    end = j;
+                    break;
+                }
+            }
+            defs.push((indent, c[2].to_string(), params, i, end));
+        }
+    }
+    // Fields that `__init__` stores directly from one of its own parameters.
+    let mut fields: Vec<String> = Vec::new();
+    for (_, name, params, start, end) in &defs {
+        if name != "__init__" {
+            continue;
+        }
+        for line in &lines[*start + 1..*end] {
+            if let Some(c) = field_re.captures(line) {
+                if params.iter().any(|p| p == &c[2]) {
+                    fields.push(c[1].to_string());
+                }
+            }
+        }
+    }
+    for (index, line) in lines.iter().enumerate() {
+        let Some(c) = list_re.captures(line) else {
+            continue;
+        };
+        // Innermost def around the line.
+        let Some((_, name, params, _, _)) = defs
+            .iter()
+            .filter(|d| d.3 < index && index < d.4)
+            .max_by_key(|d| d.3)
+        else {
+            continue;
+        };
+        if name.starts_with('_') && name != "__init__" {
+            continue;
+        }
+        let rest = &c[1];
+        let elements: Vec<&str> = rest.split(',').map(str::trim).collect();
+        for (n, element) in elements.iter().enumerate() {
+            let element = element.trim_matches(|ch| ch == ' ' || ch == ')');
+            let tainted = params.iter().any(|p| p == element)
+                || element
+                    .strip_prefix("self.")
+                    .is_some_and(|f| fields.iter().any(|x| x == f));
+            if !tainted {
+                continue;
+            }
+            let separated = elements[..n]
+                .iter()
+                .any(|e| matches!(*e, "\"--\"" | "'--'"));
+            if !separated {
+                found.insert(index + 1);
+            }
+        }
+    }
+    found
 }
 
 /// Command injection in library code: a public function builds a shell

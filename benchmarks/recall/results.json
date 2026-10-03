@@ -123,6 +123,6 @@
   "ghsa": "GHSA-mq5p-2mcr-m52j",
   "file": "nbgitpuller/pull.py",
   "line": 121,
-  "status": "MISS"
+  "status": "HIT"
  }
 ]
