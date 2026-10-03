@@ -73,14 +73,6 @@
  },
  {
   "repo": "django",
-  "file": "django/template/loaders/cached.py",
-  "line": 96,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "SHA1 of template names to build a cache key. Not a security use."
- },
- {
-  "repo": "django",
   "file": "django/views/debug.py",
   "line": 29,
   "title": "Debug Mode Enabled",
@@ -126,46 +118,6 @@
   "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
   "verdict": "TP",
   "reason": "aquasecurity/trivy-action is referenced by the mutable ref 'v0.36.0', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
- },
- {
-  "repo": "guava",
-  "file": "android/guava/src/com/google/common/hash/Hashing.java",
-  "line": 237,
-  "title": "Weak Hash Algorithm \u2014 MD5",
-  "verdict": "FP",
-  "reason": "Hashing.md5() is the library API for MD5 checksums; documented as not for security. A hash library must offer it."
- },
- {
-  "repo": "guava",
-  "file": "android/guava/src/com/google/common/hash/Hashing.java",
-  "line": 258,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "Hashing.sha1() is the library API for SHA-1 checksums; documented as not for security."
- },
- {
-  "repo": "guava",
-  "file": "guava/src/com/google/common/hash/Hashing.java",
-  "line": 239,
-  "title": "Weak Hash Algorithm \u2014 MD5",
-  "verdict": "FP",
-  "reason": "Same as the android flavor: Hashing.md5() library API."
- },
- {
-  "repo": "guava",
-  "file": "guava/src/com/google/common/hash/Hashing.java",
-  "line": 260,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "Same as the android flavor: Hashing.sha1() library API."
- },
- {
-  "repo": "hugo",
-  "file": "deploy/deploy.go",
-  "line": 706,
-  "title": "Weak Hash Algorithm \u2014 MD5",
-  "verdict": "FP",
-  "reason": "Compares a local file MD5 with the remote object MD5 to decide whether to upload. Change detection against the cloud provider checksum, not security."
  },
  {
   "repo": "jekyll",
@@ -281,30 +233,6 @@
  },
  {
   "repo": "laravel",
-  "file": "src/Illuminate/Cache/FileStore.php",
-  "line": 469,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "sha1($key) names the cache file and its two-level directory. Not a security use."
- },
- {
-  "repo": "laravel",
-  "file": "src/Illuminate/Cache/StorageStore.php",
-  "line": 264,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "sha1(prefix.key) names the cache file. Not a security use."
- },
- {
-  "repo": "laravel",
-  "file": "src/Illuminate/Cache/TaggedCache.php",
-  "line": 109,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "sha1 of the tag namespace builds a cache key prefix. Not a security use."
- },
- {
-  "repo": "laravel",
   "file": "src/Illuminate/Collections/.github/workflows/close-pull-request.yml",
   "line": 11,
   "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
@@ -345,14 +273,6 @@
  },
  {
   "repo": "laravel",
-  "file": "src/Illuminate/Console/Scheduling/CallbackEvent.php",
-  "line": 188,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "sha1(description) names the scheduler mutex. Not a security use."
- },
- {
-  "repo": "laravel",
   "file": "src/Illuminate/Console/Scheduling/Event.php",
   "line": 868,
   "title": "Weak Hash Algorithm \u2014 SHA1",
@@ -390,14 +310,6 @@
   "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
   "verdict": "TP",
   "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
- },
- {
-  "repo": "laravel",
-  "file": "src/Illuminate/Database/DatabaseManager.php",
-  "line": 135,
-  "title": "Weak Hash Algorithm \u2014 MD5",
-  "verdict": "FP",
-  "reason": "md5 of the connection config names a dynamic connection. Not a security use."
  },
  {
   "repo": "laravel",
@@ -446,14 +358,6 @@
   "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
   "verdict": "TP",
   "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
- },
- {
-  "repo": "laravel",
-  "file": "src/Illuminate/Http/Request.php",
-  "line": 711,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "sha1 of route, domain, uri and ip builds the throttle fingerprint. Identifier, not a security-sensitive hash."
  },
  {
   "repo": "laravel",
@@ -598,14 +502,6 @@
   "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
   "verdict": "TP",
   "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
- },
- {
-  "repo": "laravel",
-  "file": "src/Illuminate/Validation/NotPwnedVerifier.php",
-  "line": 70,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "The Have I Been Pwned range API is defined over SHA-1 prefixes, so SHA-1 is required by the protocol."
  },
  {
   "repo": "laravel",

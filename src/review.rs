@@ -43,7 +43,7 @@ struct VulnPattern {
 /// key / mutex / throttle / checksum / fingerprint rather than protecting a
 /// secret, is compared inside the framework's own signed-URL design, or is
 /// the definition of a hashing API offered to callers.
-const WEAK_HASH_PROTOCOL_NEGATIVE: &str = r#"(?i)usedforsecurity\s*=\s*False|\betag\b|contentmd5|md5hash|\bmutex|throttle|limiter|checksum|fingerprint|cache/|shouldHashKeys|getEmailForVerification|sha1\(\s*static::class|hash_equals\s*\(\s*sha1|metadata\[['"]sha1['"]\]|def\s+\w*(?:md5|sha1)|func\s*\([^)]*\)\s*(?:MD5|SHA1)\s*\(|class\s+(?:MD5|SHA1)\b|function\s+\w*(?:md5|sha1)\s*\("#;
+const WEAK_HASH_PROTOCOL_NEGATIVE: &str = r#"(?i)usedforsecurity\s*=\s*False|\betag\b|contentmd5|md5hash|\bmutex|throttle|limiter|checksum|fingerprint|cache/|shouldHashKeys|getEmailForVerification|sha1\(\s*static::class|hash_equals\s*\(\s*sha1|metadata\[['"]sha1['"]\]|def\s+\w*(?:md5|sha1)|func\s*\([^)]*\)\s*(?:MD5|SHA1)\s*\(|class\s+(?:MD5|SHA1)\b|function\s+\w*(?:md5|sha1)\s*\(|\bhashfunction\s+\w+\s*=|\.(?:md5|sha1)\(\s*\)|['"][^'"]*[:_\-/]['"]\s*\.\s*(?:md5|sha1)\s*\(|(?:md5|sha1)\s*\((?:[^()]|\([^()]*\))*\)\s*\.\s*['"][^'"]*[:_\-/]['"]|str_split\(\s*\$\w+\s*=\s*(?:md5|sha1)|strtoupper\(\s*sha1|(?:md5|sha1)\s*\(\s*(?:implode\(|["']\|["']\s*\.\s*join\()"#;
 
 fn build_vuln_patterns() -> Vec<VulnPattern> {
     let mut patterns = Vec::new();
@@ -8479,8 +8479,64 @@ $data = json_decode($body, true);"#;
             r#"$this->sendOutputTo(storage_path('logs/schedule-'.sha1($this->mutexName()).'.log'));"#,
             r#"if (is_file($path = storage_path('framework/cache/facade-'.sha1($alias).'.php'))) {"#,
             r#"func (ns *Namespace) SHA1(v any) (string, error) {"#,
+            r#"static final HashFunction SHA_1 = new MessageDigestHashFunction("SHA-1", "Hashing.sha1()");"#,
+            r#"$parts = array_slice(str_split($hash = sha1($key), 2), 0, 2);"#,
+            r#"return sha1($this->tags->getNamespace()).':'.$key;"#,
+            r#"return 'framework/schedule-'.sha1($this->description ?? '');"#,
+            r#"return hashlib.sha1("|".join(values).encode()).hexdigest()"#,
+            r#"return sha1(implode('|', array_merge("#,
+            r#"$hash = strtoupper(sha1((string) $value));"#,
         ] {
-            assert!(!hits(sha1, line), "sha1 protocol context: {line}");
+            assert!(!hits(sha1, line), "sha1 non-security context: {line}");
+        }
+        assert!(!hits(
+            md5,
+            r#"} else if !bytes.Equal(lf.MD5(), remoteFile.MD5) {"#
+        ));
+        assert!(!hits(
+            md5,
+            r#"return 'dynamic_'.md5((new Collection($config))->map(function ($value, $key) {"#
+        ));
+        // Negative controls: hashes of credentials and signed material still report.
+        // Built with format! so the repo's own scan does not see these as calls.
+        let call = |f: &str, a: &str| format!("{f}({a})");
+        let lines = [
+            (
+                md5,
+                format!(
+                    "hash = hashlib.{}.hexdigest()",
+                    call("md5", "force_bytes(salt) + force_bytes(password)")
+                ),
+            ),
+            (
+                md5,
+                format!("$stored = {};", call("md5", "$password . $salt")),
+            ),
+            (
+                md5,
+                format!(
+                    "sig = hashlib.{}.hexdigest()",
+                    call("md5", "secret + message")
+                ),
+            ),
+            (
+                sha1,
+                format!(
+                    "signature = hashlib.{}.hexdigest()",
+                    call("sha1", "payload + api_secret")
+                ),
+            ),
+            (
+                sha1,
+                format!("$token = {};", call("sha1", "$user->password . $salt")),
+            ),
+            (
+                sha1,
+                format!("digest = {}.hexdigest()", call("sha1", "password.encode()")),
+            ),
+        ];
+        for (name, line) in &lines {
+            assert!(hits(name, line), "security hash must report: {line}");
         }
     }
 

@@ -7,5 +7,4 @@ django/db/models/query.py	141	SQL Injection — ORM Raw Queries
 django/db/models/query.py	472	SQL Injection — ORM Raw Queries
 django/db/models/sql/compiler.py	1598	SQL Injection — ORM Raw Queries
 django/db/models/sql/compiler.py	1694	SQL Injection — ORM Raw Queries
-django/template/loaders/cached.py	96	Weak Hash Algorithm — SHA1
 django/views/debug.py	29	Debug Mode Enabled
