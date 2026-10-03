@@ -153,30 +153,30 @@
   "ghsa": "GHSA-grpf-gg7v-5g5h",
   "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/h2/dao/H2AlarmQueryDAO.java",
   "line": 64,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-grpf-gg7v-5g5h",
   "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/h2/dao/H2MetadataQueryDAO.java",
   "line": 128,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-grpf-gg7v-5g5h",
   "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/h2/dao/H2MetadataQueryDAO.java",
   "line": 178,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-grpf-gg7v-5g5h",
   "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/h2/dao/H2TraceQueryDAO.java",
   "line": 85,
-  "status": "MISS"
+  "status": "HIT"
  },
  {
   "ghsa": "GHSA-grpf-gg7v-5g5h",
   "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/mysql/MySQLAlarmQueryDAO.java",
   "line": 64,
-  "status": "MISS"
+  "status": "HIT"
  }
 ]
