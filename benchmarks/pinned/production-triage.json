@@ -49,14 +49,6 @@
  },
  {
   "repo": "django",
-  "file": "django/db/models/query.py",
-  "line": 472,
-  "title": "SQL Injection \u2014 ORM Raw Queries",
-  "verdict": "FP",
-  "reason": "The flagged line is inside the __iter__ docstring (prose mentioning execute_sql). A comment, not code."
- },
- {
-  "repo": "django",
   "file": "django/db/models/sql/compiler.py",
   "line": 1598,
   "title": "SQL Injection \u2014 ORM Raw Queries",

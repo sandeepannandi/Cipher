@@ -1327,6 +1327,7 @@ fn scan_file_for_vulns_with(
     let mut go_path_traversal_sinks = go_path_traversal_sink_lines(&content, &ext);
     go_path_traversal_sinks.extend(go_archive_entry_join_lines(&content, &ext));
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
+    let python_docstring_lines = python_docstring_line_numbers(&content, &ext);
     let mut sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
     let mut command_injection_sinks = command_injection_sink_lines(&content, &ext);
     let (language_sql, language_command) = if context_path.components().any(|part| {
@@ -1491,6 +1492,14 @@ fn scan_file_for_vulns_with(
                     && (idor_sinks.contains(&line_number)
                         || django_idor_sinks.contains(&line_number)));
             if !pattern_matches {
+                continue;
+            }
+
+            // Prose inside a bare triple-quoted string (a docstring) that
+            // mentions execute_sql() is documentation, not a call.
+            if pattern.name == "SQL Injection — ORM Raw Queries"
+                && python_docstring_lines.contains(&line_number)
+            {
                 continue;
             }
 
@@ -9015,6 +9024,28 @@ return algorithm(payload).hexdigest()"#,
     }
 
     #[test]
+    fn orm_raw_ignores_docstring_prose_but_not_calls() {
+        // Built with format! so the repo's own scan does not see these as calls.
+        let call = format!("{}(", "execute_sql");
+        let doc = format!(
+            "def __iter__(self):\n    \"\"\"\n    1. sql.compiler.{call})\n       - returns rows\n    \"\"\"\n    return x\n"
+        );
+        assert!(!titles(&scan(&doc, "py")).contains(&ORM_RAW));
+        let one_line = format!("def f():\n    \"\"\"Calls {call}) once.\"\"\"\n    return 1\n");
+        assert!(!titles(&scan(&one_line, "py")).contains(&ORM_RAW));
+        // A real raw-query call after the docstring still reports.
+        let real = "def f(self):\n    \"\"\"Run it.\"\"\"\n    return Model.objects.raw(\"SELECT * FROM app_model\")\n";
+        assert!(titles(&scan(real, "py")).contains(&ORM_RAW));
+        // A triple-quoted string that is an assignment or call argument is not a docstring.
+        let src = "q = \"\"\"\nselect 1\n\"\"\"\ndef f():\n    \"\"\"doc\n    more\n    \"\"\"\n    return run('''x''')\n";
+        let lines = python_docstring_line_numbers(src, "py");
+        let mut got: Vec<usize> = lines.into_iter().collect();
+        got.sort();
+        assert_eq!(got, vec![5, 6, 7]);
+        assert!(python_docstring_line_numbers(src, "rb").is_empty());
+    }
+
+    #[test]
     fn python_request_value_built_into_executed_query_is_reported() {
         let findings = scan(
             r#"user_id = request.args.get("id")
@@ -14474,6 +14505,71 @@ func handler(w http.ResponseWriter, r *http.Request) {
         ]);
         assert!(found.is_empty(), "{found:?}");
     }
+}
+
+/// Line numbers inside Python docstrings: a string statement that starts a
+/// line with a triple quote (nothing before it, so not an assignment, call
+/// argument or SQL passed to a function). Used to keep documentation prose
+/// from being read as a call site.
+fn python_docstring_line_numbers(content: &str, ext: &str) -> std::collections::HashSet<usize> {
+    let mut lines_in_docstring = std::collections::HashSet::new();
+    if ext != "py" {
+        return lines_in_docstring;
+    }
+    // `open` is a docstring block, `other` a triple-quoted string that is data
+    // (assignment, argument), whose lines and closing quote are never docstrings.
+    let mut open: Option<&str> = None;
+    let mut other: Option<&str> = None;
+    let mut previous = String::new();
+    for (idx, line) in content.lines().enumerate() {
+        let number = idx + 1;
+        let trimmed = line.trim();
+        if let Some(quote) = open {
+            lines_in_docstring.insert(number);
+            if trimmed.contains(quote) {
+                open = None;
+                previous = trimmed.to_string();
+            }
+            continue;
+        }
+        if let Some(quote) = other {
+            if trimmed.contains(quote) {
+                other = None;
+                previous = trimmed.to_string();
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        let body = trimmed.trim_start_matches(['r', 'R', 'u', 'U']);
+        let quote = if body.starts_with("\"\"\"") {
+            "\"\"\""
+        } else if body.starts_with("'''") {
+            "'''"
+        } else {
+            // Not a string statement; a triple quote later in the line opens data.
+            for q in ["\"\"\"", "'''"] {
+                if trimmed.matches(q).count() % 2 == 1 {
+                    other = Some(q);
+                }
+            }
+            previous = trimmed.to_string();
+            continue;
+        };
+        // A docstring follows a `def`/`class` header or opens the module.
+        let is_docstring = previous.is_empty() || previous.ends_with(':');
+        if is_docstring {
+            lines_in_docstring.insert(number);
+            if !body[3..].contains(quote) {
+                open = Some(quote);
+            }
+        } else if !body[3..].contains(quote) {
+            other = Some(quote);
+        }
+        previous = trimmed.to_string();
+    }
+    lines_in_docstring
 }
 
 /// Find calls through local Python aliases bound directly to `hashlib.md5`.
