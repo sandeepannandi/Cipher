@@ -208,5 +208,33 @@
   "line": 64,
   "cwe": "CWE-89",
   "sink": "keyword concatenated into LIKE"
+ },
+ {
+  "ghsa": "GHSA-c84h-w6cr-5v8q",
+  "file": "lookatme/contrib/__init__.py",
+  "line": 36,
+  "cwe": "CWE-78",
+  "sink": "__import__ of an extension name taken from the markdown header"
+ },
+ {
+  "ghsa": "GHSA-3x49-g6rc-c284",
+  "file": "LiteDB/Client/Mapper/BsonMapper.Deserialize.cs",
+  "line": 170,
+  "cwe": "CWE-502",
+  "sink": "type resolved from the document _type field"
+ },
+ {
+  "ghsa": "GHSA-5hjh-c26m-xw8w",
+  "file": "libproxy/proxy.go",
+  "line": 285,
+  "cwe": "CWE-918",
+  "sink": "client.Do(&proxyRequest) to a caller-chosen URL"
+ },
+ {
+  "ghsa": "GHSA-pc6f-259w-w3j6",
+  "file": "label_studio/data_import/uploader.py",
+  "line": 123,
+  "cwe": "CWE-918",
+  "sink": "urlopen(url) on an imported URL"
  }
 ]
