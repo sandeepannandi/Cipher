@@ -124,5 +124,59 @@
   "file": "nbgitpuller/pull.py",
   "line": 121,
   "status": "HIT"
+ },
+ {
+  "ghsa": "GHSA-9jjr-qqfp-ppwx",
+  "file": "binderhub/repoproviders.py",
+  "line": 487,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-gcqq-w6gr-h9j9",
+  "file": "lib/zip/entry.rb",
+  "line": 154,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-45x3-mw7q-wf7f",
+  "file": "php/elFinder.class.php",
+  "line": 1626,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-gcm4-q2pg-xw89",
+  "file": "ipycache.py",
+  "line": 118,
+  "status": "HIT"
+ },
+ {
+  "ghsa": "GHSA-grpf-gg7v-5g5h",
+  "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/h2/dao/H2AlarmQueryDAO.java",
+  "line": 64,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-grpf-gg7v-5g5h",
+  "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/h2/dao/H2MetadataQueryDAO.java",
+  "line": 128,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-grpf-gg7v-5g5h",
+  "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/h2/dao/H2MetadataQueryDAO.java",
+  "line": 178,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-grpf-gg7v-5g5h",
+  "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/h2/dao/H2TraceQueryDAO.java",
+  "line": 85,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-grpf-gg7v-5g5h",
+  "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/mysql/MySQLAlarmQueryDAO.java",
+  "line": 64,
+  "status": "MISS"
  }
 ]
