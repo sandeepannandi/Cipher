@@ -152,5 +152,33 @@
   "fix": "fb7912c6bdda06a233f4b3e18e71a87d3e4a8951",
   "pre_fix": "cc9ea271a720e8def161a583595f75da9bda77a5",
   "advisory": "https://github.com/advisories/GHSA-grpf-gg7v-5g5h"
+ },
+ {
+  "ghsa": "GHSA-c84h-w6cr-5v8q",
+  "repo": "d0c-s4vage/lookatme",
+  "fix": "72fe36b784b234548d49dae60b840c37f0eb8d84",
+  "pre_fix": "f5d5f8b907ec37e54d49dcc69b35fc009e1760d3",
+  "advisory": "https://github.com/advisories/GHSA-c84h-w6cr-5v8q"
+ },
+ {
+  "ghsa": "GHSA-3x49-g6rc-c284",
+  "repo": "mbdavid/LiteDB",
+  "fix": "4382ff4dd0dd8b8b16a4e37dfd29727c5f70f93f",
+  "pre_fix": "d72c6774e6a13de2cfcd7d477d3575efeb75c8f2",
+  "advisory": "https://github.com/advisories/GHSA-3x49-g6rc-c284"
+ },
+ {
+  "ghsa": "GHSA-5hjh-c26m-xw8w",
+  "repo": "hoppscotch/proxyscotch",
+  "fix": "de67380f62f907f201d75854b76024ba4885fab7",
+  "pre_fix": "f319207e8597c5e561d74db7d4034bfac6cac4f9",
+  "advisory": "https://github.com/advisories/GHSA-5hjh-c26m-xw8w"
+ },
+ {
+  "ghsa": "GHSA-pc6f-259w-w3j6",
+  "repo": "heartexlabs/label-studio",
+  "fix": "501142cb815ac964b0c600c491885b67386870c2",
+  "pre_fix": "ad298047312123e2fb781cd6d7b9668ed1b51edc",
+  "advisory": "https://github.com/advisories/GHSA-pc6f-259w-w3j6"
  }
 ]

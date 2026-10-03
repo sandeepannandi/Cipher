@@ -178,5 +178,29 @@
   "file": "oap-server/server-storage-plugin/storage-jdbc-hikaricp-plugin/src/main/java/org/apache/skywalking/oap/server/storage/plugin/jdbc/mysql/MySQLAlarmQueryDAO.java",
   "line": 64,
   "status": "HIT"
+ },
+ {
+  "ghsa": "GHSA-c84h-w6cr-5v8q",
+  "file": "lookatme/contrib/__init__.py",
+  "line": 36,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-3x49-g6rc-c284",
+  "file": "LiteDB/Client/Mapper/BsonMapper.Deserialize.cs",
+  "line": 170,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-5hjh-c26m-xw8w",
+  "file": "libproxy/proxy.go",
+  "line": 285,
+  "status": "MISS"
+ },
+ {
+  "ghsa": "GHSA-pc6f-259w-w3j6",
+  "file": "label_studio/data_import/uploader.py",
+  "line": 123,
+  "status": "MISS"
  }
 ]
