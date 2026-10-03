@@ -9734,6 +9734,16 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
         assert!(!hit(
             "class A\n  def run(*args)\n    system(*args)\n  end\nend\n"
         ));
+        // Backticks and `system(` inside quoted messages or heredocs are text.
+        assert!(!hit("class A\n  def f(name)\n    raise ArgumentError, \"model aliases `#{name}`, not an attribute\"\n  end\nend\n"));
+        assert!(!hit("class A\n  def f(name)\n    @q[name] ||= \"`#{name.to_s.gsub('`', '``')}`\".freeze\n  end\nend\n"));
+        assert!(!hit("class A\n  def f(name, type)\n    super <<~EOS\n      Column `#{name}` of type #{type} is bad\n    EOS\n  end\nend\n"));
+        assert!(!hit(
+            "class A\n  def f(name)\n    msg = \"call system(#{name}) later\"\n  end\nend\n"
+        ));
+        // A nested class does not reset an outer `private` (Rails AppBase shape).
+        assert!(!hit("class AppBase\n  private\n    class Entry < Struct.new(:a)\n      def x\n      end\n    end\n\n    def capture_command(command, pattern = nil)\n      output = `#{command}`\n    end\nend\n"));
+        assert!(hit("class AppBase\n  class Entry < Struct.new(:a)\n  end\n  def capture_command(command)\n    `#{command}`\n  end\nend\n"));
         // Interpolated value unrelated to any parameter.
         assert!(!hit(
             "class A\n  def run(name)\n    dir = Dir.pwd\n    `ls #{dir}`\n  end\nend\n"
@@ -19506,9 +19516,25 @@ fn ruby_public_methods(lines: &[&str]) -> Vec<RubyMethod> {
         return methods;
     };
     let mut private_scope = false;
+    // Each open `class`/`module` saves the visibility of the scope around it,
+    // so a nested class does not reset an outer `private`.
+    let mut scopes: Vec<(usize, bool)> = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if scope_re.is_match(line) {
+        let line_indent = line.len() - line.trim_start().len();
+        if trimmed == "end"
+            && scopes
+                .last()
+                .is_some_and(|(indent, _)| *indent == line_indent)
+        {
+            if let Some((_, saved)) = scopes.pop() {
+                private_scope = saved;
+            }
+        } else if scope_re.is_match(line) {
+            let one_line = trimmed.ends_with(" end") || trimmed.contains("; end");
+            if !one_line {
+                scopes.push((line_indent, private_scope));
+            }
             private_scope = false;
         } else if matches!(trimmed, "private" | "protected") {
             private_scope = true;
@@ -19629,12 +19655,13 @@ fn ruby_parameter_shell_lines(content: &str, extension: &str) -> std::collection
     if extension != "rb" {
         return found;
     }
-    let (Ok(assign_re), Ok(call_re), Ok(clear_re)) = (
+    let (Ok(assign_re), Ok(call_re), Ok(clear_re), Ok(heredoc_re)) = (
         Regex::new(r#"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^=~>].*)$"#),
         Regex::new(
             r#"(?:^|[^.\w:@$])(?:Kernel\s*\.\s*)?(?:system|exec|spawn)\s*\(|\bIO\s*\.\s*popen\s*\(|\bOpen3\s*\.\s*\w+\s*\("#,
         ),
         Regex::new(r#"shellescape|Shellwords|shelljoin|\.to_i\b|Integer\s*\("#),
+        Regex::new(r#"<<[~-]?["']?([A-Z_][A-Z0-9_]*)["']?"#),
     ) else {
         return found;
     };
@@ -19646,8 +19673,19 @@ fn ruby_parameter_shell_lines(content: &str, extension: &str) -> std::collection
         }
         let mut tainted: Vec<String> = method.params.clone();
         let mut index = method.def_index + 1;
+        let mut heredoc: Option<String> = None;
         while index < method.end {
             let line = lines[index];
+            if let Some(id) = heredoc.as_ref() {
+                if line.trim() == id {
+                    heredoc = None;
+                }
+                index += 1;
+                continue;
+            }
+            if let Some(c) = heredoc_re.captures(line) {
+                heredoc = c.get(1).map(|m| m.as_str().to_string());
+            }
             if line.trim().starts_with('#') {
                 index += 1;
                 continue;
@@ -19667,24 +19705,26 @@ fn ruby_parameter_shell_lines(content: &str, extension: &str) -> std::collection
             }
             let uses = |text: &str| tainted.iter().any(|name| contains_identifier(text, name));
             let mut sink = false;
+            // Only code outside string literals counts: a backtick or
+            // `system(` inside a quoted message is text, not a command.
+            let masked = ruby_mask_strings(&statement);
             // Backtick strings and %x: the interpolation must carry taint.
-            if let Some(open) = statement.find('`') {
-                let rest = &statement[open + 1..];
-                if let Some(close) = rest.find('`') {
-                    let inner = &rest[..close];
+            if let Some(open) = masked.find('`') {
+                if let Some(close) = masked[open + 1..].find('`') {
+                    let inner = &statement[open + 1..open + 1 + close];
                     if inner.contains("#{") && interpolations(inner).iter().any(|e| uses(e)) {
                         sink = true;
                     }
                 }
             }
-            if let Some(start) = statement.find("%x") {
+            if let Some(start) = masked.find("%x") {
                 let rest = &statement[start + 2..];
                 if rest.starts_with(['(', '{', '[']) && interpolations(rest).iter().any(|e| uses(e))
                 {
                     sink = true;
                 }
             }
-            if let Some(m) = call_re.find(&statement) {
+            if let Some(m) = call_re.find(&masked) {
                 let args = ruby_call_arguments(&statement, m.end() - 1);
                 // A splat (`popen3(*args)`) is an argument vector, not a string.
                 if args.len() == 1 && !args[0].trim().starts_with('*') {
@@ -19716,6 +19756,56 @@ fn ruby_parameter_shell_lines(content: &str, extension: &str) -> std::collection
         }
     }
     found
+}
+
+/// The statement with the contents of quoted strings (and their `#{}`
+/// interpolations) blanked out, byte for byte, so offsets match the original.
+/// Used to tell code from text: a backtick inside `"..."` is not a command.
+fn ruby_mask_strings(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut interp = 0i32;
+    for ch in text.chars() {
+        let blank = |out: &mut String, ch: char| {
+            for _ in 0..ch.len_utf8() {
+                out.push(' ');
+            }
+        };
+        match quote {
+            Some(q) => {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if interp > 0 {
+                    if ch == '{' {
+                        interp += 1;
+                    } else if ch == '}' {
+                        interp -= 1;
+                    }
+                } else if q == '"' && ch == '#' {
+                    // `#{` is detected on the next char via a pending marker.
+                    interp = -1;
+                } else if ch == q {
+                    quote = None;
+                    out.push(ch);
+                    continue;
+                }
+                if interp == -1 && ch != '#' {
+                    interp = if ch == '{' { 1 } else { 0 };
+                }
+                blank(&mut out, ch);
+            }
+            None => {
+                if ch == '"' || ch == '\'' {
+                    quote = Some(ch);
+                }
+                out.push(ch);
+            }
+        }
+    }
+    out
 }
 
 /// The expressions inside every `#{...}` of a Ruby string.
