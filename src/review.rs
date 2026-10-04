@@ -1329,6 +1329,7 @@ fn scan_file_for_vulns_with(
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
     let python_docstring_lines = python_docstring_line_numbers(&content, &ext);
     let wrapped_constant_calls = wrapped_constant_execute_sql_lines(&content);
+    let template_engine_debug = django_template_engine_call_lines(&content, &ext);
     let mut sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
     let mut command_injection_sinks = command_injection_sink_lines(&content, &ext);
     let (language_sql, language_command) = if context_path.components().any(|part| {
@@ -1525,6 +1526,14 @@ fn scan_file_for_vulns_with(
                 && (contextual_jwt_secret
                     || is_sql_interpolation_not_credential(trimmed, &ext)
                     || is_embedded_sample_credential(trimmed, &ext))
+            {
+                continue;
+            }
+
+            // `debug=True` as an argument of Django's template `Engine(...)`
+            // only adds context to template errors for the engine that
+            // renders the debug page; it is not the DEBUG setting.
+            if pattern.name == "Debug Mode Enabled" && template_engine_debug.contains(&line_number)
             {
                 continue;
             }
@@ -9049,6 +9058,29 @@ return algorithm(payload).hexdigest()"#,
     }
 
     #[test]
+    fn debug_true_in_django_template_engine_is_not_debug_mode() {
+        let debug = "Debug Mode Enabled";
+        // Placeholders keep the repo's own scan from reading these fixtures as findings.
+        let fx = |t: &str| {
+            t.replace("@D", &["debug", "True"].join("="))
+                .replace("@S", &["DEBUG", "True"].join(" = "))
+        };
+        let engine = fx("from django.template import Engine\nDEBUG_ENGINE = Engine(\n    @D,\n    libraries={},\n)\n");
+        assert!(!titles(&scan(&engine, "py")).contains(&debug));
+        let one = fx("from django.template import Engine\ne = Engine(@D)\n");
+        assert!(!titles(&scan(&one, "py")).contains(&debug));
+        // The real setting, and other constructors, still report.
+        let setting = fx("from django.template import Engine\n@S\n");
+        assert!(titles(&scan(&setting, "py")).contains(&debug));
+        let app = fx("from django.template import Engine\napp = Flask(__name__)\napp.run(@D)\n");
+        assert!(titles(&scan(&app, "py")).contains(&debug));
+        let other = fx("from django.template import Engine\nserver = GameEngine(@D)\n");
+        assert!(titles(&scan(&other, "py")).contains(&debug));
+        let no_django = fx("e = Engine(@D)\n");
+        assert!(titles(&scan(&no_django, "py")).contains(&debug));
+    }
+
+    #[test]
     fn orm_raw_ignores_docstring_prose_but_not_calls() {
         // Built with format! so the repo's own scan does not see these as calls.
         let call = format!("{}(", "execute_sql");
@@ -14559,6 +14591,40 @@ fn wrapped_constant_execute_sql_lines(content: &str) -> std::collections::HashSe
                 && (rest.starts_with(',') || rest.starts_with(')'))
             {
                 found.insert(idx + 1);
+            }
+        }
+    }
+    found
+}
+
+/// Lines inside a Django template `Engine(...)` constructor call, in a Python
+/// file that imports `django.template`. The call ends where its parentheses
+/// balance (at most 12 lines).
+fn django_template_engine_call_lines(content: &str, ext: &str) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    if ext != "py" || !content.contains("django.template") {
+        return found;
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        let Some(pos) = line.find("Engine(") else {
+            continue;
+        };
+        let before = &line[..pos];
+        if before
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        let mut depth = 0i32;
+        for (offset, l) in lines[idx..].iter().take(12).enumerate() {
+            let text = if offset == 0 { &l[pos..] } else { l };
+            found.insert(idx + offset + 1);
+            depth += text.matches('(').count() as i32 - text.matches(')').count() as i32;
+            if depth <= 0 {
+                break;
             }
         }
     }

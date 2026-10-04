@@ -4,4 +4,3 @@ django/contrib/contenttypes/views.py	15	Insecure Direct Object Reference (IDOR)
 django/db/backends/sqlite3/_functions.py	414	Weak Hash Algorithm — MD5
 django/db/backends/sqlite3/_functions.py	460	Weak Hash Algorithm — SHA1
 django/db/models/query.py	141	SQL Injection — ORM Raw Queries
-django/views/debug.py	29	Debug Mode Enabled
