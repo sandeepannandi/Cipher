@@ -96,7 +96,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         // internally on constants and quoted names), `def ...` lines define
         // rather than call these APIs, and an ALL-CAPS constant argument is
         // framework-internal result plumbing (compiler.execute_sql(SINGLE)).
-        Some(r#"(?i)\bArel\.sql\s*\(|(?:^|\s)def\s+(?:self\.)?(?:execute_sql|sql|raw)\s*\(|execute_sql\s*\(\s*[A-Z_][A-Z_0-9]*\s*[),]"#),
+        Some(r#"(?i)\bArel\.sql\s*\(|(?:^|\s)def\s+(?:self\.)?(?:execute_sql|sql|raw)\s*\(|execute_sql\s*\(\s*[A-Z_][A-Z_0-9]*\s*[),]|execute_sql\s*\(\s*\)"#),
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs", "kt"],
         "Use the ORM's query builder instead of raw SQL. If raw SQL is required, use parameterized queries."
     );
@@ -1328,6 +1328,7 @@ fn scan_file_for_vulns_with(
     go_path_traversal_sinks.extend(go_archive_entry_join_lines(&content, &ext));
     let python_md5_alias_calls = python_md5_alias_call_lines(&content, &ext);
     let python_docstring_lines = python_docstring_line_numbers(&content, &ext);
+    let wrapped_constant_calls = wrapped_constant_execute_sql_lines(&content);
     let mut sql_injection_sinks = sql_injection_sink_lines(&content, &ext);
     let mut command_injection_sinks = command_injection_sink_lines(&content, &ext);
     let (language_sql, language_command) = if context_path.components().any(|part| {
@@ -1492,6 +1493,15 @@ fn scan_file_for_vulns_with(
                     && (idor_sinks.contains(&line_number)
                         || django_idor_sinks.contains(&line_number)));
             if !pattern_matches {
+                continue;
+            }
+
+            // `execute_sql(` at the end of a line with an ALL-CAPS constant as
+            // the first argument on the next line is the wrapped form of the
+            // framework-internal result call the pattern already skips.
+            if pattern.name == "SQL Injection — ORM Raw Queries"
+                && wrapped_constant_calls.contains(&line_number)
+            {
                 continue;
             }
 
@@ -9024,6 +9034,21 @@ return algorithm(payload).hexdigest()"#,
     }
 
     #[test]
+    fn orm_raw_skips_wrapped_constant_and_empty_calls_but_not_sql_arguments() {
+        // Built with format! so the repo's own scan does not see these as calls.
+        let call = format!("{}(", "execute_sql");
+        let wrapped = format!("x = self.{call}\n    MULTI, chunk=1\n)\n");
+        assert!(!titles(&scan(&wrapped, "py")).contains(&ORM_RAW));
+        let empty = format!("r = list(self.{call}))\n");
+        assert!(!titles(&scan(&empty, "py")).contains(&ORM_RAW));
+        // A wrapped call whose first argument is a variable still reports.
+        let var = format!("x = self.{call}\n    query, params\n)\n");
+        assert!(titles(&scan(&var, "py")).contains(&ORM_RAW));
+        let sql = format!("x = self.{call}\"select * from t where a=\" + a)\n");
+        assert!(titles(&scan(&sql, "py")).contains(&ORM_RAW));
+    }
+
+    #[test]
     fn orm_raw_ignores_docstring_prose_but_not_calls() {
         // Built with format! so the repo's own scan does not see these as calls.
         let call = format!("{}(", "execute_sql");
@@ -14505,6 +14530,39 @@ func handler(w http.ResponseWriter, r *http.Request) {
         ]);
         assert!(found.is_empty(), "{found:?}");
     }
+}
+
+/// Lines that end with `execute_sql(` whose next non-blank line starts with an
+/// ALL-CAPS constant argument (`MULTI, chunked_fetch=...`).
+fn wrapped_constant_execute_sql_lines(content: &str) -> std::collections::HashSet<usize> {
+    let mut found = std::collections::HashSet::new();
+    let lines: Vec<&str> = content.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        if !line
+            .trim_end()
+            .to_ascii_lowercase()
+            .ends_with(concat!("execute_", "sql("))
+        {
+            continue;
+        }
+        let next = lines[idx + 1..]
+            .iter()
+            .map(|l| l.trim())
+            .find(|l| !l.is_empty());
+        if let Some(next) = next {
+            let name_len = next
+                .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+                .unwrap_or(next.len());
+            let rest = next[name_len..].trim_start();
+            if name_len > 0
+                && next.starts_with(|c: char| c.is_ascii_uppercase() || c == '_')
+                && (rest.starts_with(',') || rest.starts_with(')'))
+            {
+                found.insert(idx + 1);
+            }
+        }
+    }
+    found
 }
 
 /// Line numbers inside Python docstrings: a string statement that starts a

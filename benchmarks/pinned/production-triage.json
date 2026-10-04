@@ -49,22 +49,6 @@
  },
  {
   "repo": "django",
-  "file": "django/db/models/sql/compiler.py",
-  "line": 1598,
-  "title": "SQL Injection \u2014 ORM Raw Queries",
-  "verdict": "FP",
-  "reason": "results_iter calling self.execute_sql(MULTI, ...) inside the ORM compiler: internal call, no raw input."
- },
- {
-  "repo": "django",
-  "file": "django/db/models/sql/compiler.py",
-  "line": 1694,
-  "title": "SQL Injection \u2014 ORM Raw Queries",
-  "verdict": "FP",
-  "reason": "explain_query calling self.execute_sql() inside the ORM compiler: internal call, no raw input."
- },
- {
-  "repo": "django",
   "file": "django/views/debug.py",
   "line": 29,
   "title": "Debug Mode Enabled",
