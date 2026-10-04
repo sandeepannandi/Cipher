@@ -9755,6 +9755,26 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
     }
 
     #[test]
+    fn python_connection_sink_moves_to_the_request_call() {
+        let lines = |src: &str| {
+            let mut v: Vec<usize> = ssrf_sink_lines(src, "py").into_iter().collect();
+            v.sort();
+            v
+        };
+        let moved = "def f(request):\n    url = request.GET['url']\n    proto, server, path, query, frag = urlsplit(url)\n    conn = HTTPConnection(server)\n    conn.request('GET', path)\n";
+        assert_eq!(lines(moved), vec![5]);
+        // No request call on the connection: the constructor line stays.
+        let bare = "def f(request):\n    url = request.GET['url']\n    proto, server, path, query, frag = urlsplit(url)\n    conn = HTTPConnection(server)\n";
+        assert_eq!(lines(bare), vec![4]);
+        // A request on a different variable does not move it.
+        let other = "def f(request):\n    url = request.GET['url']\n    proto, server, path, query, frag = urlsplit(url)\n    conn = HTTPConnection(server)\n    other.request('GET', path)\n";
+        assert_eq!(lines(other), vec![4]);
+        // A fixed host stays quiet.
+        let fixed = "def f(request):\n    u = request.GET['u']\n    conn = HTTPConnection('internal.example')\n    conn.request('GET', u)\n";
+        assert!(lines(fixed).is_empty());
+    }
+
+    #[test]
     fn python_tuple_unpack_of_a_call_carries_request_taint() {
         let hit = |src: &str| !ssrf_sink_lines(src, "py").is_empty();
         assert!(hit(
@@ -21139,13 +21159,50 @@ fn ssrf_sink_lines(content: &str, extension: &str) -> std::collections::HashSet<
     let Some(language) = flow_language(extension) else {
         return std::collections::HashSet::new();
     };
-    request_flow_sink_lines(
+    let mut sinks = request_flow_sink_lines(
         content,
         language,
         &ssrf_flow_sinks(language),
         contains_numeric_conversion,
         false,
-    )
+    );
+    if extension == "py" {
+        move_python_connection_sinks_to_request(content, &mut sinks);
+    }
+    sinks
+}
+
+/// `conn = HTTPConnection(host)` only builds the connection; the request
+/// leaves at `conn.request(...)`. When the constructor line is a tainted sink
+/// and the same variable makes a `.request(` call within the next 15 lines,
+/// report at that call instead. Without such a call the constructor line stays.
+fn move_python_connection_sinks_to_request(
+    content: &str,
+    sinks: &mut std::collections::HashSet<usize>,
+) {
+    let Ok(assign) = Regex::new(r"^\s*(\w+)\s*=\s*(?:\w+\s*\.\s*)*HTTPS?Connection\s*\(") else {
+        return;
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    for number in sinks.clone() {
+        let Some(line) = lines.get(number - 1) else {
+            continue;
+        };
+        let Some(caps) = assign.captures(line) else {
+            continue;
+        };
+        let call = format!("{}.request(", &caps[1]);
+        let found = lines
+            .iter()
+            .enumerate()
+            .skip(number)
+            .take(15)
+            .find(|(_, l)| l.contains(&call));
+        if let Some((idx, _)) = found {
+            sinks.remove(&number);
+            sinks.insert(idx + 1);
+        }
+    }
 }
 
 #[allow(clippy::items_after_test_module)]
