@@ -201,6 +201,6 @@
   "ghsa": "GHSA-pc6f-259w-w3j6",
   "file": "label_studio/data_import/uploader.py",
   "line": 123,
-  "status": "MISS"
+  "status": "HIT"
  }
 ]
