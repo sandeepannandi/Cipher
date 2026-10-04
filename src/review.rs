@@ -9755,6 +9755,29 @@ out, err := exec.Command("sh", "-c", cmd).Output()"#,
     }
 
     #[test]
+    fn wrapped_same_file_call_carries_taint_to_the_callee_sink() {
+        let lines = |src: &str| {
+            let mut v: Vec<usize> = ssrf_sink_lines(src, "py").into_iter().collect();
+            v.sort();
+            v
+        };
+        let callee = "def fetch(ids, project, url):\n    with urlopen(url) as f:\n        return f.read()\n\n";
+        // One-line call (existing behaviour) and the same call wrapped.
+        let one = format!("{callee}def load(request, project):\n    url = request.data.get('url')\n    return fetch([], project, url)\n");
+        assert_eq!(lines(&one), vec![2]);
+        let wrapped = format!("{callee}def load(request, project):\n    url = request.data.get('url')\n    return fetch(\n        [], project, url\n    )\n");
+        assert_eq!(lines(&wrapped), vec![2]);
+        // Negative controls: constant argument, untainted position, sanitized argument.
+        let constant = format!("{callee}def load(request, project):\n    url = request.data.get('url')\n    return fetch(\n        [], project, 'https://example.com/'\n    )\n");
+        assert!(lines(&constant).is_empty());
+        let other_position = format!("{callee}def load(request, project):\n    url = request.data.get('url')\n    return fetch(\n        [url], project, 'https://example.com/'\n    )\n");
+        assert!(lines(&other_position).is_empty());
+        // A wrapped call to a function the file does not define stays quiet.
+        let unknown = "def load(request, project):\n    url = request.data.get('url')\n    return helper(\n        [], project, url\n    )\n";
+        assert!(lines(unknown).is_empty());
+    }
+
+    #[test]
     fn python_connection_sink_moves_to_the_request_call() {
         let lines = |src: &str| {
             let mut v: Vec<usize> = ssrf_sink_lines(src, "py").into_iter().collect();
@@ -16283,7 +16306,9 @@ fn flow_pass(
         }
 
         if let Some(calls) = calls {
-            for (function_index, args) in same_file_calls(&visible, line_index, language, calls) {
+            for (function_index, args) in
+                same_file_calls(&visible, lines, line_index, language, calls)
+            {
                 let Some(params) = calls.summaries.get(function_index) else {
                     continue;
                 };
@@ -16297,7 +16322,8 @@ fn flow_pass(
                     }
                 }
             }
-            for (import_index, args) in imported_calls(&visible, language, calls) {
+            for (import_index, args) in imported_calls(&visible, lines, line_index, language, calls)
+            {
                 let callee = &calls.imports[import_index];
                 for (position, arg) in args.iter().enumerate() {
                     let carries_taint =
@@ -16314,6 +16340,23 @@ fn flow_pass(
     (sink_lines, callee_sink_lines, imported_sink_lines)
 }
 
+/// Arguments of the call whose `(` is at `open`. A call that continues on the
+/// following lines is joined first, the same way sink calls are read.
+fn wrapped_call_arguments(
+    lines: &[&str],
+    line_index: usize,
+    visible: &str,
+    language: FlowLanguage,
+    open: usize,
+) -> Vec<String> {
+    if call_unterminated(visible, open) {
+        let extended = extend_call_text(lines, line_index, visible, language, open);
+        call_arguments(&extended, open)
+    } else {
+        call_arguments(visible, open)
+    }
+}
+
 /// Calls on one line that resolve to an imported function: `binding.name(...)`
 /// for a module binding, or a bare `name(...)` for a function imported by
 /// name. A same-file definition with the same name shadows the import.
@@ -16325,6 +16368,8 @@ fn flow_pass(
 #[allow(clippy::items_after_test_module)]
 fn imported_calls(
     visible: &str,
+    lines: &[&str],
+    line_index: usize,
     language: FlowLanguage,
     calls: &FlowCalls,
 ) -> Vec<(usize, Vec<String>)> {
@@ -16419,7 +16464,7 @@ fn imported_calls(
         else {
             continue;
         };
-        let args = call_arguments(visible, whole.end() - 1);
+        let args = wrapped_call_arguments(lines, line_index, visible, language, whole.end() - 1);
         let args: Vec<String> = if args.len() == 1 && args[0].is_empty() {
             Vec::new()
         } else {
@@ -16450,6 +16495,7 @@ fn imported_calls(
 #[allow(clippy::items_after_test_module)]
 fn same_file_calls(
     visible: &str,
+    lines: &[&str],
     line_index: usize,
     language: FlowLanguage,
     calls: &FlowCalls,
@@ -16516,7 +16562,7 @@ fn same_file_calls(
         if !resolves {
             continue;
         }
-        let args = call_arguments(visible, whole.end() - 1);
+        let args = wrapped_call_arguments(lines, line_index, visible, language, whole.end() - 1);
         let args: Vec<String> = if args.len() == 1 && args[0].is_empty() {
             Vec::new()
         } else {
