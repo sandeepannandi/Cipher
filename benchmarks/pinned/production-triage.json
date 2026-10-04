@@ -48,14 +48,6 @@
   "reason": "compiler.execute_sql(...) in the ORM iterator: the framework running its own compiled query, no raw string from a caller."
  },
  {
-  "repo": "django",
-  "file": "django/views/debug.py",
-  "line": 29,
-  "title": "Debug Mode Enabled",
-  "verdict": "FP",
-  "reason": "Engine(debug=True) for the technical 500 page template engine. Not the DEBUG setting."
- },
- {
   "repo": "gin",
   "file": ".github/workflows/gin.yml",
   "line": 27,
