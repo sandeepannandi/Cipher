@@ -143,10 +143,37 @@ Cipher/
 └── docs/PENTESTER-PLAN.md
 ```
 
+## Measured results and limits
+
+These numbers come from the benchmark suites in `benchmarks/` and are recomputed in CI. They describe the static `cipher-ai review` scanner (no AI provider needed) on the pinned inputs below, not a general accuracy rate.
+
+| Measure | Result | What it is |
+|---|---|---|
+| Advisory recall | **23 of 34** labeled vulnerable lines found at the exact line (0 near, 11 missed) | Published GitHub advisories with a public fix commit. The commit before the fix is scanned; a label is the vulnerable sink line chosen from the fix diff. Advisories with no single clear sink line are listed in `benchmarks/recall/unlabeled.json`, not scored. |
+| Ten-repo exact-key check | **10 of 10** repos match | Ten intentionally vulnerable or realistic projects at pinned commits. Every expected finding must still appear and no unexpected one may appear. |
+| Production precision | **61 true positives, 3 false positives, 2 judgment calls** (66 hand-reviewed findings) | A sweep of 12 real projects at pinned commits (axios, composer, django, express, gin, guava, hugo, jekyll, laravel, newtonsoft-json, rails, requests). Every finding was read against the source; the verdicts are in `benchmarks/pinned/production-triage.json`. 61 of the 64 decided findings are real, about 95%, on this set only. |
+
+Reproduce:
+
+```sh
+cargo build --release
+python3 benchmarks/recall/recall.py --cipher target/release/cipher-ai --check
+python3 benchmarks/pinned/check.py --cipher target/release/cipher-ai --suite benchmark
+python3 benchmarks/pinned/check.py --cipher target/release/cipher-ai --suite production
+```
+
+**Known limits**
+
+- It is a pattern and flow-based scanner, not a full dataflow engine. Tracking is mostly within a file, with same-file and imported function summaries.
+- The 11 missed advisories are listed by name in `benchmarks/recall/results.json`. They need taint through struct fields, deeper cross-function or cross-file flows, or framework knowledge that line-level rules cannot express honestly. Rules are not tuned to individual repositories.
+- Three false positives are recorded and still reported: django `db/models/query.py:141` (the ORM running its own compiled query), django `contrib/contenttypes/views.py:15` (content types are site metadata), and rails `query_command.rb:102` (a developer CLI that runs typed SQL by design).
+- The production set has few findings outside laravel, jekyll, rails, gin and django, so precision on other stacks is not established.
+- Windows binaries are built by the release workflow (`x86_64-pc-windows-msvc`). `install.sh` maps Git Bash, MSYS and Cygwin to that artifact, but that path has not been tested on Windows, and there is no PowerShell installer yet.
+
 ## Tests
 
 ```sh
-cargo test              # 402 tests: unit + pentest fixtures + integration
+cargo test
 cargo clippy --all-targets
 ```
 
