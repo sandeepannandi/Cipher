@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-10-05
+
+First release since 1.0.0. The release workflow now attaches `SHA256SUMS.txt`, which `install.sh` and `install.ps1` require; 1.0.0 predates it. It also includes everything listed below, including the Windows PowerShell installer.
+
 ### Added
 
 - **Weak Hash skips calls inside a function whose declaration is a non-security wrapper** — the existing non-security cues (hash-named wrapper, mutex, cache key, checksum and so on) are now also applied to the enclosing function declaration, so `def _sqlite_md5(text): return md5(...)` and a `mutexName()` whose hash call wraps onto the next line no longer report. A declaration containing a security word (password, secret, token, auth, sign, hmac, salt, session, key and so on) never suppresses; only a declaration indented less than the call counts (unit test with negative controls). Production: exactly three findings removed, all recorded false positives: django `_functions.py:414` and `:460`, laravel `Event.php:868`; the expected files and `production-triage.json` are updated, leaving 66 keys (61 TP, 3 FP, 2 judgment). Ten pinned repos exact 10/10 (all labeled Weak Hash keys kept); recall unchanged at 23/34 exact, 0 near, 11 miss. `src/review.rs`, `benchmarks/pinned/production-expected/`
