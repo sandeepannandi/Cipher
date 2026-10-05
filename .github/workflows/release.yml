@@ -36,6 +36,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Add target to the pinned toolchain
+        # rust-toolchain.toml pins 1.88.0, so cargo builds with that toolchain,
+        # not the stable one installed above. It needs the target too.
+        run: rustup target add ${{ matrix.target }}
+
       - name: Install ARM GCC (for Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
