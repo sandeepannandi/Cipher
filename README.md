@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/sandeepannandi/Cipher/master/instal
 sh install.sh                 # latest release, into ~/.local/bin
 ```
 
-Pin a version or a different prefix explicitly: `sh install.sh --version v1.0.1 --prefix /usr/local/bin`. Then run `cipher-ai setup`.
+Pin a version or a different prefix explicitly: `sh install.sh --version v1.0.2 --prefix /usr/local/bin`. Then run `cipher-ai setup`.
 
 **Windows (PowerShell):** `install.ps1` does the same as `install.sh` for `x86_64-pc-windows-msvc`: it downloads `cipher-ai-x86_64-pc-windows-msvc.exe` and the release's `SHA256SUMS.txt`, and refuses to install unless the checksum verifies.
 
@@ -33,9 +33,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1          # latest release
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version vX.Y.Z -Prefix C:\Tools
 ```
 
-Both installers need a release that includes `SHA256SUMS.txt`. `v1.0.0` predates that file, so the installers refuse it; use `v1.0.1` or newer, which has it. Checked on 2026-10-05: `install.sh --version v1.0.1` verified the checksum and installed the Linux binary.
+Both installers need a release that includes `SHA256SUMS.txt`. `v1.0.0` predates that file, so the installers refuse it; use `v1.0.1` or newer, which has it. Checked on 2026-10-05: `install.sh --version v1.0.2` verified the checksum and installed the Linux binary.
 
-**Linux needs glibc 2.39 or newer** (the Linux binaries are built on Ubuntu 24.04). On an older system the binary installs but will not start, with an error like `GLIBC_2.39 not found`. On those systems, build from source.
+**Linux needs glibc 2.34 or newer.** The Linux binaries are built on Ubuntu 22.04. For `v1.0.2` I read the highest `GLIBC_` symbol version each Linux binary requires (`objdump -T`): 2.34 for both x86_64 and aarch64. I ran the x86_64 binary and the installer on an Ubuntu 22.04 system (glibc 2.35). I have not run the aarch64 binary. `v1.0.1` required glibc 2.39 and does not start on older systems; use `v1.0.2` or newer. On a system older than glibc 2.34, build from source.
 
 ## Quick start (from source)
 
@@ -260,7 +260,7 @@ python3 benchmarks/pinned/check.py --cipher target/release/cipher-ai --suite pro
 - The 11 missed advisories are listed by name in `benchmarks/recall/results.json`. They need taint through struct fields, deeper cross-function or cross-file flows, or framework knowledge that line-level rules cannot express honestly. Rules are not tuned to individual repositories.
 - Three false positives are recorded and still reported: django `db/models/query.py:141` (the ORM running its own compiled query), django `contrib/contenttypes/views.py:15` (content types are site metadata), and rails `query_command.rb:102` (a developer CLI that runs typed SQL by design).
 - The production set has few findings outside laravel, jekyll, rails, gin and django, so precision on other stacks is not established.
-- Windows binaries are built by the release workflow (`x86_64-pc-windows-msvc`). `install.ps1` is tested in CI on a Windows runner against a stand-in release (it installs a matching binary and refuses a tampered one or a missing checksum line). It has not been run against the published `v1.0.1`, and I have not run the Windows `.exe`; I only checked that its SHA-256 matches `SHA256SUMS.txt`.
+- Windows binaries are built by the release workflow (`x86_64-pc-windows-msvc`). `install.ps1` is tested in CI on a Windows runner against a stand-in release (it installs a matching binary and refuses a tampered one or a missing checksum line). It has not been run against the published `v1.0.2`, and I have not run the Windows `.exe`; I only checked that its SHA-256 matches `SHA256SUMS.txt`.
 
 ## Tests
 
