@@ -7,7 +7,6 @@ src/Illuminate/Concurrency/.github/workflows/close-pull-request.yml	11	GitHub Ac
 src/Illuminate/Conditionable/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
 src/Illuminate/Config/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
 src/Illuminate/Console/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
-src/Illuminate/Console/Scheduling/Event.php	868	Weak Hash Algorithm — SHA1
 src/Illuminate/Container/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
 src/Illuminate/Contracts/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action
 src/Illuminate/Cookie/.github/workflows/close-pull-request.yml	11	GitHub Actions — Unpinned Third-Party Action

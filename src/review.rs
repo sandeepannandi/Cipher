@@ -1626,6 +1626,18 @@ fn scan_file_for_vulns_with(
                 continue;
             }
 
+            // A weak-hash call inside a function whose own declaration already
+            // reads as a non-security use (a hash wrapper, mutex or cache-key
+            // name) is the same non-security context as the line-level cues,
+            // seen from the enclosing function.
+            if pattern.name.starts_with("Weak Hash Algorithm")
+                && pattern.negative.as_ref().is_some_and(|neg| {
+                    weak_hash_in_non_security_function(&content, line_number, neg)
+                })
+            {
+                continue;
+            }
+
             // Suppress matches that also hit the negative filter, e.g. a
             // cookie call that already sets HttpOnly/Secure/SameSite.
             if pattern
@@ -1643,6 +1655,39 @@ fn scan_file_for_vulns_with(
     }
 
     findings
+}
+
+/// True when the nearest enclosing function declaration above `line_number`
+/// matches the weak-hash non-security cues (its name is a hash wrapper, mutex,
+/// cache key, checksum and so on) and carries no security-named identifier.
+/// Only a declaration indented less than the hash call counts, and only within
+/// a short window, so unrelated functions never apply.
+fn weak_hash_in_non_security_function(content: &str, line_number: usize, negative: &Regex) -> bool {
+    static FN_DECL: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+        Regex::new(
+            r"^\s*(?:(?:public|private|protected|static|async|export|final|abstract)\s+)*(?:def|function|func|fn)\b",
+        )
+        .ok()
+    });
+    static SECURITY_NAME: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+        Regex::new(r"(?i)password|passwd|secret|token|auth|sign|hmac|salt|credential|session|csrf|nonce|\bkey\b").ok()
+    });
+    let (Some(decl), Some(security)) = (FN_DECL.as_ref(), SECURITY_NAME.as_ref()) else {
+        return false;
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let Some(index) = line_number.checked_sub(1).filter(|i| *i < lines.len()) else {
+        return false;
+    };
+    let indent = |text: &str| text.len() - text.trim_start().len();
+    let call_indent = indent(lines[index]);
+    for candidate in (index.saturating_sub(80)..index).rev() {
+        let text = lines[candidate];
+        if decl.is_match(text) && indent(text) < call_indent {
+            return negative.is_match(text) && !security.is_match(text);
+        }
+    }
+    false
 }
 
 /// A log statement whose single argument is a quoted string with no
@@ -8459,6 +8504,45 @@ $data = json_decode($body, true);"#;
             "php"
         ))
         .contains(&"Insecure Deserialization"));
+    }
+
+    #[test]
+    fn weak_hash_in_non_security_function_uses_the_enclosing_declaration() {
+        let patterns = build_vuln_patterns();
+        let negative = patterns
+            .iter()
+            .find(|p| p.name == "Weak Hash Algorithm — MD5")
+            .and_then(|p| p.negative.as_ref())
+            .expect("negative");
+        let call = |f: &str, a: &str| format!("{f}({a})");
+        let wrapper = format!(
+            "def _db_md5(text):\n    if text is None:\n        return None\n    return {}.hexdigest()\n",
+            call("md5", "text.encode()")
+        );
+        assert!(weak_hash_in_non_security_function(&wrapper, 4, negative));
+        let mutex = format!(
+            "    public function mutexName()\n    {{\n        return 'a'.\n            {};\n    }}\n",
+            call("sha1", "$this->expression")
+        );
+        assert!(weak_hash_in_non_security_function(&mutex, 4, negative));
+        // Negative controls: security names, neutral names, and no enclosing declaration.
+        let password = format!(
+            "def md5_password(password):\n    return {}.hexdigest()\n",
+            call("md5", "password.encode()")
+        );
+        assert!(!weak_hash_in_non_security_function(&password, 2, negative));
+        let neutral = format!(
+            "def encode(self, password, salt):\n    return {}.hexdigest()\n",
+            call("md5", "salt + password")
+        );
+        assert!(!weak_hash_in_non_security_function(&neutral, 2, negative));
+        let toplevel = format!("pass = {}\n", call("md5", "pass"));
+        assert!(!weak_hash_in_non_security_function(&toplevel, 1, negative));
+        let token = format!(
+            "function generateSessionToken() {{\n    return {};\n}}\n",
+            call("md5", "uniqid()")
+        );
+        assert!(!weak_hash_in_non_security_function(&token, 2, negative));
     }
 
     #[test]
