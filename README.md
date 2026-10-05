@@ -25,6 +25,16 @@ sh install.sh                 # latest release, into ~/.local/bin
 
 Pin a version or a different prefix explicitly: `sh install.sh --version v1.0.0 --prefix /usr/local/bin`. Then run `cipher-ai setup`.
 
+**Windows (PowerShell):** `install.ps1` does the same as `install.sh` for `x86_64-pc-windows-msvc`: it downloads `cipher-ai-x86_64-pc-windows-msvc.exe` and the release's `SHA256SUMS.txt`, and refuses to install unless the checksum verifies.
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/sandeepannandi/Cipher/master/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1          # latest release, into %LOCALAPPDATA%\cipher-ai\bin
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version vX.Y.Z -Prefix C:\Tools
+```
+
+Both installers need a release that includes `SHA256SUMS.txt`. The current `v1.0.0` release predates that file (its binaries are attached, the checksum file is not), so the installers refuse it until a newer release is published; to use `v1.0.0` today, download the binary from the release page or build from source.
+
 ## Quick start (from source)
 
 ```sh
@@ -168,7 +178,7 @@ python3 benchmarks/pinned/check.py --cipher target/release/cipher-ai --suite pro
 - The 11 missed advisories are listed by name in `benchmarks/recall/results.json`. They need taint through struct fields, deeper cross-function or cross-file flows, or framework knowledge that line-level rules cannot express honestly. Rules are not tuned to individual repositories.
 - Three false positives are recorded and still reported: django `db/models/query.py:141` (the ORM running its own compiled query), django `contrib/contenttypes/views.py:15` (content types are site metadata), and rails `query_command.rb:102` (a developer CLI that runs typed SQL by design).
 - The production set has few findings outside laravel, jekyll, rails, gin and django, so precision on other stacks is not established.
-- Windows binaries are built by the release workflow (`x86_64-pc-windows-msvc`). `install.sh` maps Git Bash, MSYS and Cygwin to that artifact, but that path has not been tested on Windows, and there is no PowerShell installer yet.
+- Windows binaries are built by the release workflow (`x86_64-pc-windows-msvc`). `install.ps1` is tested in CI on a Windows runner against a stand-in release (it installs a matching binary and refuses a tampered one or a missing checksum line), but it has not been run against a published release, because `v1.0.0` has no `SHA256SUMS.txt`. The Windows `.exe` itself has not been run by me.
 
 ## Tests
 

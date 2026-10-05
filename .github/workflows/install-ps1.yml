@@ -1,0 +1,70 @@
+name: install.ps1
+
+# Exercises the Windows installer on a real Windows runner: it must install a
+# binary whose checksum matches and refuse one that does not. Uses a local
+# HTTP server as a stand-in release, so no published release is needed.
+
+on:
+  pull_request:
+    paths:
+      - install.ps1
+      - .github/workflows/install-ps1.yml
+  push:
+    branches: [master]
+    paths:
+      - install.ps1
+      - .github/workflows/install-ps1.yml
+
+permissions:
+  contents: read
+
+jobs:
+  install-ps1:
+    name: install.ps1 on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install against a stand-in release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $artifact = "cipher-ai-x86_64-pc-windows-msvc.exe"
+          $rel = Join-Path $env:RUNNER_TEMP "fake-release"
+          New-Item -ItemType Directory -Path $rel | Out-Null
+          Set-Content -Path "$rel/$artifact" -Value "not a real binary"
+          $hash = (Get-FileHash "$rel/$artifact" -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "$rel/SHA256SUMS.txt" -Value "$hash  $artifact"
+
+          $server = Start-Process -FilePath python -ArgumentList "-m","http.server","8099","--bind","127.0.0.1","--directory",$rel -PassThru -WindowStyle Hidden
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30 -and -not $ready; $i++) {
+              try { Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8099/SHA256SUMS.txt" | Out-Null; $ready = $true }
+              catch { Start-Sleep -Seconds 1 }
+            }
+            if (-not $ready) { throw "stand-in release server did not start" }
+
+            # 1. Matching checksum installs.
+            $good = Join-Path $env:RUNNER_TEMP "cipher-bin-good"
+            powershell -NoProfile -ExecutionPolicy Bypass -File ./install.ps1 -BaseUrl http://127.0.0.1:8099 -Prefix $good
+            if ($LASTEXITCODE -ne 0) { throw "installer failed on a valid release" }
+            if (-not (Test-Path "$good/cipher-ai.exe")) { throw "binary was not installed" }
+
+            # 2. A tampered binary is refused.
+            Set-Content -Path "$rel/$artifact" -Value "tampered"
+            $bad = Join-Path $env:RUNNER_TEMP "cipher-bin-bad"
+            powershell -NoProfile -ExecutionPolicy Bypass -File ./install.ps1 -BaseUrl http://127.0.0.1:8099 -Prefix $bad
+            if ($LASTEXITCODE -eq 0) { throw "installer accepted a tampered binary" }
+            if (Test-Path "$bad/cipher-ai.exe") { throw "tampered binary was installed" }
+
+            # 3. A release with no checksum line for the binary is refused.
+            Set-Content -Path "$rel/SHA256SUMS.txt" -Value "0000  some-other-file.exe"
+            $none = Join-Path $env:RUNNER_TEMP "cipher-bin-none"
+            powershell -NoProfile -ExecutionPolicy Bypass -File ./install.ps1 -BaseUrl http://127.0.0.1:8099 -Prefix $none
+            if ($LASTEXITCODE -eq 0) { throw "installer accepted a release with no checksum line" }
+            if (Test-Path "$none/cipher-ai.exe") { throw "binary was installed without a checksum" }
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }
+          exit 0
