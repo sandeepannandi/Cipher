@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-10-05
+
+The Linux release binaries are now built on Ubuntu 22.04 instead of 24.04, so they no longer require glibc 2.39. 1.0.1 failed to start on systems older than Ubuntu 24.04 with `GLIBC_2.38/2.39 not found`.
+
 ## [1.0.1] — 2026-10-05
 
 First release since 1.0.0. The release workflow now attaches `SHA256SUMS.txt`, which `install.sh` and `install.ps1` require; 1.0.0 predates it. It also includes everything listed below, including the Windows PowerShell installer.

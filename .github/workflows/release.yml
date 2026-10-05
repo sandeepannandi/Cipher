@@ -16,10 +16,10 @@ jobs:
             os: windows-latest
             ext: .exe
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
             ext: ''
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
             ext: ''
           - target: x86_64-apple-darwin
             os: macos-latest
