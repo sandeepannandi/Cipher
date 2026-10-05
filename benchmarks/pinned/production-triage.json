@@ -25,22 +25,6 @@
  },
  {
   "repo": "django",
-  "file": "django/db/backends/sqlite3/_functions.py",
-  "line": 414,
-  "title": "Weak Hash Algorithm \u2014 MD5",
-  "verdict": "FP",
-  "reason": "Registers MD5 as a SQLite function behind the ORM MD5() database function. Exposes a hash to queries; not a security use."
- },
- {
-  "repo": "django",
-  "file": "django/db/backends/sqlite3/_functions.py",
-  "line": 460,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "Registers SHA1 as a SQLite function behind the ORM SHA1() database function. Not a security use."
- },
- {
-  "repo": "django",
   "file": "django/db/models/query.py",
   "line": 141,
   "title": "SQL Injection \u2014 ORM Raw Queries",
@@ -238,14 +222,6 @@
   "title": "GitHub Actions \u2014 Unpinned Third-Party Action",
   "verdict": "TP",
   "reason": "superbrothers/close-pull-request is referenced by the mutable ref 'v3', not a commit SHA. Supply-chain hygiene finding, not a code vulnerability."
- },
- {
-  "repo": "laravel",
-  "file": "src/Illuminate/Console/Scheduling/Event.php",
-  "line": 868,
-  "title": "Weak Hash Algorithm \u2014 SHA1",
-  "verdict": "FP",
-  "reason": "sha1(expression+command) names the scheduler mutex. Not a security use."
  },
  {
   "repo": "laravel",
