@@ -1,0 +1,61 @@
+name: install.ps1
+
+# Exercises the Windows installer on a real Windows runner: it must install a
+# binary whose checksum matches and refuse one that does not. Uses a local
+# HTTP server as a stand-in release, so no published release is needed.
+
+on:
+  pull_request:
+    paths:
+      - install.ps1
+      - .github/workflows/install-ps1.yml
+  push:
+    branches: [master]
+    paths:
+      - install.ps1
+      - .github/workflows/install-ps1.yml
+
+permissions:
+  contents: read
+
+jobs:
+  install-ps1:
+    name: install.ps1 on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build a fake release directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path fake-release | Out-Null
+          Set-Content -Path fake-release/cipher-ai-x86_64-pc-windows-msvc.exe -Value "not a real binary"
+          $hash = (Get-FileHash fake-release/cipher-ai-x86_64-pc-windows-msvc.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path fake-release/SHA256SUMS.txt -Value "$hash  cipher-ai-x86_64-pc-windows-msvc.exe"
+          Start-Process -FilePath python -ArgumentList "-m","http.server","8099","--directory","fake-release" -WindowStyle Hidden
+          Start-Sleep -Seconds 3
+
+      - name: Installs when the checksum matches
+        shell: pwsh
+        run: |
+          ./install.ps1 -BaseUrl http://127.0.0.1:8099 -Prefix "$env:RUNNER_TEMP\cipher-bin"
+          if ($LASTEXITCODE -ne 0) { throw "installer failed on a valid release" }
+          if (-not (Test-Path "$env:RUNNER_TEMP\cipher-bin\cipher-ai.exe")) { throw "binary was not installed" }
+
+      - name: Refuses when the binary does not match the checksum
+        shell: pwsh
+        run: |
+          Set-Content -Path fake-release/cipher-ai-x86_64-pc-windows-msvc.exe -Value "tampered"
+          $bin = "$env:RUNNER_TEMP\cipher-bin-bad"
+          powershell -NoProfile -ExecutionPolicy Bypass -File ./install.ps1 -BaseUrl http://127.0.0.1:8099 -Prefix $bin
+          if ($LASTEXITCODE -eq 0) { throw "installer accepted a tampered binary" }
+          if (Test-Path "$bin\cipher-ai.exe") { throw "tampered binary was installed" }
+
+      - name: Refuses when the release has no checksum for the binary
+        shell: pwsh
+        run: |
+          Set-Content -Path fake-release/SHA256SUMS.txt -Value "0000  some-other-file.exe"
+          $bin = "$env:RUNNER_TEMP\cipher-bin-none"
+          powershell -NoProfile -ExecutionPolicy Bypass -File ./install.ps1 -BaseUrl http://127.0.0.1:8099 -Prefix $bin
+          if ($LASTEXITCODE -eq 0) { throw "installer accepted a release with no checksum line" }
+          if (Test-Path "$bin\cipher-ai.exe") { throw "binary was installed without a checksum" }
