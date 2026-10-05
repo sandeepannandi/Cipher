@@ -52,6 +52,86 @@ Prefer a one-liner? `export GROQ_API_KEY=gsk_your_key_here` works too — `setup
 
 ---
 
+## Demo
+
+Real output, not a mockup. This is `cipher-ai review` (no AI key, pattern scanner only) run on a 24-line Flask file with three deliberate bugs. It was captured on 2026-10-05 from a release build of commit `df339dd`. Nothing under `src/` has changed between that commit and the one this section was merged on. Terminal colors were stripped and the "Top Recommendations" footer was cut for length.
+
+`app.py`:
+
+```python
+import hashlib
+import sqlite3
+import subprocess
+from flask import Flask, request
+
+app = Flask(__name__)
+
+
+@app.route("/user")
+def user():
+    name = request.args.get("name")
+    db = sqlite3.connect("app.db")
+    row = db.execute("SELECT * FROM users WHERE name = '%s'" % name).fetchone()
+    return str(row)
+
+
+@app.route("/ping")
+def ping():
+    host = request.args.get("host")
+    return subprocess.check_output("ping -c 1 " + host, shell=True)
+
+
+def store(password):
+    return hashlib.md5(password.encode()).hexdigest()
+```
+
+```
+$ cipher-ai review --path .
+┌ Security Review — Scanning /tmp/demo/app ──────────────────────────────────────────────
+│ Scanning /tmp/demo/app
+
+[LIST] Security Review Results
+  --------------------------------------------------
+  [*] Pattern-based scanner found 3 potential issues
+
+[STATS] Findings Summary
+  ----------------------------------------
+  * 2  * 1  * 0  o 0  (3 total)
+  [TARGET] Average risk score: 8.9/10
+
+  [BUG] [CRITICAL] SQL Injection — String Concatenation
+    OWASP: A03:2021 — Injection
+    CWE: CWE-89
+    File: /tmp/demo/app/app.py:13
+    |     row = db.execute("SELECT * FROM users WHERE name = '%s'" % name).fetchone()
+    SQL queries built with string concatenation or interpolation are vulnerable to SQL injection. Use parameterized queries or an ORM instead.
+    -> Confidence: HIGH | Exploitability: 80% | Effort: hours
+    Fix: Replace string concatenation with parameterized queries. Use prepared statements or an ORM's query builder.
+    Source-to-sink path: Not established by analysis.
+
+  [BUG] [CRITICAL] Command Injection
+    OWASP: A03:2021 — Injection
+    CWE: CWE-78
+    File: /tmp/demo/app/app.py:20
+    |     return subprocess.check_output("ping -c 1 " + host, shell=True)
+    User input is passed to a shell command, which could allow command injection attacks.
+    -> Confidence: HIGH | Exploitability: 80% | Effort: hours
+    Fix: Avoid shell execution with user input. Use safer APIs that don't invoke a shell, and validate/sanitize all input.
+    Source-to-sink path: Not established by analysis.
+
+  [BUG] [HIGH] Weak Hash Algorithm — MD5
+    OWASP: A02:2021 — Cryptographic Failures
+    CWE: CWE-328
+    File: /tmp/demo/app/app.py:24
+    |     return hashlib.md5(password.encode()).hexdigest()
+    MD5 is cryptographically broken and unsuitable for security purposes. Use bcrypt, argon2, or SHA-256/512.
+    -> Confidence: HIGH | Exploitability: 60% | Effort: hours
+    Fix: Replace MD5 with a secure hash function like SHA-256, SHA-512, or bcrypt/argon2 for passwords.
+    Source-to-sink path: Not established by analysis.
+```
+
+This is a toy file. For how the scanner does on real projects, see "Measured results and limits" below.
+
 ## CLI Commands
 
 | Command | What it does |
