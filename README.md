@@ -52,6 +52,345 @@ Prefer a one-liner? `export GROQ_API_KEY=gsk_your_key_here` works too — `setup
 
 ---
 
+## Demo
+
+Real output, not a mockup. This is `cipher-ai review` (no AI key, pattern scanner only) run on a 24-line Flask file with three deliberate bugs. It was captured on 2026-10-05 from a release build of commit `df339dd`. Nothing under `src/` has changed between that commit and the one this section was merged on. Terminal colors were stripped and the "Top Recommendations" footer was cut for length.
+
+`app.py`:
+
+```python
+import hashlib
+import sqlite3
+import subprocess
+from flask import Flask, request
+
+app = Flask(__name__)
+
+
+@app.route("/user")
+def user():
+    name = request.args.get("name")
+    db = sqlite3.connect("app.db")
+    row = db.execute("SELECT * FROM users WHERE name = '%s'" % name).fetchone()
+    return str(row)
+
+
+@app.route("/ping")
+def ping():
+    host = request.args.get("host")
+    return subprocess.check_output("ping -c 1 " + host, shell=True)
+
+
+def store(password):
+    return hashlib.md5(password.encode()).hexdigest()
+```
+
+```
+$ cipher-ai review --path .
+┌ Security Review — Scanning /tmp/demo/app ──────────────────────────────────────────────
+│ Scanning /tmp/demo/app
+
+[LIST] Security Review Results
+  --------------------------------------------------
+  [*] Pattern-based scanner found 3 potential issues
+
+[STATS] Findings Summary
+  ----------------------------------------
+  * 2  * 1  * 0  o 0  (3 total)
+  [TARGET] Average risk score: 8.9/10
+
+  [BUG] [CRITICAL] SQL Injection — String Concatenation
+    OWASP: A03:2021 — Injection
+    CWE: CWE-89
+    File: /tmp/demo/app/app.py:13
+    |     row = db.execute("SELECT * FROM users WHERE name = '%s'" % name).fetchone()
+    SQL queries built with string concatenation or interpolation are vulnerable to SQL injection. Use parameterized queries or an ORM instead.
+    -> Confidence: HIGH | Exploitability: 80% | Effort: hours
+    Fix: Replace string concatenation with parameterized queries. Use prepared statements or an ORM's query builder.
+    Source-to-sink path: Not established by analysis.
+
+  [BUG] [CRITICAL] Command Injection
+    OWASP: A03:2021 — Injection
+    CWE: CWE-78
+    File: /tmp/demo/app/app.py:20
+    |     return subprocess.check_output("ping -c 1 " + host, shell=True)
+    User input is passed to a shell command, which could allow command injection attacks.
+    -> Confidence: HIGH | Exploitability: 80% | Effort: hours
+    Fix: Avoid shell execution with user input. Use safer APIs that don't invoke a shell, and validate/sanitize all input.
+    Source-to-sink path: Not established by analysis.
+
+  [BUG] [HIGH] Weak Hash Algorithm — MD5
+    OWASP: A02:2021 — Cryptographic Failures
+    CWE: CWE-328
+    File: /tmp/demo/app/app.py:24
+    |     return hashlib.md5(password.encode()).hexdigest()
+    MD5 is cryptographically broken and unsuitable for security purposes. Use bcrypt, argon2, or SHA-256/512.
+    -> Confidence: HIGH | Exploitability: 60% | Effort: hours
+    Fix: Replace MD5 with a secure hash function like SHA-256, SHA-512, or bcrypt/argon2 for passwords.
+    Source-to-sink path: Not established by analysis.
+```
+
+This is a toy file. For how the scanner does on real projects, see "Measured results and limits" below.
+
+## CLI Commands
+
+| Command | What it does |
+|---|---|
+| `cipher-ai init` | Index the codebase (TF-IDF, local, no DB) |
+| `cipher-ai ask "…"` | RAG + AI security Q&A over the index |
+| `cipher-ai review [--ai] [--format terminal\|json\|sarif\|md] [--min-severity X] [--max-findings N]` | OWASP Top 10 scan (20+ patterns) |
+| `cipher-ai review --policy .cipher-ai-policy.yml --fail-on-policy` | Gate only new/expired findings at policy severity + confidence thresholds |
+| `cipher-ai deps [--online] [--fail-on X]` | Dependency CVE scan (embedded DB + OSV.dev online) |
+| `cipher-ai secrets [--fail-on X]` | Credential leak scan (25+ patterns) |
+| `cipher-ai zeroday [--ai] [--anomaly-only] [--format json\|sarif]` | 3-layer zero-day detection (anomaly, taint flow, AI) |
+| `cipher-ai attack [--flow] [--depth N]` | Attack chains from findings (8 chain types, data-flow evidence) |
+| `cipher-ai sbom [--format cyclonedx\|spdx]` | Software Bill of Materials |
+| `cipher-ai report [--format terminal\|md\|json\|html] [--pentest <ws\|all>]` | Aggregated security report (SAST + SCA + pentest) |
+| `cipher-ai fix [--list] [--dry-run] [--id <uuid>] [--risk X] [--all -y] [--pr]` | AI-powered fixes (incl. proven pentest findings) + PR |
+| `cipher-ai pr --diff` | Diff-aware PR review with inline comments |
+| `cipher-ai watch [--once] [--pr] [--pentest <url>]` | Continuous monitoring (live exploit sweep per scan) |
+| `cipher-ai ci [--format json] [--output f] [--fail-on X] [--pentest <url>]` | Run all scans + optional live pentest stage |
+| `cipher-ai setup [--provider X] [--key-stdin]` | Guided first-run setup: pick a provider, store the key owner-only (0600, never echoed), verify with doctor |
+| `cipher-ai doctor [--format json]` | Check provider/key readiness without printing secrets (exit 1 when setup is needed) |
+| `cipher-ai config [set <key> <value>]` | API keys, provider, model (or `status`, `completions`) — stored keys are masked, never printed raw |
+
+### Pentest — the autonomous AI security engineer
+
+`cipher-ai pentest "<objective>" [flags]` runs the full Shannon-style pipeline: white-box pre-recon (framework-aware endpoints + taint + scanner hypotheses) → parallel bug-class sub-agents → **proof-by-exploitation** ("no exploit, no report" — only findings with reproducible PoCs are reported) → MD/SARIF/JSON report.
+
+| Flag | What it does |
+|---|---|
+| `--url <target>` | Live mode: shared session (cookie jar), 15 tools, deterministic exploit sweep (12 validator classes) + sub-agents |
+| `--config app.yaml` | YAML config: auth (form/basic/TOTP/email-OTP + magic link), ROE, focus/avoid scope gate, rate limit, vuln-class + report filters |
+| `--blackbox` | Crawl the live target (bounded BFS, no source, no AI key) and sweep every discovery |
+| `--browser` | Headless Chrome: render JS-heavy/SPA pages, drive them (`browser_action`), prove DOM XSS/clickjacking, and run the **browser fuzz pass** (forms submitted in a real engine, XSS proven on marker execution). Install Chrome or set `CIPHER_AI_CHROME` |
+| `--openapi spec.yaml\|json` | Schema-aware surface: OpenAPI 3/Swagger 2 + GraphQL introspection → schema-driven targets + mass-assignment field lists (auto-discovers `openapi.json`) |
+| `-w <name>` / `--resume <name>` | Checkpointed workspaces (redacted transcripts, evidence) — resume interrupted runs; a complete one re-renders the report with no AI key |
+| `--allow-host <host>` / `--plan-only` / `--max-tokens` / `--max-cost` | Safety + cost: allowlist (checked pre-request, per redirect hop), dry-run with zero requests, adaptive token/USD budgets with model routing |
+| `--point-retest <id>` | Replay the exact proof against the live target — deterministic, no AI key. Prints `STILL VULNERABLE` / `FIXED` (browser-fuzz proofs re-drive the real engine) |
+| `--format md\|sarif\|json` / `--json` / `--output f` | Reports: Shannon-grade Markdown (incl. **Attack Paths** chains), SARIF 2.1.0 (OWASP 2025 tags, code-anchored), JSON |
+
+Multi-step attack chaining (M9.4): proven proofs unlock primitives (user creation, JWT impersonation, SSRF/exec), auth-blocked endpoints are re-probed once with the primed session, and the report shows **attack paths** (e.g. mass assignment → IDOR), not isolated bullets.
+
+**Integration:** `watch --pentest <url>`, `ci --pentest <url>`, `report --pentest <ws>`, `fix` (pentest findings are auto-fixable), `pentest --check-email-auth --config app.yaml` (verify IMAP before a run).
+
+Full design history in [`docs/PENTESTER-PLAN.md`](docs/PENTESTER-PLAN.md).
+
+---
+
+## How it works
+
+- **`init`** builds a local TF-IDF index of the codebase (`.gitignore`-aware, no external DB).
+- **`review`** matches 20+ OWASP patterns; **`deps`** parses 7 manifest formats; **`secrets`** matches 25+ credential patterns; **`zeroday`** layers anomaly + taint-flow + AI hunting; **`attack`** links findings into 8 attack-chain types.
+- **`pentest`** runs the agent loop with code tools (`search_code`, `trace_taint`, `map_attack_surface`, …) and live tools (`http_request`, `login`, `exploit`, `browser_action`, …). Every run prints a **prompt-injection warning** — the target codebase is treated as untrusted data. Safe by default: Docker-only command execution, allowlist + rate limiting, `--plan-only` makes zero requests.
+
+## AI providers
+
+Provider-agnostic — resolved from `CIPHER_AI_PROVIDER`, then the persisted `provider` config, then `groq`.
+
+| Provider | Env var | Default model |
+|---|---|---|
+| `groq` | `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
+| `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-3-7-sonnet-20250219` |
+
+`CIPHER_AI_BASE_URL` routes through a gateway (LiteLLM/vLLM/Ollama); `CIPHER_AI_MODEL` overrides the model. Persist keys once: `cipher-ai config set provider anthropic` + `cipher-ai config set anthropic-api-key sk-…`.
+
+## Styled output
+
+All commands use consistent, beautiful terminal output: box-drawn headers, numbered step progress, colored status icons (✓ ⚠ ✗ ●), bordered summary boxes with risk distribution bars.
+
+## Supported languages
+
+30+ (Rust, JS/TS, Python, Go, Ruby, Java, Kotlin, Swift, C/C++, C#, PHP, Shell, YAML, JSON, TOML, SQL, Dockerfile, HTML/CSS, Dart, Scala, Lua, R, …).
+
+## Secret handling
+
+API keys live only in `~/.cipher-ai/config.json`, written owner-only (`0600` on Unix; existing loose files are tightened on the next write). `setup` reads keys via a hidden prompt or `--key-stdin`, never echoes them, and `config get` masks stored values. Keys are never committed to the indexed project.
+
+## Privacy
+
+Code stays local — only retrieved chunks go to the LLM. Use a local endpoint via `CIPHER_AI_BASE_URL` for zero data egress.
+
+## Project structure
+
+```
+Cipher/
+├── src/            # Rust CLI + library
+│   ├── main.rs     # clap CLI entry
+│   ├── llm.rs      # Multi-provider AI client + agent tool-calling
+│   ├── review.rs / secrets.rs / deps.rs / zeroday.rs / sbom.rs
+│   ├── attack.rs / trace.rs / fix.rs / report.rs / ci.rs / watch.rs
+│   └── pentest/    # The autonomous pentester
+│       ├── agent.rs      # ReAct agent loop
+│       ├── orchestrator.rs # missions, guided sweep, chain engine
+│       ├── exploit.rs    # 12 deterministic validators + oracle gate + browser fuzz
+│       ├── recon.rs / crawler.rs / schema.rs / http.rs / browser.rs / cdp.rs
+│       ├── config.rs / workspace.rs / report.rs / chain.rs / email.rs / adaptive.rs
+│       └── tools.rs      # 15 agent tools
+├── tests/          # integration.rs, pentest.rs (live-fixture end-to-end)
+├── tui/            # Node.js TUI (Ink/React) over the same CLI
+└── docs/PENTESTER-PLAN.md
+```
+
+## Measured results and limits
+
+These numbers come from the benchmark suites in `benchmarks/` and are recomputed in CI. They describe the static `cipher-ai review` scanner (no AI provider needed) on the pinned inputs below, not a general accuracy rate.
+
+| Measure | Result | What it is |
+|---|---|---|
+| Advisory recall | **23 of 34** labeled vulnerable lines found at the exact line (0 near, 11 missed) | Published GitHub advisories with a public fix commit. The commit before the fix is scanned; a label is the vulnerable sink line chosen from the fix diff. Advisories with no single clear sink line are listed in `benchmarks/recall/unlabeled.json`, not scored. |
+| Ten-repo exact-key check | **10 of 10** repos match | Ten intentionally vulnerable or realistic projects at pinned commits. Every expected finding must still appear and no unexpected one may appear. |
+| Production precision | **61 true positives, 3 false positives, 2 judgment calls** (66 hand-reviewed findings) | A sweep of 12 real projects at pinned commits (axios, composer, django, express, gin, guava, hugo, jekyll, laravel, newtonsoft-json, rails, requests). Every finding was read against the source; the verdicts are in `benchmarks/pinned/production-triage.json`. 61 of the 64 decided findings are real, about 95%, on this set only. |
+
+Reproduce:
+
+```sh
+cargo build --release
+python3 benchmarks/recall/recall.py --cipher target/release/cipher-ai --check
+python3 benchmarks/pinned/check.py --cipher target/release/cipher-ai --suite benchmark
+python3 benchmarks/pinned/check.py --cipher target/release/cipher-ai --suite production
+```
+
+**Known limits**
+
+- It is a pattern and flow-based scanner, not a full dataflow engine. Tracking is mostly within a file, with same-file and imported function summaries.
+- The 11 missed advisories are listed by name in `benchmarks/recall/results.json`. They need taint through struct fields, deeper cross-function or cross-file flows, or framework knowledge that line-level rules cannot express honestly. Rules are not tuned to individual repositories.
+- Three false positives are recorded and still reported: django `db/models/query.py:141` (the ORM running its own compiled query), django `contrib/contenttypes/views.py:15` (content types are site metadata), and rails `query_command.rb:102` (a developer CLI that runs typed SQL by design).
+- The production set has few findings outside laravel, jekyll, rails, gin and django, so precision on other stacks is not established.
+
+# CipherAI
+
+**AI security analysis for your codebase — from your terminal.**
+
+[![Rust](https://img.shields.io/badge/Rust-1.88+-orange?logo=rust&logoColor=white)]()
+[![License](https://img.shields.io/badge/license-MIT-blue)]()
+[![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen)]()
+
+</div>
+
+CipherAI indexes your codebase, scans for vulnerabilities and secrets, discovers attack chains, detects zero-day anomalies, generates SBOMs, applies AI-powered fixes, and runs a **Shannon-class autonomous pentester** against live targets — from a single CLI or the interactive TUI.
+
+---
+
+## Install
+
+Prebuilt binaries for Linux (x86_64/aarch64), macOS (Intel/Apple silicon), and Windows (x86_64) ship with every [release](https://github.com/sandeepannandi/Cipher/releases). The installer picks the right artifact for your platform, downloads it **with the release's `SHA256SUMS.txt`, and refuses to install unless the checksum verifies**:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sandeepannandi/Cipher/master/install.sh -o install.sh
+sh install.sh                 # latest release, into ~/.local/bin
+```
+
+Pin a version or a different prefix explicitly: `sh install.sh --version v1.0.0 --prefix /usr/local/bin`. Then run `cipher-ai setup`.
+
+**Windows (PowerShell):** `install.ps1` does the same as `install.sh` for `x86_64-pc-windows-msvc`: it downloads `cipher-ai-x86_64-pc-windows-msvc.exe` and the release's `SHA256SUMS.txt`, and refuses to install unless the checksum verifies.
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/sandeepannandi/Cipher/master/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1          # latest release, into %LOCALAPPDATA%\cipher-ai\bin
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version vX.Y.Z -Prefix C:\Tools
+```
+
+Both installers need a release that includes `SHA256SUMS.txt`. The current `v1.0.0` release predates that file (its binaries are attached, the checksum file is not), so the installers refuse it until a newer release is published; to use `v1.0.0` today, download the binary from the release page or build from source.
+
+## Quick start (from source)
+
+```sh
+git clone https://github.com/sandeepannandi/Cipher.git
+cd Cipher
+cargo build --release
+./target/release/cipher-ai setup     # guided: pick a provider, key stored owner-only, never echoed
+./target/release/cipher-ai init
+./target/release/cipher-ai ask "Any vulnerabilities?"
+```
+
+Prefer a one-liner? `export GROQ_API_KEY=gsk_your_key_here` works too — `setup` detects it and writes nothing. `cipher-ai doctor` verifies the setup anytime (exit code + `--format json` for scripts).
+
+**TUI:** `cd tui && npm install && npm run build && node bin/cipher-ai.js` — `/help` for commands, `Ctrl+K` for the palette, **Esc** cancels.
+
+---
+
+## Demo
+
+Real output, not a mockup. This is `cipher-ai review` (no AI key, pattern scanner only) run on a 24-line Flask file with three deliberate bugs. It was captured on 2026-10-05 from a release build of commit `df339dd`. Nothing under `src/` has changed between that commit and the one this section was merged on. Terminal colors were stripped and the "Top Recommendations" footer was cut for length.
+
+`app.py`:
+
+```python
+import hashlib
+import sqlite3
+import subprocess
+from flask import Flask, request
+
+app = Flask(__name__)
+
+
+@app.route("/user")
+def user():
+    name = request.args.get("name")
+    db = sqlite3.connect("app.db")
+    row = db.execute("SELECT * FROM users WHERE name = '%s'" % name).fetchone()
+    return str(row)
+
+
+@app.route("/ping")
+def ping():
+    host = request.args.get("host")
+    return subprocess.check_output("ping -c 1 " + host, shell=True)
+
+
+def store(password):
+    return hashlib.md5(password.encode()).hexdigest()
+```
+
+```
+$ cipher-ai review --path .
+┌ Security Review — Scanning /tmp/demo/app ──────────────────────────────────────────────
+│ Scanning /tmp/demo/app
+
+[LIST] Security Review Results
+  --------------------------------------------------
+  [*] Pattern-based scanner found 3 potential issues
+
+[STATS] Findings Summary
+  ----------------------------------------
+  * 2  * 1  * 0  o 0  (3 total)
+  [TARGET] Average risk score: 8.9/10
+
+  [BUG] [CRITICAL] SQL Injection — String Concatenation
+    OWASP: A03:2021 — Injection
+    CWE: CWE-89
+    File: /tmp/demo/app/app.py:13
+    |     row = db.execute("SELECT * FROM users WHERE name = '%s'" % name).fetchone()
+    SQL queries built with string concatenation or interpolation are vulnerable to SQL injection. Use parameterized queries or an ORM instead.
+    -> Confidence: HIGH | Exploitability: 80% | Effort: hours
+    Fix: Replace string concatenation with parameterized queries. Use prepared statements or an ORM's query builder.
+    Source-to-sink path: Not established by analysis.
+
+  [BUG] [CRITICAL] Command Injection
+    OWASP: A03:2021 — Injection
+    CWE: CWE-78
+    File: /tmp/demo/app/app.py:20
+    |     return subprocess.check_output("ping -c 1 " + host, shell=True)
+    User input is passed to a shell command, which could allow command injection attacks.
+    -> Confidence: HIGH | Exploitability: 80% | Effort: hours
+    Fix: Avoid shell execution with user input. Use safer APIs that don't invoke a shell, and validate/sanitize all input.
+    Source-to-sink path: Not established by analysis.
+
+  [BUG] [HIGH] Weak Hash Algorithm — MD5
+    OWASP: A02:2021 — Cryptographic Failures
+    CWE: CWE-328
+    File: /tmp/demo/app/app.py:24
+    |     return hashlib.md5(password.encode()).hexdigest()
+    MD5 is cryptographically broken and unsuitable for security purposes. Use bcrypt, argon2, or SHA-256/512.
+    -> Confidence: HIGH | Exploitability: 60% | Effort: hours
+    Fix: Replace MD5 with a secure hash function like SHA-256, SHA-512, or bcrypt/argon2 for passwords.
+    Source-to-sink path: Not established by analysis.
+```
+
+This is a toy file. For how the scanner does on real projects, see "Measured results and limits" below.
+
 ## CLI Commands
 
 | Command | What it does |
