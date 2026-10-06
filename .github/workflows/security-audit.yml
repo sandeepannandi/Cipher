@@ -1,0 +1,51 @@
+name: Security audit
+
+# Fails on RustSec vulnerability advisories in Cargo.lock. Warnings
+# (unmaintained, unsound, yanked) are printed in the log but do not fail the
+# job. Nothing is ignored. It also runs on a schedule, because new advisories
+# appear without any change in this repository.
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/security-audit.yml"
+  push:
+    branches: [master]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/security-audit.yml"
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_AUDIT_VERSION: "0.22.2"
+  CARGO_AUDIT_SHA256: "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428"
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install cargo-audit (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          url="https://github.com/rustsec/rustsec/releases/download/cargo-audit/v${CARGO_AUDIT_VERSION}/cargo-audit-x86_64-unknown-linux-musl-v${CARGO_AUDIT_VERSION}.tgz"
+          curl -sSfL "$url" -o "$RUNNER_TEMP/cargo-audit.tgz"
+          echo "${CARGO_AUDIT_SHA256}  $RUNNER_TEMP/cargo-audit.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/cargo-audit.tgz" -C "$RUNNER_TEMP"
+          install -m 0755 "$RUNNER_TEMP"/cargo-audit-*/cargo-audit /usr/local/bin/cargo-audit
+      - name: Audit Cargo.lock
+        run: cargo audit --file Cargo.lock
