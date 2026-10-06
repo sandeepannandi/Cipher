@@ -72,7 +72,7 @@ fn committed_policy_is_a_unique_versioned_baseline() {
     // Exact size of the committed baseline: regenerated with root-relative
     // fingerprints (see `policy_findings_view`), so the count changes only
     // when the baseline is deliberately regenerated.
-    // Includes the one reviewed RUST_STORE fixture surfaced by the source split.
-    assert_eq!(fingerprints.len(), 78);
+    // The temporary split-fixture acceptance was removed by syntax-aware scanning.
+    assert_eq!(fingerprints.len(), 77);
     assert_eq!(unique.len(), fingerprints.len());
 }
