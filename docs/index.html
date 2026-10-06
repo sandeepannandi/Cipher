@@ -1,40 +1,77 @@
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CipherAI - AI security analysis from your terminal</title>
-<meta name="description" content="CipherAI is a command-line security scanner. It finds vulnerabilities and secrets in your code, and publishes its measured recall and precision.">
+<title>CipherAI: open-source AI security scanner for your terminal</title>
+<meta name="description" content="CipherAI is a free, MIT-licensed command-line security scanner. It finds vulnerabilities and secrets in your code, links findings into attack chains, and publishes its measured recall and precision.">
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="theme-color" content="#ffffff">
+<link rel="canonical" href="https://cipher.sandi.runs-on.dev/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CipherAI">
+<meta property="og:title" content="CipherAI: open-source AI security scanner for your terminal">
+<meta property="og:description" content="Find vulnerabilities and secrets in your code from the command line. Runs locally without an AI key. Measured results are published, including the misses.">
+<meta property="og:url" content="https://cipher.sandi.runs-on.dev/">
+<meta property="og:image" content="https://cipher.sandi.runs-on.dev/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="CipherAI - AI security analysis from your terminal">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="CipherAI: open-source AI security scanner for your terminal">
+<meta name="twitter:description" content="Find vulnerabilities and secrets in your code from the command line. Measured results are published, including the misses.">
+<meta name="twitter:image" content="https://cipher.sandi.runs-on.dev/og.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+{"@type":"SoftwareApplication","@id":"https://cipher.sandi.runs-on.dev/#app","name":"CipherAI","alternateName":"Cipher","url":"https://cipher.sandi.runs-on.dev/","description":"Command-line security scanner that finds vulnerabilities and secrets in source code, links findings into attack chains, generates SBOMs and can apply fixes.","applicationCategory":"SecurityApplication","operatingSystem":"Linux, macOS, Windows","softwareVersion":"1.0.2","license":"https://github.com/sandeepannandi/Cipher/blob/master/LICENSE","downloadUrl":"https://github.com/sandeepannandi/Cipher/releases/tag/v1.0.2","codeRepository":"https://github.com/sandeepannandi/Cipher","author":{"@type":"Person","name":"Sandeepan Nandi","url":"https://github.com/sandeepannandi"},"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}},
+{"@type":"WebSite","@id":"https://cipher.sandi.runs-on.dev/#site","url":"https://cipher.sandi.runs-on.dev/","name":"CipherAI"},
+{"@type":"FAQPage","mainEntity":[
+{"@type":"Question","name":"Does CipherAI need an AI key?","acceptedAnswer":{"@type":"Answer","text":"No. The review scanner is pattern and flow based and runs locally without a key. AI features work with Groq, OpenAI or Anthropic, or a local endpoint."}},
+{"@type":"Question","name":"Does my code leave my machine?","acceptedAnswer":{"@type":"Answer","text":"Code stays local by default. Only retrieved chunks go to the AI model you choose, or you can point it at a local endpoint for no data egress."}},
+{"@type":"Question","name":"How accurate is it?","acceptedAnswer":{"@type":"Answer","text":"On the pinned benchmark it found 23 of 34 published advisory vulnerabilities at the exact line, and 61 of 64 decided production findings on 12 projects were real. Eleven advisories are missed and three false positives are recorded. Methodology is in the repository."}},
+{"@type":"Question","name":"Which platforms are supported?","acceptedAnswer":{"@type":"Answer","text":"Prebuilt binaries ship for Linux, macOS and Windows. The Windows installer is not yet tested end to end against the published release."}},
+{"@type":"Question","name":"What license is it under?","acceptedAnswer":{"@type":"Answer","text":"MIT."}}
+]}
+]}
+</script>
 <style>
 :root{--fg:#16181d;--muted:#5b6270;--line:#e4e7ec;--bg:#fff;--soft:#f6f7f9;--accent:#1f5eff}
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{margin:0;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--fg);background:var(--bg)}
+body{margin:0;font:16px/1.65 "Geist",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:"ss01";color:var(--fg);background:var(--bg)}
 a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.skip{position:absolute;left:-999px}.skip:focus{left:8px;top:8px;background:#fff;padding:6px 10px;z-index:9}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 .wrap{max-width:860px;margin:0 auto;padding:0 20px}
 header.nav{border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(255,255,255,.95);z-index:5}
 header.nav .wrap{display:flex;align-items:center;justify-content:space-between;height:56px;gap:12px}
-.brand{font-weight:700;color:var(--fg);text-decoration:none}
+.brand{font-weight:600;letter-spacing:-.02em;color:var(--fg);text-decoration:none}
 nav a{color:var(--muted);text-decoration:none;margin-left:16px;font-size:15px}
 nav a:hover{color:var(--fg)}
-.hero{padding:72px 0 48px}
-h1{font-size:clamp(32px,6vw,48px);line-height:1.15;margin:0 0 16px;letter-spacing:-.02em}
+.hero{padding:88px 0 56px}
+h1{font-size:clamp(34px,6vw,56px);line-height:1.08;margin:0 0 20px;letter-spacing:-.035em;font-weight:600}
 .lead{font-size:19px;color:var(--muted);max-width:640px;margin:0 0 28px}
 .btns{display:flex;flex-wrap:wrap;gap:12px}
-.btn{display:inline-block;padding:11px 20px;border-radius:8px;border:1px solid var(--fg);text-decoration:none;font-weight:600;font-size:15px}
+.btn{display:inline-block;padding:11px 20px;border-radius:9px;transition:opacity .15s;border:1px solid var(--fg);text-decoration:none;font-weight:600;font-size:15px}
 .btn.primary{background:var(--fg);color:#fff}
 .btn.ghost{background:#fff;color:var(--fg)}
 .btn:hover{opacity:.85}
 .meta{margin-top:18px;color:var(--muted);font-size:14px}
 section{padding:44px 0;border-top:1px solid var(--line)}
-h2{font-size:26px;margin:0 0 16px;letter-spacing:-.01em}
+h2{font-size:28px;margin:0 0 16px;letter-spacing:-.025em;font-weight:600}
 h3{font-size:17px;margin:24px 0 8px}
 p{margin:0 0 14px}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}
-.card{border:1px solid var(--line);border-radius:10px;padding:18px;background:var(--soft)}
-.card .big{font-size:28px;font-weight:700;letter-spacing:-.02em}
+.card{border:1px solid var(--line);border-radius:12px;padding:20px;background:var(--soft)}
+.card .big{font-size:30px;font-weight:600;letter-spacing:-.03em}
 .card .lbl{font-size:14px;color:var(--muted);margin-top:4px}
-pre{background:#0f1218;color:#e6e9ef;padding:16px;border-radius:10px;overflow-x:auto;font:13.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:0}
-code{font:0.92em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--soft);padding:1px 5px;border-radius:4px}
+pre{background:#0f1218;color:#e6e9ef;padding:16px;border-radius:10px;overflow-x:auto;font:13.5px/1.55 "Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:0}
+code{font:0.92em "Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--soft);padding:1px 5px;border-radius:4px}
 pre code{background:none;padding:0}
 .codebox pre{padding-right:72px}
 .codebox{position:relative;margin:10px 0 18px}
@@ -52,9 +89,10 @@ footer a{color:var(--muted)}
 </style>
 </head>
 <body>
-<header class="nav"><div class="wrap">
+<a class="skip" href="#top">Skip to content</a>
+<header class="nav" role="banner"><div class="wrap">
 <a class="brand" href="#top">CipherAI</a>
-<nav>
+<nav aria-label="Primary">
 <a class="nav-hide" href="#demo">Demo</a>
 <a class="nav-hide" href="#results">Results</a>
 <a href="#install">Install</a>
@@ -77,7 +115,7 @@ footer a{color:var(--muted)}
 </div>
 
 <section id="what"><div class="wrap">
-<h2>What it does</h2>
+<h2>What CipherAI does</h2>
 <ul>
 <li><strong>Code review:</strong> <code>cipher-ai review</code> matches 20+ OWASP patterns and reports CWE, severity, confidence and a suggested fix. Output as terminal, JSON, SARIF or Markdown.</li>
 <li><strong>Secrets and dependencies:</strong> <code>secrets</code> checks 25+ credential patterns. <code>deps</code> scans 7 manifest formats for known CVEs.</li>
@@ -146,6 +184,20 @@ cipher-ai review --path .</code></pre></div>
 <p>AI features work with Groq, OpenAI or Anthropic, or a local or gateway endpoint through <code>CIPHER_AI_BASE_URL</code>. The <code>review</code> scanner works without a key.</p>
 <p><a href="https://github.com/sandeepannandi/Cipher#cli-commands">All commands</a> &middot; <a href="https://github.com/sandeepannandi/Cipher/blob/master/CHANGELOG.md">Changelog</a> &middot; <a href="https://github.com/sandeepannandi/Cipher/issues">Report an issue</a></p>
 </div></section>
+<section id="faq"><div class="wrap">
+<h2>FAQ</h2>
+<h3>Does CipherAI need an AI key?</h3>
+<p>No. The <code>review</code> scanner is pattern and flow based and runs locally without a key. AI features work with Groq, OpenAI or Anthropic, or a local endpoint.</p>
+<h3>Does my code leave my machine?</h3>
+<p>Code stays local by default. Only retrieved chunks go to the AI model you choose, or you can point it at a local endpoint for no data egress.</p>
+<h3>How accurate is it?</h3>
+<p>On the pinned benchmark it found 23 of 34 published advisory vulnerabilities at the exact line. 61 of 64 decided production findings on 12 projects were real. Eleven advisories are missed and three false positives are recorded. See the <a href="https://github.com/sandeepannandi/Cipher#measured-results-and-limits">methodology</a>.</p>
+<h3>Which platforms are supported?</h3>
+<p>Prebuilt binaries ship for Linux, macOS and Windows. The Windows installer is not yet tested end to end against the published release.</p>
+<h3>What license is it under?</h3>
+<p>MIT.</p>
+</div></section>
+
 </main>
 
 <footer><div class="wrap">
