@@ -710,6 +710,32 @@ struct SarifSnippet {
     text: String,
 }
 
+/// Emit escaped repository-relative URIs even when a reported source no longer exists.
+fn sarif_source_uri(file: Option<&str>, root: &Path) -> String {
+    let Some(file) = file else {
+        return ".".to_string();
+    };
+    let root = root.to_string_lossy().replace('\\', "/");
+    let file = file.replace('\\', "/");
+    let relative = file
+        .strip_prefix(&format!("{}/", root.trim_end_matches('/')))
+        .unwrap_or(&file);
+    let uri = if Path::new(relative).is_absolute() || relative.as_bytes().get(1) == Some(&b':') {
+        format!("file:///{relative}")
+    } else {
+        relative.to_string()
+    };
+    uri.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"/-._~:".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
 /// Generate a SARIF 2.1.0 JSON string from a FindingReport
 pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> String {
     // Keep the rule metadata in sync with the result rule IDs.
@@ -752,17 +778,7 @@ pub(crate) fn generate_sarif(report: &FindingReport, project_path: &Path) -> Str
         .iter()
         .zip(fingerprints)
         .map(|(f, fingerprint)| {
-            let file_uri = f
-                .file_path
-                .as_ref()
-                .and_then(|fp| std::path::Path::new(fp).canonicalize().ok())
-                .map(|p| format!("file:///{}", p.to_string_lossy().replace("\\", "/")))
-                .unwrap_or_else(|| {
-                    format!(
-                        "file:///{}",
-                        project_path.to_string_lossy().replace("\\", "/")
-                    )
-                });
+            let file_uri = sarif_source_uri(f.file_path.as_deref(), project_path);
 
             let snippet = f
                 .code_snippet
