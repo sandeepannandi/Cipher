@@ -498,6 +498,7 @@ fn scan_file_for_vulns_with(
     if crate::workflow::is_github_workflow(path, &content) {
         findings.extend(crate::workflow::scan_workflow(path, &content));
     }
+    let rust_context = rust_context::RustContext::parse(&content, &ext);
     let js_path_traversal_sinks = js_path_traversal_sink_lines(&content, &ext);
     let python_path_traversal_sinks = python_path_traversal_sink_lines(&content, &ext);
     let java_path_traversal_sinks = java_path_traversal_sink_lines(&content, &ext);
@@ -566,6 +567,10 @@ fn scan_file_for_vulns_with(
     for (line_num, line) in content.lines().enumerate() {
         let line_number = line_num + 1;
         let trimmed = line.trim();
+
+        if rust_context.is_test(line_number) {
+            continue;
+        }
 
         // Skip comments
         if trimmed.is_empty()
@@ -670,6 +675,15 @@ fn scan_file_for_vulns_with(
                 || (pattern.name == "Insecure Direct Object Reference (IDOR)"
                     && (idor_sinks.contains(&line_number)
                         || django_idor_sinks.contains(&line_number)));
+            if ext == "rs"
+                && pattern.pattern.is_match(line)
+                && !pattern
+                    .pattern
+                    .find_iter(line)
+                    .any(|m| rust_context.executable_match(line_number, m.start()))
+            {
+                continue;
+            }
             if !pattern_matches {
                 continue;
             }
@@ -866,4 +880,3 @@ fn weak_hash_in_non_security_function(content: &str, line_number: usize, negativ
     }
     false
 }
-
