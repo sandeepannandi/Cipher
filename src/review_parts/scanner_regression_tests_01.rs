@@ -1,3 +1,31 @@
+    #[test]
+    fn sarif_paths_are_relative_escaped_and_do_not_require_existing_files() {
+        assert_eq!(super::sarif_source_uri(Some("/repo/src/a b#c.rs"), std::path::Path::new("/repo")), "src/a%20b%23c.rs");
+        assert_eq!(super::sarif_source_uri(Some("src/missing.rs"), std::path::Path::new("/repo")), "src/missing.rs");
+        assert_eq!(super::sarif_source_uri(Some("C:\\repo\\src\\main.rs"), std::path::Path::new("C:\\repo")), "src/main.rs");
+    }
+    #[test]
+    fn rust_fixture_strings_are_not_executed_but_real_sinks_remain() {
+        let dir = std::env::temp_dir().join(format!("cipher-rust-context-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.rs");
+        std::fs::write(&path, r###"
+const DESCRIPTION: &str = "DES 3DES dangerous_accept_invalid_certs";
+#[cfg(test)]
+mod fixtures {
+ fn fake() { let password = "hunter2"; client.dangerous_accept_invalid_certs(true); }
+}
+fn production() {
+ let password = "production-secret-not-fixture";
+ client.dangerous_accept_invalid_certs(true);
+}
+"###).unwrap();
+        let findings = super::scan_file_for_vulns(&path, &super::build_vuln_patterns());
+        assert!(findings.iter().all(|f| f.line_number.unwrap() >= 8), "{findings:?}");
+        assert!(findings.iter().any(|f| f.title.contains("Credentials")), "{findings:?}");
+        assert!(findings.iter().any(|f| f.title.contains("Verification")), "{findings:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};

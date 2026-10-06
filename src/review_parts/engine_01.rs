@@ -707,7 +707,7 @@ fn build_vuln_patterns() -> Vec<VulnPattern> {
         Severity::Critical,
         Confidence::High,
         Some(OwaspCategory::A02CryptographicFailures),
-        r#"(?i)(?:verify\s*(?:=>|=)\s*false\b|tls_verify\s*[=:]\s*false|dangerous_accept|no_verify)"#,
+        r#"(?i)(?:verify\s*(?:=>|=)\s*false\b|tls_verify\s*[=:]\s*false|dangerous_accept|\bno_verify\b)"#,
         &["rs", "py", "js", "ts", "java", "rb", "go", "php", "cs"],
         "Enable SSL/TLS certificate verification. Never disable it in production."
     );
