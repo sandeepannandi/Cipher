@@ -865,6 +865,12 @@ pub(crate) async fn collect_review_findings(
         }
     }
 
+    let test_includes = rust_context::test_only_includes(&files);
+    files.retain(|path| {
+        !path
+            .canonicalize()
+            .is_ok_and(|p| test_includes.contains(&p))
+    });
     let cross_file = cross_file_flow_sinks(&files, &canonical_path);
     for path in &files {
         let findings =
@@ -1042,4 +1048,3 @@ fn policy_findings_view(findings: &[Finding], root: &std::path::Path) -> Vec<Fin
         })
         .collect()
 }
-
