@@ -1,7 +1,7 @@
-# Keep the SHA-pinned GitHub Actions in .github/workflows current.
-# Dependabot updates the pinned commit SHA and its version comment together.
-# Cargo is intentionally not listed: Cargo.lock is committed and CI is pinned to
-# Rust 1.88.0, so routine crate bumps could raise the required Rust version.
+# Weekly updates for the SHA-pinned GitHub Actions and for Cargo dependencies.
+# Cargo.lock is committed and CI is pinned to Rust 1.88.0 (rust-version = "1.88"),
+# so Cargo updates are limited to minor and patch releases, grouped into one PR.
+# Each PR must still pass the full quality gate before it can merge.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -14,3 +14,18 @@ updates:
           - "*"
     commit-message:
       prefix: "ci"
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "deps"
